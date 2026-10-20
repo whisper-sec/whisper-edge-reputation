@@ -4289,18 +4289,18 @@ echo "$(date -u +%H:%M:%S) == every control failed by value: no control's worker
     || bad "controls: a control failed by a crash, not by value:${CTL_CRASHED:- none checked}"
 
 echo
-# README.md prints the proof transcript with this exact count line, so a change to the rows that is not
+# REFERENCE.md prints the proof transcript with this exact count line, so a change to the rows that is not
 # carried into the README fails here by name (row Z1) rather than drifting unnoticed.
-README="$ROOT/README.md"
+README="$ROOT/REFERENCE.md"
 if [ "$FAILED" = 0 ] && [ -f "$README" ] && grep -q '=== nginx gate: ' "$README"; then
     want="=== nginx gate: $PASS ok, 0 failed ==="
     if ! grep -qF "$want" "$README"; then
-        printf '  FAIL  README.md says "%s" and this run is "%s"\n' \
+        printf '  FAIL  REFERENCE.md says "%s" and this run is "%s"\n' \
             "$(grep -o '=== nginx gate: [0-9]* ok, [0-9]* failed ===' "$README" | sed -n 1p)" "$want"
         FAILED=$((FAILED+1))
     else
         # printed, not counted: the count this row compares is the count the README carries
-        printf '  ok    README.md prints this run'"'"'s own count, so the page cannot go stale unnoticed\n'
+        printf '  ok    REFERENCE.md prints this run'"'"'s own count, so the page cannot go stale unnoticed\n'
     fi
 fi
 echo "=== nginx gate: $PASS ok, $FAILED failed ==="

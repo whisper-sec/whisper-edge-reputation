@@ -60,7 +60,7 @@ can hurt someone:
 
 The policy zones are signed files, and the refresh checks the signature before it installs one. A
 resolver that fetches a zone by URL for itself, as Unbound does, does not check that signature, so for
-it the only protection is TLS with a CA bundle that verifies the name; the README's resolver notes give
+it the only protection is TLS with a CA bundle that verifies the name; the resolver notes in [REFERENCE.md](REFERENCE.md) give
 the line that turns that on.
 
 ## What we will not do

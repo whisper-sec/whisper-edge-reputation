@@ -26,7 +26,7 @@ Standard library only. Written from the output grammar and the manifest rules, n
         publisher) verbatim or with one edit each; <tor-plane> is the plane the tor-as-routing edit names
         (testdata/lookup/derived/README.md names each).
     lookup-check.py transcripts <edge-dir> <tool> <work-dir> [--plant]
-        Every whisper-edge-lookup transcript in README.md that reads the checked-in fixtures, run again
+        Every whisper-edge-lookup transcript in REFERENCE.md that reads the checked-in fixtures, run again
         with <tool> in <work-dir> (each fixture copied there at mode 0644, and `data` seeded from
         core/testdata/format2/tor.bin at 0444, as the README says) and compared with the transcript byte
         for byte, stdout only. A transcript that reads anything else is named with why it cannot run.
@@ -1184,7 +1184,7 @@ def transcripts(edge, tool, work, plant=False):
     """Re-run the README's whisper-edge-lookup transcripts that read the checked-in fixtures."""
     import shutil
     import subprocess
-    text = open(os.path.join(edge, "README.md"), encoding="utf-8").read().split("\n")
+    text = open(os.path.join(edge, "REFERENCE.md"), encoding="utf-8").read().split("\n")
     blocks, i = [], 0
     while i < len(text):
         m = re.match(r"^( *)```\s*$", text[i])
@@ -1215,7 +1215,7 @@ def transcripts(edge, tool, work, plant=False):
             elif cur is not None:
                 cur[1].append(ln)
             k += 1
-        where = "README.md:%d" % start
+        where = "REFERENCE.md:%d" % start
 
         def on_planes(c):
             return any(w == "planes" or w.startswith("planes/") for w in c.split())

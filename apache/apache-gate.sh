@@ -5609,18 +5609,18 @@ gate_selected run_debug_build_rows && run_debug_build_rows
 gate_selected run_built_object_rows && run_built_object_rows
 
 #
-# THE PAGE MUST AGREE WITH THIS RUN. README.md prints this exact line as a transcript, and a number typed
+# THE PAGE MUST AGREE WITH THIS RUN. REFERENCE.md prints this exact line as a transcript, and a number typed
 # into prose goes stale on the edit that changes it and nothing notices. So the gate compares.
 #
-README="$ROOT/README.md"
+README="$ROOT/REFERENCE.md"
 if [ -z "${WE_GATE_ONLY:-}" ] && [ "$FAILED" = 0 ] && [ -f "$README" ] && grep -q '=== apache gate: ' "$README"; then
     want="=== apache gate: $PASS ok, 0 failed ==="
     if ! grep -qF "$want" "$README"; then
-        printf '  FAIL  README.md says "%s" and this run is "%s"\n' \
+        printf '  FAIL  REFERENCE.md says "%s" and this run is "%s"\n' \
             "$(grep -o '=== apache gate: [0-9]* ok, [0-9]* failed ===' "$README" | head -1)" "$want"
         FAILED=$((FAILED+1))
     else
-        printf '  ok    README.md prints this run'"'"'s own count, so the page cannot go stale unnoticed\n'
+        printf '  ok    REFERENCE.md prints this run'"'"'s own count, so the page cannot go stale unnoticed\n'
     fi
 fi
 

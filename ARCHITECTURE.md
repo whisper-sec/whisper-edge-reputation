@@ -52,7 +52,7 @@ builder is run is not part of the published contract.
   signature and every file it names are identical whichever node answers, the legacy `snapshot.bin`
   and its signature included. The exception is a window, not a difference in kind: after a build and
   before the copy lands, or across a hand-over, one node can serve the previous generation, which is
-  why a reader fetches a file and its signature on one connection (README.md).
+  why a reader fetches a file and its signature on one connection ([REFERENCE.md](REFERENCE.md)).
 - **A file's name is its content.** Every plane file is named by the SHA-256 of its bytes, under
   `planes/`, and never changes once published. The manifest names the set, so a reader that fetches the
   manifest and then the files it names always gets one consistent build, never a mixture of two.
@@ -98,7 +98,7 @@ another version refuses to bind before it writes anything.
   bound planes on the refresh interval, checks each one fully, and swaps it in; a request never
   waits for it, and a plane that fails its checks leaves the last good one in place.
 - **Per request** the decision reads the planes and the program it already holds. Looking up a
-  verdict makes no system call, takes no lock and allocates nothing; the README's "Proven, not
+  verdict makes no system call, takes no lock and allocates nothing; REFERENCE.md's "Proven, not
   described" section shows the gates that count it.
 - **The client address** the floor judges is the TCP peer, or, when that peer is a trusted proxy, an
   entry of the forwarding header found by walking it from the right: at most 16 entries and 1,024

@@ -1122,19 +1122,19 @@ printed_block_cases "$out"
 # per zone, the block's files, order and RPKI override, read from the unit files a real run writes, are
 # installer-gate.sh's rows (the resolver half's units), which run above.
 
-# THE PAGE MUST AGREE WITH THIS RUN. README.md prints this line as a transcript, and it said 20 while
+# THE PAGE MUST AGREE WITH THIS RUN. REFERENCE.md prints this line as a transcript, and it said 20 while
 # the gate printed 41: a number typed into prose goes stale on the edit that adds a row, and nothing
 # noticed. So the gate compares, and the page can only be wrong if this goes red. NOT counted in ok:
 # the number being compared IS the ok count.
-README="$HERE/../README.md"
+README="$HERE/../REFERENCE.md"
 # The trigger is a real count, digits only: prose that describes the line, or a placeholder such as
 # <ok>, must never arm a comparison that only a transcript can pass.
 if [ "$bad" -eq 0 ] && [ -z "${SKIPPED:-}" ] && [ -f "$README" ] && grep -Eq '=== install gate: [0-9]+ ok' "$README"; then
   want="=== install gate: $ok ok, 0 failed ==="
   if grep -qF -- "$want" "$README"; then
-    printf '  ok    README.md prints this run'"'"'s own count, so the page cannot go stale unnoticed\n'
+    printf '  ok    REFERENCE.md prints this run'"'"'s own count, so the page cannot go stale unnoticed\n'
   else
-    printf '  FAIL  README.md says "%s" and this run is "%s"\n' \
+    printf '  FAIL  REFERENCE.md says "%s" and this run is "%s"\n' \
       "$(grep -oE '=== install gate: [0-9]+ ok, [0-9]+ failed ===' "$README" | head -1)" "$want"
     bad=$((bad + 1))
   fi

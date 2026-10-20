@@ -1521,7 +1521,7 @@ its own checks, each with its negative control; `--cases FILE` evaluates a case 
 `--mutant NAME` to plant one of its 18 mutants); `--compile FILE` and `--expect FILE` print one
 `.policy` file's listing or refusal; `--seeds DIR --floor N` replays the seed list; `--default-conf
 FILE` checks that the default policy compiles to the program of `accept/01`. Every checking run ends
-with one `N checks, F failures` line, which `make check` sums into the README's published count.
+with one `N checks, F failures` line, which `make check` sums into the published count in REFERENCE.md.
 
 ### 5.2 The differential, with cost equality per request
 
@@ -2015,7 +2015,7 @@ The evaluator's cost and shape claims are held by four gates beside the differen
   trace build's maxima, and writes a machine-readable record keyed by commit, compiler, flags and
   plane generation (row B1).
 
-`make check` compares the sum of the `N checks` lines with the published count in `README.md`
+`make check` compares the sum of the `N checks` lines with the published count in `REFERENCE.md`
 (row Z1).
 
 ## 7. The old directives as sugar, the legacy synonym, and the default policy
@@ -2150,7 +2150,7 @@ section named by its id (`== N3: the limits at the boundary and one past ==`). R
 | C4 | residency rows | `cachegrind-gate.sh` | alone-rows present for each default plane with the level stated; program misses zero in the LLC run; plane-index misses beside the program within ±10% of their alone-rows |
 | C5 | the whole bound per request, every slot and every exhaustive vector | trace build with `WE_TRACE_EVAL` | traced distinct lines per request **equal** the model per outcome class; the maximum equals the printed bound in both forms (64- and 128-byte lines) |
 | B1 | `bench_core`'s policy table | `make bench` | computed columns equal the trace build's maxima over the exhaustive vectors; the keyed record is written and re-read |
-| Z1 | the README's published check count | `make check` | equals this run's sum of `N checks` lines |
+| Z1 | the published check count in REFERENCE.md | `make check` | equals this run's sum of `N checks` lines |
 
 ## 10. What is not claimed
 

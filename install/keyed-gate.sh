@@ -1426,7 +1426,7 @@ says "$first" "this box's UTC time is" && fail "row 74 control: a sentence with 
 installed_box; set_state "$HWF" "9791772722\n"; rk --quiet --keyed-set
 p1=$(printf '%s\n' "$out" | grep -n "write $((G - 1)) into it" | cut -d: -f1)
 p2=$(printf '%s\n' "$out" | grep -n 'nginx -s reload, apachectl graceful, /usr/local/lsws/bin/lswsctrl restart' | cut -d: -f1)
-readme="$HERE/../README.md"
+readme="$HERE/../REFERENCE.md"
 r1=$(grep -n 'write the value the sentence names' "$readme" | head -1 | cut -d: -f1)
 r2=$(grep -n 'nginx -s reload`, then `apachectl graceful`, then `/usr/local/lsws/bin/lswsctrl restart`' "$readme" | head -1 | cut -d: -f1)
 { [ -n "$p1" ] && [ -n "$p2" ] && [ "$p1" -lt "$p2" ] && [ -n "$r1" ] && [ -n "$r2" ] && [ "$r1" -le "$r2" ]; } \
@@ -2463,7 +2463,7 @@ for pat, good in checks:
             print("wrong figure: " + m.group(0))
 PY
 }
-m_=$(held_to "$HERE" "$HERE/../README.md")
+m_=$(held_to "$HERE" "$HERE/../REFERENCE.md")
 [ -z "$m_" ] && pass "revocation figures: the README carries the sentence and the inputs revocation-bounds.py derives from the shipped timer and script" \
              || fail "revocation figures: the README differs from revocation-bounds.py" "$m_"
 # any other file that publishes the figures is held the same way: KEYED_GATE_ALSO_HOLD names them, space
@@ -2476,7 +2476,7 @@ for f_ in ${KEYED_GATE_ALSO_HOLD:-}; do
 done
 # control: the shipped README with one superseded sentence added still carries the derived text, and
 # fails on the stale figure alone
-{ cat "$HERE/../README.md"; printf '\nat most 27 and 60 minutes, plus the module'"'"'s reload\n'; } > "$W/README.stale"
+{ cat "$HERE/../REFERENCE.md"; printf '\nat most 27 and 60 minutes, plus the module'"'"'s reload\n'; } > "$W/README.stale"
 m_=$(held_to "$HERE" "$W/README.stale")
 { says "$m_" 'superseded: at most 27 and 60' && ! says "$m_" 'missing:'; } \
   && pass "revocation figures control: a README that also keeps the superseded 60-minute bound fails on that figure alone" \
@@ -2517,13 +2517,13 @@ case "$sim_" in DISAGREE*) pass "revocation figures control: a mean wait without
   *) fail "revocation figures control: the simulation can catch a formula edit" "$sim_" ;; esac
 # control: row 70's own form with the superseded one-node figures, appended to the shipped README, fails
 # on the figures although no listed phrase matches it
-{ cat "$HERE/../README.md"; printf '\n(typical 488 s and 1,880 s, bounds of 1,591 s and 3,572 s with the defaults: 8, 31, 27 and 60 minutes)\n'; } > "$W/README.row70"
+{ cat "$HERE/../REFERENCE.md"; printf '\n(typical 488 s and 1,880 s, bounds of 1,591 s and 3,572 s with the defaults: 8, 31, 27 and 60 minutes)\n'; } > "$W/README.row70"
 m_=$(held_to "$HERE" "$W/README.row70")
 { says "$m_" 'wrong figure: bounds of 1,591 s and 3,572 s' && says "$m_" 'wrong figure: 8, 31, 27 and 60 minutes' && ! says "$m_" 'missing:' && ! says "$m_" 'superseded:'; } \
   && pass "revocation figures control: row 70's form carrying 3,572 s and 60 minutes fails on both figures, with no listed phrase to match" \
   || fail "revocation figures control: the figure regexes are visible" "$m_"
 # control: a stale figure introduced as history is still a stale figure
-{ cat "$HERE/../README.md"; printf '\nSince an earlier release the edge removes the plane at most 27 and 64 minutes after key.revoke.\n'; } > "$W/README.history"
+{ cat "$HERE/../REFERENCE.md"; printf '\nSince an earlier release the edge removes the plane at most 27 and 64 minutes after key.revoke.\n'; } > "$W/README.history"
 m_=$(held_to "$HERE" "$W/README.history")
 says "$m_" 'wrong figure: at most 27 and 64 minutes' \
   && pass "revocation figures control: a line introduced as history ('since an earlier release') carrying 27 and 64 minutes fails on the figure" \
@@ -2538,7 +2538,7 @@ for v_ in floor jitter; do
   esac
   cmp -s "$HERE/whisper-edge-refresh" "$W/bounds/whisper-edge-refresh" && cmp -s "$HERE/whisper-edge-refresh-keyed.timer" "$W/bounds/whisper-edge-refresh-keyed.timer" \
     && { fail "revocation figures control ($v_): the edit did not apply" ""; continue; }
-  m_=$(held_to "$W/bounds" "$HERE/../README.md")
+  m_=$(held_to "$W/bounds" "$HERE/../REFERENCE.md")
   [ -n "$m_" ] && pass "revocation figures control: a $v_ of 600 s derives other figures, and the shipped README fails the check" \
                || fail "revocation figures control ($v_): the check can fail" ""
 done

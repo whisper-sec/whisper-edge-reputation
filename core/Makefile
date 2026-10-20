@@ -152,9 +152,9 @@ whisper-edge-lookup: $(LOOKUP_DEPS)
 gen-lookup-guard:
 	python3 gen-lookup-headers.py guard $(LOOKUP_GUARD_INPUTS) > we_lookup_guard.h
 
-# The list's distinct-prefix count is published in ../README.md; the generator holds the list to it. A
+# The list's distinct-prefix count is published in ../REFERENCE.md; the generator holds the list to it. A
 # vendored copy of the core has no README, and then only the list itself is read.
-HH_PUBLISHED = $(if $(wildcard ../README.md),--published ../README.md)
+HH_PUBLISHED = $(if $(wildcard ../REFERENCE.md),--published ../REFERENCE.md)
 
 lookup-headers:
 	python3 gen-lookup-headers.py cite ../hold-harmless.txt $(HH_PUBLISHED) > we_hold_harmless_cite.h
@@ -177,7 +177,7 @@ check-lookup: whisper-edge-lookup
 	python3 gen-lookup-headers.py default-policy testdata/policy/default.conf > $(LOOKUP_DIR)/default.h; \
 	chk "B1: we_lookup_guard.h is the regenerated guard (make gen-lookup-guard)" "cmp -s we_lookup_guard.h $(LOOKUP_DIR)/guard.h"; \
 	chk "H2: we_hold_harmless_cite.h is regenerated from ../hold-harmless.txt (make lookup-headers)" "cmp -s we_hold_harmless_cite.h $(LOOKUP_DIR)/cite.h"; \
-	chk "H2: the README publishes a distinct-prefix count for the list" "[ -z '$(HH_PUBLISHED)' ] || grep -qE '[0-9]+ distinct prefixes' ../README.md"; \
+	chk "H2: the README publishes a distinct-prefix count for the list" "[ -z '$(HH_PUBLISHED)' ] || grep -qE '[0-9]+ distinct prefixes' ../REFERENCE.md"; \
 	printf 'The full list holds 1 distinct prefixes.\n' > $(LOOKUP_DIR)/b1/readme-wrong.md; \
 	chk "H2 control: a published count the list does not hold stops the generator" "! python3 gen-lookup-headers.py cite ../hold-harmless.txt --published $(LOOKUP_DIR)/b1/readme-wrong.md"; \
 	chk "P3: we_default_policy.h is testdata/policy/default.conf (make lookup-headers)" "cmp -s we_default_policy.h $(LOOKUP_DIR)/default.h"; \
@@ -466,14 +466,14 @@ check: test_core test_trace test_mutant test_policy test_module test_summary che
 	cat $(TMPDIR_)/module-fuzz.out; grep -E '^[0-9]+ (mutant )?checks, ' $(TMPDIR_)/module-fuzz.out >> $(TMPDIR_)/check.out; \
 	if [ $$rc -ne 0 ]; then echo "CHECK FAIL: check-module-fuzz exited $$rc"; exit 1; fi
 	@set -e; \
-	if [ -f ../README.md ] && grep -q 'runs [0-9,]* cases' ../README.md; then \
+	if [ -f ../REFERENCE.md ] && grep -q 'runs [0-9,]* cases' ../REFERENCE.md; then \
 	  ran=$$(sed -n 's/^\([0-9]*\) \(mutant \)\{0,1\}checks, .*/\1/p' $(TMPDIR_)/check.out | awk '{s+=$$1} END {print s}'); \
-	  said=$$(sed -n 's/.*runs \([0-9,]*\) cases.*/\1/p' ../README.md | head -1 | tr -d ,); \
+	  said=$$(sed -n 's/.*runs \([0-9,]*\) cases.*/\1/p' ../REFERENCE.md | head -1 | tr -d ,); \
 	  if [ "$$ran" != "$$said" ]; then \
-	    echo "CHECK FAIL: README.md says $$said cases and this run has $$ran"; \
+	    echo "CHECK FAIL: REFERENCE.md says $$said cases and this run has $$ran"; \
 	    exit 1; \
 	  fi; \
-	  echo "ok   README.md's published case count ($$said) is this run's, so the page cannot go stale"; \
+	  echo "ok   REFERENCE.md's published case count ($$said) is this run's, so the page cannot go stale"; \
 	fi
 
 # THE POLICY LANGUAGE, read twice. policy_ref.py is the reference interpreter, written from POLICY.md

@@ -167,17 +167,17 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 finish() {
-    # THE PAGE MUST AGREE WITH THIS RUN: README.md prints the count line as a transcript, and a number
+    # THE PAGE MUST AGREE WITH THIS RUN: REFERENCE.md prints the count line as a transcript, and a number
     # typed into prose goes stale on the edit that changes it; the comparison is what makes a missed
     # update fail rather than go stale.
-    if [ "$FAILED" = 0 ] && [ -f "$ROOT/README.md" ] && grep -q '=== litespeed gate: ' "$ROOT/README.md"; then
+    if [ "$FAILED" = 0 ] && [ -f "$ROOT/REFERENCE.md" ] && grep -q '=== litespeed gate: ' "$ROOT/REFERENCE.md"; then
         want="=== litespeed gate: $PASS ok, 0 failed ==="
-        if ! grep -qF "$want" "$ROOT/README.md"; then
-            printf '  FAIL  README.md says "%s" and this run is "%s"\n' \
-                "$(grep -o '=== litespeed gate: [0-9]* ok, [0-9]* failed ===' "$ROOT/README.md" | head -1)" "$want"
+        if ! grep -qF "$want" "$ROOT/REFERENCE.md"; then
+            printf '  FAIL  REFERENCE.md says "%s" and this run is "%s"\n' \
+                "$(grep -o '=== litespeed gate: [0-9]* ok, [0-9]* failed ===' "$ROOT/REFERENCE.md" | head -1)" "$want"
             FAILED=$((FAILED+1))
         else
-            printf '  ok    README.md prints this run'"'"'s own count, so the page cannot go stale unnoticed\n'
+            printf '  ok    REFERENCE.md prints this run'"'"'s own count, so the page cannot go stale unnoticed\n'
         fi
     fi
     echo "=== litespeed gate: $PASS ok, $FAILED failed ==="
