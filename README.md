@@ -1161,12 +1161,32 @@ line before it names what was skipped; `INSTALL GATE: FAILED` means a row failed
 against the feed's own `/edge/rpz/<origin>.zone`, so on a feed that does not serve a zone yet they are
 skipped by name and the gate reads INCOMPLETE, never CLEAR.
 
-<!-- recapture-before-publish: replace this paragraph with what the G1 run on both fresh guests, Ubuntu 24.04 and Rocky Linux 9 Enforcing, shows at the final pin -->
-A release's own run of it is taken on two fresh, disposable hosts with nginx, Apache httpd and
-OpenLiteSpeed installed and each module built from the tree: Ubuntu 24.04, where the two rows skipped,
-by name, are the SELinux arms (the undo record's, and the planes' labels under a confined server),
-because SELinux is not enabled there; and Rocky Linux 9 with SELinux Enforcing, where nothing is skipped
-and both run.
+A release's own run of it is taken on two fresh, disposable hosts, each with nginx, Apache httpd and
+OpenLiteSpeed installed and the three modules built from the tree, and the whole gate run there,
+the keyed and installer gates included. This release's, on 2026-10-20, ended as follows (each run's
+verdict lines, the rest of it elided). On Ubuntu
+24.04, with nginx 1.24.0, Apache httpd 2.4.58, OpenLiteSpeed 1.9.3 and BIND 9.18.39:
+
+```
+=== keyed gate: 360 ok, 0 failed ===
+=== installer gate: 238 ok, 0 failed ===
+INSTALLER GATE: INCOMPLETE - everything that ran passed, but part of the gate could not run here
+=== install gate: 76 ok, 0 failed ===
+INSTALL GATE: INCOMPLETE - everything that ran passed, but part of the gate could not run here
+```
+
+The two rows skipped there are the SELinux arms, by name (the undo record's, and the planes' labels
+under a confined server), because SELinux is not enabled on Ubuntu; that is all INCOMPLETE means in
+these two lines. On Rocky Linux 9 with SELinux Enforcing, with nginx 1.30.6, Apache httpd 2.4.62,
+OpenLiteSpeed 1.9.3 and BIND 9.16.23, where nothing is skipped and both SELinux arms run:
+
+```
+=== keyed gate: 360 ok, 0 failed ===
+=== installer gate: 242 ok, 0 failed ===
+INSTALLER GATE: CLEAR
+=== install gate: 77 ok, 0 failed ===
+INSTALL GATE: CLEAR - the refresh verifies, replaces atomically, fails without touching anything, and keeps a real BIND's zone current
+```
 
 It runs against the live feed and asserts the two cases that matter: an **unreachable feed** fails
 and leaves the installed snapshot byte-identical, and a snapshot whose **signature does not verify**
