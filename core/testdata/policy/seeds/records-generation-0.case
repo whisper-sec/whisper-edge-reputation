@@ -1,0 +1,45 @@
+program records-generation-0 seeds
+dir mode http deny
+dir mode http/server:a deny
+dir policy http/server:a deny if listed >= high
+dir policy http/server:a log if listed is unknown
+dir policy http/server:a deny if tor_exit
+run http/server:a
+case reputation-generation-0-listed-critical
+conf floor 3 0
+conf ctx 3 0
+plane reputation gen0
+tenant fresh 1800000000000 0
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor reputation sev=4
+end
+case reputation-fresh-listed-critical
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 0
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor reputation sev=4
+end
+case tor-generation-0-flagged
+conf floor 3 0
+conf ctx 3 0
+plane tor gen0
+tenant fresh 1800000000000 0
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor tor flags=1 source=0 reason=0
+end
+case tenant-revoked-is-still-revoked
+conf floor 3 0
+conf ctx 3 0
+tenant revoked 1800000000000 0
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor reputation sev=0
+end

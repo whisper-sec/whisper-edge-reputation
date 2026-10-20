@@ -1,0 +1,3 @@
+policy http/server:b deny if c2
+policy http/server:a deny if tor_exit is unknown
+policy http/server:b allow if not proxy is unknown

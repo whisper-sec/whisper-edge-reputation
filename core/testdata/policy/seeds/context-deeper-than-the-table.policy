@@ -1,0 +1,8 @@
+set http @embargo KP SY CU
+floor http deny if listed >= critiECl
+floor http log if counp/server:ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿa/location:api try in @embargo
+set http/server:a @partners AS64496 AS64497
+policy http/se///////////////////////////////////////////////////////////////////////////////////////////////// country in @embargo and rpki != valid
+policy http/server:ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿa/location:api deny if asn in @partners
+mode http/server:b log
+threshold http/server:c high

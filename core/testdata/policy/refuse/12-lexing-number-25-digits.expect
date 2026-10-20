@@ -1,0 +1,8 @@
+layer	lexing
+kind	policy
+context	http/server:a
+rule	1
+line	1
+col	16
+token	1234567890123456789012345
+message	more than 10 digits

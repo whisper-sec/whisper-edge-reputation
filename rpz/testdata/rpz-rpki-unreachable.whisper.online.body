@@ -1,0 +1,10 @@
+; v=wedge-rpz1
+; origin=rpz-rpki-unreachable.whisper.online
+; state=content
+; generation=1791907202
+; validUntil=2026-10-13T18:00:00Z
+; triggers=3
+; sources=documentation-space-fixture
+28.16.113.0.203.rpz-ip.rpz-rpki-unreachable.whisper.online.	300	IN	CNAME	*.
+28.32.113.0.203.rpz-ip.rpz-rpki-unreachable.whisper.online.	300	IN	CNAME	*.
+47.zz.a.db8.2001.rpz-ip.rpz-rpki-unreachable.whisper.online.	300	IN	CNAME	*.

@@ -1,0 +1,26 @@
+program records-valid-until-0-and-max seeds
+dir mode http deny
+dir mode http/server:a deny
+dir policy http/server:a allow if tenant_allow
+dir policy http/server:a deny if listed >= low
+run http/server:a
+case valid-until-0
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 0
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor tenant flags=1 source=0 reason=0
+rec floor reputation sev=3
+end
+case valid-until-max-1
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 18446744073709551614
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor tenant flags=0 source=0 reason=0
+rec floor reputation sev=3
+end

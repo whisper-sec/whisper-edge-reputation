@@ -1,0 +1,8 @@
+layer	polarity
+kind	policy
+context	http/server:a
+rule	1
+line	1
+col	18
+token	is
+message	that is a fail-closed rule

@@ -1,0 +1,5 @@
+mode http deny
+policy http/server:a deny if listed >= critical
+policy http/server:a deny if listed >= high
+policy http/server:a log if rpki_unreachable
+policy http/server:a log if tor_exit

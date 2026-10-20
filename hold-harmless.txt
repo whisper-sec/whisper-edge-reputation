@@ -1,0 +1,436 @@
+# The hold-harmless set: infrastructure this feed will never block, whatever the graph says.
+#
+# A free blocker that a hundred strangers install is a loaded weapon pointed at the internet. The
+# graph is large and mostly right; "mostly" is not good enough when the cost of a false positive is a
+# stranger's site going dark, or worse, their resolver going dark and taking every name with it.
+#
+# SEMANTICS. An entry is an address or a prefix. A candidate prefix is REFUSED if it CONTAINS any
+# entry here, and also if it is CONTAINED BY one. The first direction matters because we receive
+# verdicts at whatever length a prefix is announced at, so a /20 that happens to cover K-root must be
+# refused without us needing to know K-root's announced length. Refusing a candidate removes it from
+# the snapshot entirely; it is not downgraded, flagged or made configurable, because an operator
+# cannot be asked to know which of these addresses their resolver depends on.
+#
+# A refusal is counted and named in the build report, so a legitimate listing that happens to cover
+# critical infrastructure is visible to us rather than silently dropped.
+#
+# THE STANDING RULE FOR ADDING AN ENTRY. An exemption is only safe if it is not OCCUPIABLE: an
+# attacker can exploit an exemption only by hosting inside it. Root servers, public resolvers,
+# registry service prefixes, NTP and CA infrastructure and reserved space are all unoccupiable at the
+# lengths used here. Anything an attacker could rent space inside - cloud, CDN, general hosting, or
+# anything wider than a /24 of non-registry space - is NOT an acceptable exemption, which is why the
+# registry entries below are per-service /24s and /48s and never the covering supernet.
+#
+# THE ONE CARVE-OUT, stated because the rule above forbids it on its face. A prefix wider than a /24
+# is acceptable when the ENTIRE prefix is a single operator's own infrastructure allocation with
+# nothing rentable inside it, because then there is no space for an attacker to occupy at any length.
+# One entry below uses it - 2a04:2a00::/32, our own infrastructure block - and the test is not "we
+# operate it" but "nobody else can get space inside it". That distinction is exactly the one the
+# removal recorded at the bottom of this file turns on: 2a04:2a01::/32 is also ours and was taken OUT,
+# because it is the agent egress block and our own customers' agents live inside it, which makes it
+# occupiable by anyone who signs up. Operated-by-us is not the test. Un-occupiable is.
+#
+# PROVENANCE, and why this file is data rather than constants in the builder: every line is checkable, a new
+# entry is a one-line reviewable diff, and the reason travels with the address.
+#
+# Format:  <address-or-prefix>   <source>   <what it is>
+
+# ---- The DNS root servers. Fetched from the canonical root hints, https://www.internic.net/domain/named.root
+#      Root servers are anycast and so are also caught by the anycast guard; both are kept, because
+#      defence in depth is cheap here and the anycast flag is graph-derived while this is not.
+198.41.0.4               named.root   a (A)
+2001:503:ba3e::2:30      named.root   a (AAAA)
+170.247.170.2            named.root   b (A)
+2801:1b8:10::b           named.root   b (AAAA)
+192.33.4.12              named.root   c (A)
+2001:500:2::c            named.root   c (AAAA)
+199.7.91.13              named.root   d (A)
+2001:500:2d::d           named.root   d (AAAA)
+192.203.230.10           named.root   e (A)
+2001:500:a8::e           named.root   e (AAAA)
+192.5.5.241              named.root   f (A)
+2001:500:2f::f           named.root   f (AAAA)
+192.112.36.4             named.root   g (A)
+2001:500:12::d0d         named.root   g (AAAA)
+198.97.190.53            named.root   h (A)
+2001:500:1::53           named.root   h (AAAA)
+192.36.148.17            named.root   i (A)
+2001:7fe::53             named.root   i (AAAA)
+192.58.128.30            named.root   j (A)
+2001:503:c27::2:30       named.root   j (AAAA)
+193.0.14.129             named.root   k (A)
+2001:7fd::1              named.root   k (AAAA)
+199.7.83.42              named.root   l (A)
+2001:500:9f::42          named.root   l (AAAA)
+202.12.27.33             named.root   m (A)
+2001:dc3::35             named.root   m (AAAA)
+#
+# Every root operator's ANNOUNCED prefixes as well as its addresses: the most specific announcement covering
+# each named.root address and every covering announcement by the same operator, v4 and v6, all thirteen.
+# Measured from RIS with RIPEstat prefix-overview (the 2026-10-11T00:00Z dump), each line naming the origin.
+# Needed because the graph's isAnycast flag reads false for many of these, so the anycast guard does not
+# catch a route inside them, and an address entry alone does not refuse a listing on the rest of a covering
+# announcement. Unoccupiable: each is the root operator's own announcement from its own AS. One covering
+# prefix is left out on purpose: 198.97.128.0/18 covers h-root's /24 but is announced by AS721, not by the
+# root operator, so it is somebody else's space and occupiable.
+198.41.0.0/24            measured-2026-10-11   a root announced prefix (AS19836 and the other Verisign origins)
+2001:503:ba3e::/48       measured-2026-10-11   a root announced prefix (AS19836 and the other Verisign origins)
+170.247.170.0/23         measured-2026-10-11   b root announced prefix (AS394353, covering)
+170.247.170.0/24         measured-2026-10-11   b root announced prefix (AS394353)
+2801:1b8:10::/44         measured-2026-10-11   b root announced prefix (AS394353, covering)
+2801:1b8:10::/48         measured-2026-10-11   b root announced prefix (AS394353)
+192.33.4.0/24            measured-2026-10-11   c root announced prefix (AS2149)
+2001:500:2::/48          measured-2026-10-11   c root announced prefix (AS2149)
+199.7.91.0/24            measured-2026-10-11   d root announced prefix (AS10886)
+2001:500:2d::/48         measured-2026-10-11   d root announced prefix (AS10886)
+192.203.230.0/24         measured-2026-10-11   e root announced prefix (AS21556)
+2001:500:a8::/48         measured-2026-10-11   e root announced prefix (AS21556)
+192.5.4.0/23             measured-2026-10-11   f root announced prefix (AS3557, covering)
+192.5.5.0/24             measured-2026-10-11   f root announced prefix (AS3557)
+2001:500:2e::/47         measured-2026-10-11   f root announced prefix (AS3557, covering)
+2001:500:2f::/48         measured-2026-10-11   f root announced prefix (AS3557)
+192.112.36.0/24          measured-2026-10-11   g root announced prefix (AS5927)
+2001:500:12::/48         measured-2026-10-11   g root announced prefix (AS5927)
+198.97.190.0/24          measured-2026-10-11   h root announced prefix (AS1508)
+2001:500:1::/48          measured-2026-10-11   h root announced prefix (AS1508)
+192.36.148.0/23          measured-2026-10-11   i root announced prefix (AS29216, covering)
+192.36.148.0/24          measured-2026-10-11   i root announced prefix (AS29216)
+2001:7fe::/32            measured-2026-10-11   i root announced prefix (AS29216, covering)
+2001:7fe::/33            measured-2026-10-11   i root announced prefix (AS29216)
+192.58.128.0/24          measured-2026-10-11   j root announced prefix (AS36625 and the other Verisign origins)
+2001:503:c27::/48        measured-2026-10-11   j root announced prefix (AS36625 and the other Verisign origins)
+193.0.14.0/23            measured-2026-10-11   k root announced prefix (AS25152, covering; also inside RIPE NCC 193.0.0.0/20 below)
+193.0.14.0/24            measured-2026-10-11   k root announced prefix (AS25152)
+2001:7fd::/32            measured-2026-10-11   k root announced prefix (AS25152, covering)
+2001:7fd::/48            measured-2026-10-11   k root announced prefix (AS25152)
+199.7.82.0/23            measured-2026-10-11   l root announced prefix (AS20144, covering)
+199.7.83.0/24            measured-2026-10-11   l root announced prefix (AS20144)
+2001:500:9e::/47         measured-2026-10-11   l root announced prefix (AS20144, covering)
+2001:500:9f::/48         measured-2026-10-11   l root announced prefix (AS20144)
+202.12.26.0/23           measured-2026-10-11   m root announced prefix (AS7500, covering)
+202.12.27.0/24           measured-2026-10-11   m root announced prefix (AS7500)
+2001:dc3::/32            measured-2026-10-11   m root announced prefix (AS7500)
+
+# ---- Major public resolvers. Every address below was verified live on 2026-10-08 by resolving a
+#      name over TCP/53 and, where the operator answers it, reading back id.server CH TXT.
+#      Blocking one of these does not break a site, it breaks every name the host can look up.
+1.1.1.1                  verified-2026-10-08   Cloudflare verified by resolving over TCP/53
+1.0.0.1                  verified-2026-10-08   Cloudflare verified by resolving over TCP/53
+2606:4700:4700::1111     verified-2026-10-08   Cloudflare verified by resolving over TCP/53
+2606:4700:4700::1001     cloudflare-published  Cloudflare secondary v6
+8.8.8.8                  verified-2026-10-08   Google Public DNS
+8.8.4.4                  verified-2026-10-08   Google Public DNS secondary
+2001:4860:4860::8888     verified-2026-10-08   Google Public DNS v6
+2001:4860:4860::8844     google-published      Google Public DNS v6 secondary
+9.9.9.9                  verified-2026-10-08   Quad9 verified by resolving over TCP/53
+149.112.112.112          verified-2026-10-08   Quad9 verified by resolving over TCP/53
+2620:fe::fe              verified-2026-10-08   Quad9 v6 verified by resolving over TCP/53
+2620:fe::9               quad9-published       Quad9 v6 secondary
+208.67.222.222           verified-2026-10-08   OpenDNS
+208.67.220.220           verified-2026-10-08   OpenDNS secondary
+94.140.14.14             verified-2026-10-08   AdGuard DNS
+76.76.2.0                verified-2026-10-08   Control D
+2a10:50c0::ad1:ff        verified-2026-10-08   AdGuard DNS v6
+94.140.15.15             verified-2026-10-08   AdGuard DNS, second address
+76.76.10.0/24            verified-2026-10-08   Control D, second address range
+223.5.5.5                verified-2026-10-08   AliDNS (Alibaba), serves hundreds of millions
+223.6.6.6                verified-2026-10-08   AliDNS secondary
+119.29.29.29             verified-2026-10-08   DNSPod (Tencent)
+77.88.8.8                verified-2026-10-08   Yandex DNS
+77.88.8.1                verified-2026-10-08   Yandex DNS secondary
+185.228.168.9            verified-2026-10-08   CleanBrowsing
+45.90.28.0/24            verified-2026-10-08   NextDNS
+45.90.30.0/24            verified-2026-10-08   NextDNS secondary
+206.220.231.0/24         verified-2026-10-08   PCH (ns1.pch.net): anycast DNS for several hundred ccTLDs
+#
+# NOT listed, deliberately, because they did not answer over TCP/53 from the measurement host and this
+# file does not carry an entry we have not verified: Mullvad (194.242.2.2) and dns0.eu, both of which
+# are DoH/DoT-primary. If either is ever measured, add it with the date.
+#
+# ALSO NOT listed, and this one is a decision rather than a gap: the Tor directory authorities. Tor
+# exit space is an inference-tier category, which is never enforced by default, so the question does
+# not arise at the tiers this feed enforces. Recorded so the absence reads as a choice.
+
+# ---- TLD and registry nameservers: the layer that had NO protection at all ----
+#
+# This section exists because of a measurement, and the measurement is the reason the anycast signal
+# cannot be relied on to protect this layer. Checked on 2026-10-08, the anycast signal we carry is set
+# for the root nameserver prefixes - where this file already covered us - and CLEAR for the prefixes
+# serving .com/.net, .org, .de and .jp, despite those being anycast from dozens of sites each.
+#
+# So the anycast guard drew a bright line exactly at the root and stopped. A listing on a prefix
+# containing a TLD's nameserver would have passed all five guards: it is listed, so the absence rule
+# and the RPKI rule pass; the anycast signal is clear; a /24 clears the breadth floor; and it was not
+# in this file.
+#
+# The consequence was the largest blast radius in the design. An rpz-nsip trigger matches the address
+# of a NAMESERVER in the delegation chain, so one listing on a commercial-hosting /24 that happens to
+# serve a ccTLD would have made every name in that TLD NXDOMAIN for every device behind every slaving
+# resolver.
+192.5.6.0/24             measured-2026-10-08   TLD nameserver: a
+192.26.92.0/24           measured-2026-10-08   TLD nameserver: c
+192.33.14.0/24           measured-2026-10-08   TLD nameserver: b
+192.55.83.0/24           measured-2026-10-08   TLD nameserver: m
+2001:501:b1f9::/48       measured-2026-10-08   TLD nameserver: m
+2001:503:231d::/48       measured-2026-10-08   TLD nameserver: b
+2001:503:83eb::/48       measured-2026-10-08   TLD nameserver: c
+2001:503:a83e::/48       measured-2026-10-08   TLD nameserver: a
+199.19.54.0/24           measured-2026-10-08   TLD nameserver: b0
+199.19.56.0/24           measured-2026-10-08   TLD nameserver: a0
+199.249.112.0/24         measured-2026-10-08   TLD nameserver: a2
+2001:500:c::/48          measured-2026-10-08   TLD nameserver: b0
+2001:500:e::/48          measured-2026-10-08   TLD nameserver: a0
+2001:500:40::/48         measured-2026-10-08   TLD nameserver: a2
+77.67.63.0/24            measured-2026-10-08   TLD nameserver: l
+81.91.164.0/24           measured-2026-10-08   TLD nameserver: f
+194.0.0.0/24             measured-2026-10-08   TLD nameserver: a
+194.146.107.0/24         measured-2026-10-08   TLD nameserver: n
+194.246.96.0/24          measured-2026-10-08   TLD nameserver: z
+195.243.137.0/24         measured-2026-10-08   TLD nameserver: s
+2001:668:1f::/48         measured-2026-10-08   TLD nameserver: l
+2001:678:2::/48          measured-2026-10-08   TLD nameserver: a
+2001:67c:1011::/48       measured-2026-10-08   TLD nameserver: n
+2003:8:14::/48           measured-2026-10-08   TLD nameserver: s
+2a02:568::/48            measured-2026-10-08   TLD nameserver: f
+2a02:568:fe02::/48       measured-2026-10-08   TLD nameserver: z
+43.230.48.0/24           measured-2026-10-08   TLD nameserver: dns4
+103.49.80.0/24           measured-2026-10-08   TLD nameserver: dns2
+156.154.100.0/24         measured-2026-10-08   TLD nameserver: nsa
+213.248.216.0/24         measured-2026-10-08   TLD nameserver: dns1
+213.248.220.0/24         measured-2026-10-08   TLD nameserver: dns3
+2001:502:ad09::/48       measured-2026-10-08   TLD nameserver: nsa
+2401:fd80:400::/48       measured-2026-10-08   TLD nameserver: dns2
+2401:fd80:404::/48       measured-2026-10-08   TLD nameserver: dns4
+2a01:618:400::/48        measured-2026-10-08   TLD nameserver: dns1
+2a01:618:404::/48        measured-2026-10-08   TLD nameserver: dns3
+156.154.100.0/24         measured-2026-10-08   TLD nameserver: c
+202.12.30.0/24           measured-2026-10-08   TLD nameserver: b
+203.119.1.0/24           measured-2026-10-08   TLD nameserver: a
+210.138.175.0/24         measured-2026-10-08   TLD nameserver: d
+2001:240::/48            measured-2026-10-08   TLD nameserver: d
+2001:502:ad09::/48       measured-2026-10-08   TLD nameserver: c
+2001:dc2::/48            measured-2026-10-08   TLD nameserver: b
+2001:dc4::/48            measured-2026-10-08   TLD nameserver: a
+193.176.144.0/24         measured-2026-10-08   TLD nameserver: e
+194.0.9.0/24             measured-2026-10-08   TLD nameserver: a,d
+2001:678:c::/48          measured-2026-10-08   TLD nameserver: a,d
+2a00:d78::/48            measured-2026-10-08   TLD nameserver: e
+64.251.31.0/24           measured-2026-10-08   TLD nameserver: a
+156.154.124.0/24         measured-2026-10-08   TLD nameserver: a
+2001:502:ad09::/48       measured-2026-10-08   TLD nameserver: a
+2607:feb8::/48           measured-2026-10-08   TLD nameserver: a
+62.149.188.0/24          measured-2026-10-08   TLD nameserver: ns1
+185.24.67.0/24           measured-2026-10-08   TLD nameserver: ns1
+2a04:2b00:14aa::/48      measured-2026-10-08   TLD nameserver: ns1
+
+# ---- Our OWN infrastructure, because a self-pinning outage was reachable ----
+#
+# ns1 and ns2 sit in commercial VPS space, which is the most heavily SBL-listed category of address
+# space there is. A listing on a prefix covering ns2, plus an rpz-nsip trigger, would have made every
+# slaving resolver NXDOMAIN our own nameserver and everything served from it - including the zone
+# carrying the policy. The resolver could then no longer refresh, so it would be PINNED on the bad
+# policy until the SOA expire, and recovery would require resolving the very names the bad zone
+# forbids. There is no remote remedy for that; every operator would have to delete the zone by hand.
+# It would also have taken out the builder's own graph endpoint.
+#
+# Holding our own space harmless is not self-dealing: it is the difference between a bad build being
+# recoverable and being terminal.
+#
+# HOST ADDRESSES, NOT THE PREFIXES AROUND THEM. ns1 and ns2 are rented from a commercial cloud, so
+# the /24 and /48 that CONTAIN them are rentable by anyone with a credit card. Exempting those would
+# publish an occupiable bypass of this feed, with instructions, which is exactly the test the top of
+# this file sets out and exactly the ground on which the agent egress prefix was removed below. The
+# narrowest thing that closes the self-pinning hole is the single address each service answers on.
+#
+# This is therefore a MAINTENANCE POINT: if a node is rebuilt on a new address, the entry has to move
+# with it, or the hole reopens quietly. Nothing verifies the ADDRESSES automatically, because doing so
+# would mean a DNS lookup inside a build; what IS enforced is the SHAPE, which is the part that went
+# wrong: a test refuses any entry in this section that is not a single host (/32 or /128), so the
+# covering cloud prefix cannot come back.
+78.141.218.153/32                  measured-2026-10-09   whisper host: ns1, and graph/nic/whisper v4
+45.32.186.184/32                   measured-2026-10-09   whisper host: ns2, and graph/nic/whisper v4
+2a05:f480:1400:ab7::fe45:10c/128   measured-2026-10-09   whisper host: ns1
+2001:19f0:5000:15f6::fe45:110/128  measured-2026-10-09   whisper host: ns2
+2a04:2a00::/32                     measured-2026-10-09   whisper infrastructure block: NOT occupiable, unlike the cloud space above. More than one /48 inside it is in service, and no third party can obtain space inside it at any length, so the prefix itself is the right granularity here.
+#
+# AND NOT OUR AGENT EGRESS PREFIX. 2a04:2a01::/32 was listed here with the reason "operated-by-us",
+# and it has been removed, because that is not a reason and the exemption was not safe.
+#
+# It is the prefix customer agent addresses are allocated from. Exempting it would mean anyone who
+# signs up for a free key gets an address inside a range this feed will never flag - an OCCUPIABLE
+# exemption, published, with instructions. Every other entry in this file passes the test that an
+# attacker cannot rent space inside it; that one failed it outright.
+#
+# Separately, and enough on its own: a reputation feed exempting its own vendor's address space is the
+# oldest conflict of interest in this business, and this file's whole purpose is to be a promise
+# somebody else can check. "We own it" is the absence of a reason.
+#
+# So our agents are subject to this feed like anyone else's traffic. If one of their addresses is ever
+# listed by an independent source, it gets flagged, and that is the correct outcome.
+#
+# The self-pinning outage that prompted the original entry is unaffected: that hole was about our
+# NAMESERVERS being unreachable, and they are covered by the host prefixes above and by the resolver
+# prefix on this line.
+
+# ---- NTP: the subtlest resolver-killing path there is ----
+#
+# No time means RRSIG inception and expiry fail, which means DNSSEC validation fails for EVERY name,
+# which takes the house dark at one remove from anything an operator would think to look at. The first
+# draft of the design did not consider it.
+17.253.14.0/24           measured-2026-10-08   NTP: time
+17.253.108.0/24          measured-2026-10-08   NTP: time
+45.139.163.0/24          measured-2026-10-08   NTP: 1
+46.34.3.0/24             measured-2026-10-08   NTP: 0
+94.198.159.0/24          measured-2026-10-08   NTP: 1
+132.163.96.0/24          measured-2026-10-08   NTP: time
+162.159.200.0/24         measured-2026-10-08   NTP: time
+172.233.59.0/24          measured-2026-10-08   NTP: 0
+178.239.19.0/24          measured-2026-10-08   NTP: 1
+185.51.192.0/24          measured-2026-10-08   NTP: 1
+188.68.34.0/24           measured-2026-10-08   NTP: 0
+194.104.0.0/24           measured-2026-10-08   NTP: 0
+216.239.35.0/24          measured-2026-10-08   NTP: time
+2001:4860:4806::/48      measured-2026-10-08   NTP: time
+2606:4700:f1::/48        measured-2026-10-08   NTP: time
+2610:20:6f96::/48        measured-2026-10-08   NTP: time
+2a01:b740:a20::/48       measured-2026-10-08   NTP: time
+2a01:b740:a30::/48       measured-2026-10-08   NTP: time
+
+132.163.96.0/24          measured-2026-10-08   NTP: time.nist.gov (ntp1.glb.nist.gov)
+132.163.97.0/24          nist-published        NTP: NIST time servers, second range
+
+# ---- CA, ACME, OCSP and CRL: a silent failure that surfaces ninety days later ----
+#
+# NXDOMAIN on an ACME endpoint does not break anything today. It breaks every certificate behind that
+# resolver at renewal, which is the worst severity-to-diagnosability ratio available here, so these
+# are held harmless even though none of them is listed.
+23.11.41.0/24            measured-2026-10-08   CA/ACME/OCSP: ocsp
+104.18.20.0/24           measured-2026-10-08   CA/ACME/OCSP: ocsp
+104.18.21.0/24           measured-2026-10-08   CA/ACME/OCSP: ocsp
+104.18.38.0/24           measured-2026-10-08   CA/ACME/OCSP: crl,ocsp
+172.64.149.0/24          measured-2026-10-08   CA/ACME/OCSP: crl,ocsp
+172.65.32.0/24           measured-2026-10-08   CA/ACME/OCSP: acme-v02
+172.217.17.0/24          measured-2026-10-08   CA/ACME/OCSP: ocsp
+216.239.32.0/24          measured-2026-10-08   CA/ACME/OCSP: pki
+2001:4860:4802::/48      measured-2026-10-08   CA/ACME/OCSP: pki
+2600:14e1:24::/48        measured-2026-10-08   CA/ACME/OCSP: ocsp
+2606:4700::/48           measured-2026-10-08   CA/ACME/OCSP: ocsp
+2606:4700:60::/48        measured-2026-10-08   CA/ACME/OCSP: acme-v02
+2a00:1450:400e::/48      measured-2026-10-08   CA/ACME/OCSP: ocsp
+2a06:98c1:3105::/48      measured-2026-10-08   CA/ACME/OCSP: crl,ocsp
+2a06:98c1:3106::/48      measured-2026-10-08   CA/ACME/OCSP: crl,ocsp
+
+# ---- RPKI repositories: blocking one does not break DNS, it drops ROUTES ----
+#
+# A blocked RRDP or rsync repository stalls a validator rather than failing it. An operator running
+# routinator or fort past VRP expiry then starts dropping routes, which is a route-level blast radius
+# the design did not reason about at all. Several of these are on third-party hosting, so the per-host
+# /24 and /48 is the only honest granularity.
+104.18.235.0/24          measured-2026-10-08   RPKI/registry service: rrdp
+104.18.236.0/24          measured-2026-10-08   RPKI/registry service: rrdp
+104.21.34.0/24           measured-2026-10-08   RPKI/registry service: rrdp
+172.67.204.0/24          measured-2026-10-08   RPKI/registry service: rrdp
+172.233.4.0/24           measured-2026-10-08   RPKI/registry service: repository,rrdp
+193.0.11.0/24            measured-2026-10-08   RPKI/registry service: rpki,rrdp
+196.216.2.0/24           measured-2026-10-08   RPKI/registry service: rpki
+199.5.26.0/24            measured-2026-10-08   RPKI/registry service: rpki,rrdp
+199.71.0.0/24            measured-2026-10-08   RPKI/registry service: rpki,rrdp
+199.212.0.0/24           measured-2026-10-08   RPKI/registry service: rpki,rrdp
+202.12.29.0/24           measured-2026-10-08   RPKI/registry service: rpki
+2001:500:13::/48         measured-2026-10-08   RPKI/registry service: rpki,rrdp
+2001:500:31::/48         measured-2026-10-08   RPKI/registry service: rpki,rrdp
+2001:500:a9::/48         measured-2026-10-08   RPKI/registry service: rpki,rrdp
+2001:67c:2e8::/48        measured-2026-10-08   RPKI/registry service: rpki,rrdp
+2001:dd8:f::/48          measured-2026-10-08   RPKI/registry service: rpki
+2001:42d0::/48           measured-2026-10-08   RPKI/registry service: rpki
+2600:3c0d:1::/48         measured-2026-10-08   RPKI/registry service: rrdp
+2606:4700::/48           measured-2026-10-08   RPKI/registry service: rrdp
+2606:4700:3033::/48      measured-2026-10-08   RPKI/registry service: rrdp
+2606:4700:3035::/48      measured-2026-10-08   RPKI/registry service: rrdp
+2a01:7e04:1::/48         measured-2026-10-08   RPKI/registry service: repository
+202.12.29.0/24           measured-2026-10-08   RPKI/registry service: rpki
+202.12.31.0/24           measured-2026-10-08   RPKI/registry service: ns4
+203.119.42.0/24          measured-2026-10-08   RPKI/registry service: ns1
+203.119.86.0/24          measured-2026-10-08   RPKI/registry service: ns3
+203.119.102.0/24         measured-2026-10-08   RPKI/registry service: ftp
+2001:dd8:6::/48          measured-2026-10-08   RPKI/registry service: ns3
+2001:dd8:8::/48          measured-2026-10-08   RPKI/registry service: ftp
+2001:dd8:e::/48          measured-2026-10-08   RPKI/registry service: ns1
+2001:dd8:f::/48          measured-2026-10-08   RPKI/registry service: rpki
+2001:dd8:12::/48         measured-2026-10-08   RPKI/registry service: ns4
+
+# ---- RIR and IANA service infrastructure. The registries this feed's own evidence comes from;
+#      blocking them breaks RDAP, whois, IRR and RPKI validation for the operator running us.
+#
+#      EVERY prefix below was derived on 2026-10-08 by resolving the registry's service hostnames
+#      over TCP/53 and taking the narrowest /24 or /48 that covers the answers. The first draft of
+#      this section was written from memory and checked afterwards: of 13 entries, four covered NONE
+#      of the addresses they claimed, four covered only some, and the RIPE RIS /48 and the AFRINIC
+#      v6 /48 were simply the wrong network. The single supernet that would have covered each
+#      registry's measured set is not used - ARIN's is 199.0.0.0/9 and AFRINIC's 196.192.0.0/11, and
+#      holding a /9 harmless would exempt a large slice of the internet to protect one whois server.
+#
+#      APNIC'S whois AND RDAP are third-party-hosted and cannot be held by prefix: on 2026-10-08
+#      whois.apnic.net resolved into a commercial VPS provider and rdap.apnic.net behind a CDN, so
+#      there is no APNIC-operated prefix covering them and exempting the hosting space would exempt a
+#      large slice of the internet. An earlier version of this file said APNIC was therefore
+#      unprotectable and that the anycast guard and the breadth floor covered it. Both halves were
+#      wrong. APNIC's OWN space is holdable and is now held - rpki, ftp and the authoritative
+#      nameservers for its reverse zones are in the RPKI section below - and neither stated mitigation
+#      can fire on the two hosted services: the VPS address is not anycast by any definition, and a
+#      /24 is longer than the /20 floor. The honest statement is that APNIC's whois and RDAP are
+#      unprotected by this file, which is a narrow and named gap rather than a general one.
+
+193.0.0.0/20             measured-2026-10-08   RIPE NCC services: whois, RDAP, RPKI, RIPEstat, K-root
+2001:67c:2e8::/48        measured-2026-10-08   RIPE NCC services v6 (whois, RDAP, RIPEstat)
+2001:67c:2e8:25::/64     measured-2026-10-08   RIPE NCC rpki.ripe.net v6
+199.5.26.0/24            measured-2026-10-08   ARIN whois and RDAP
+199.71.0.0/24            measured-2026-10-08   ARIN whois and RDAP, second address set
+199.212.0.0/24           measured-2026-10-08   ARIN rpki/rrdp, THIRD address set (was missing)
+2001:500:31::/48         measured-2026-10-08   ARIN services v6
+2001:500:13::/48         measured-2026-10-08   ARIN services v6, second address set
+2001:500:a9::/48         measured-2026-10-08   ARIN rdap.arin.net v6
+200.3.12.0/22            measured-2026-10-08   LACNIC whois and RDAP
+2001:13c7:7001::/48      measured-2026-10-08   LACNIC whois v6
+2001:13c7:7002::/48      measured-2026-10-08   LACNIC RDAP v6
+196.216.2.0/23           measured-2026-10-08   AFRINIC whois and RDAP (covers .2 and .3)
+196.192.115.0/24         measured-2026-10-08   AFRINIC whois, second address set
+2001:42d0::/48           measured-2026-10-08   AFRINIC services v6
+192.0.32.0/20            measured-2026-10-08   IANA and ICANN services, incl. whois and RDAP
+2620:0:2d0::/48          measured-2026-10-08   IANA services v6
+
+# ---- Reserved and special-purpose space (RFC 6890). Never a useful verdict, and a listing against
+#      one is a sign the source is wrong, not that the space is dangerous.
+0.0.0.0/8                rfc6890               "this host on this network"
+10.0.0.0/8               rfc1918               private
+100.64.0.0/10            rfc6598               shared address space
+127.0.0.0/8              rfc6890               loopback
+169.254.0.0/16           rfc3927               link local
+172.16.0.0/12            rfc1918               private
+192.168.0.0/16           rfc1918               private
+224.0.0.0/4              rfc5771               multicast
+240.0.0.0/4              rfc6890               reserved
+::1/128                  rfc6890               loopback
+fe80::/10                rfc4291               link local
+fc00::/7                 rfc4193               unique local
+ff00::/8                 rfc4291               multicast
+192.0.0.0/24             rfc6890               IETF protocol assignments
+192.0.2.0/24             rfc5737               documentation (TEST-NET-1)
+198.51.100.0/24          rfc5737               documentation (TEST-NET-2)
+203.0.113.0/24           rfc5737               documentation (TEST-NET-3)
+198.18.0.0/15            rfc2544               benchmarking
+192.88.99.0/24           rfc7526               former 6to4 relay anycast
+2001:db8::/32            rfc3849               documentation
+::/128                   rfc4291               the unspecified address
+::ffff:0:0/96            rfc4291               IPv4-mapped
+2002::/16                rfc7526               6to4
+2001::/32                rfc4380               Teredo
+100::/64                 rfc6666               discard-only
+2001:20::/28             rfc7343               ORCHIDv2
+#
+# NAT64, and it cuts both ways. If 64:ff9b::/96 ever became a candidate, a DNS64 user would lose the
+# entire IPv4 internet in one entry. The converse is a blind spot worth stating: a DNS64 resolver
+# synthesises 64:ff9b::a.b.c.d, which matches neither our IPv4 ranges nor our IPv6 ranges, so the
+# snapshot silently blocks NOTHING reached through NAT64. That is a coverage gap, not a safety one.
+64:ff9b::/96             rfc6052               well-known NAT64 prefix
+64:ff9b:1::/48           rfc8215               local-use NAT64 prefix

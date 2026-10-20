@@ -1,0 +1,5 @@
+policy http/server:a log if rpki == valid or rpki == invalid or rpki == not-found or rpki == not_found or rpki == notfound or rpki == unrouted or rpki == undetermined
+policy http/server:a log if rpki_reason == asn or rpki_reason in { asn length undetermined }
+policy http/server:a log if asn_rep in { reputable neutral suspicious highly_suspicious undetermined }
+policy http/server:a log if rir in { afrinic apnic arin lacnic ripe undetermined }
+policy http/server:a log if registry_rir != undetermined and registry_rir == ripe

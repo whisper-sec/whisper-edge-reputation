@@ -1,0 +1,1 @@
+policy http/server:a deny if asn == 1234567890123456789012345

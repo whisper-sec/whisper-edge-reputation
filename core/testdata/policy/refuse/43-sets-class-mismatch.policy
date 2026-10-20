@@ -1,0 +1,2 @@
+set http/server:a @e KP SY
+policy http/server:a deny if asn in @e

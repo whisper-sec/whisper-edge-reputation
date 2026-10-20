@@ -1,0 +1,10 @@
+policy http/server:a deny if listed >= critical
+policy http/server:a deny if listed > high
+policy http/server:a log if listed == medium
+policy http/server:a log if listed != none
+policy http/server:a log if listed <= low
+policy http/server:a log if listed < medium
+policy http/server:a log if listed in { low medium }
+policy http/server:a log if listed is unknown
+policy http/server:a log if listed is not unknown
+policy http/server:a deny if listed >= none

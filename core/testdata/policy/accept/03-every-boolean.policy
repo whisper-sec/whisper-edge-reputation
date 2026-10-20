@@ -1,0 +1,3 @@
+policy http/server:a log if inferred or rpki_unreachable or tor_exit or proxy or vpn or c2 or bruteforce or spam or phishing or scanner or state_actor or anycast or moas or narrowed or tenant_allow or tenant_deny
+policy http/server:a log if not inferred and not rpki_unreachable and not tor_exit and not proxy and not vpn and not c2 and not bruteforce and not spam
+policy http/server:a log if c2 is unknown or not spam is not unknown

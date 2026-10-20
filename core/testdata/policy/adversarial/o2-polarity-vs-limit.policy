@@ -1,0 +1,2 @@
+policy http/server:a deny if tor_exit is unknown
+threshold http/server:a high

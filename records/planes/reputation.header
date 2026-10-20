@@ -1,0 +1,6 @@
+# The reputation plane's file, read at staging: its whole-file SHA-256 and the generation its header
+# carries at offset 16, in the header's own unit (format 1 keeps the slot index).
+plane reputation
+format 1
+sha256 74a477eeeff841dd5b829f38bbe69b71055ea74cf3b3403483178322e18bff1a
+generation 497775

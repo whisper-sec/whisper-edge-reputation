@@ -1,0 +1,5 @@
+policy http/server:a log if tor_exit is unknown
+policy http/server:a log if not rpki is not unknown
+policy http/server:a log if tor_exit is unknown and listed >= high
+policy http/server:a deny if listed >= high
+policy http/server:a allow if c2 is unknown

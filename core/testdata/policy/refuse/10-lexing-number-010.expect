@@ -1,0 +1,8 @@
+layer	lexing
+kind	policy
+context	http/server:a
+rule	1
+line	1
+col	16
+token	010
+message	a leading zero other than 0

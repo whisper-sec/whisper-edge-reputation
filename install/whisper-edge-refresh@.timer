@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026, viaGraph B.V.
+[Unit]
+Description=Refresh the Whisper edge %i plane on its schedule
+Documentation=https://whisper.online/edge/
+
+[Timer]
+# No schedule here. OnCalendar, OnBootSec and OnUnitActiveSec are lists that accumulate across
+# drop-ins, so a schedule in the template would add to each instance's own and fire twice. The
+# installer writes each plane's schedule in a drop-in of its own,
+#   /etc/systemd/system/whisper-edge-refresh@<plane>.timer.d/<plane>.conf
+# (OnCalendar= and RandomizedDelaySec=), and an instance enabled without one fetches once per boot
+# and then goes stale.
+#
+# Once at boot, after the network has had time to settle, as the reputation timer does.
+OnBootSec=2min
+# A host that was off refreshes shortly after it comes back instead of waiting for the next slot.
+Persistent=yes
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

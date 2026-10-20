@@ -1,0 +1,53 @@
+program records-sev-05-0f-10-20 seeds
+dir mode http deny
+dir mode http/server:a deny
+dir policy http/server:a log if listed == critical
+dir policy http/server:a deny if listed >= high
+dir policy http/server:a log if inferred
+run http/server:a
+case nibble
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 1800000000001
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor reputation sev=5
+sweep floor reputation sev 5 15
+end
+case bit-10
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 1800000000001
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor reputation sev=16
+end
+case bit-20
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 1800000000001
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor reputation sev=32
+end
+case bit-10-high
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 1800000000001
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor reputation sev=19
+end
+case bit-20-high
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 1800000000001
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor reputation sev=35
+end

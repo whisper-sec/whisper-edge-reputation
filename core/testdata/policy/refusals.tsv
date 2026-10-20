@@ -1,0 +1,51 @@
+file	layer	kind	context	rule	line	col	token	message
+01-length-2049-bytes.policy	length	policy	http/server:a	1	1	1		argument over 2,048 bytes
+02-length-before-alphabet.policy	length	policy	http/server:a	1	1	1		argument over 2,048 bytes
+03-alphabet-nul.policy	alphabet	policy	http/server:a	1	1	13	\x00	byte 0x00 is not allowed
+04-alphabet-nbsp.policy	alphabet	policy	http/server:a	1	1	8	\xC2	byte 0xC2 is not allowed
+05-alphabet-zero-width-space.policy	alphabet	policy	http/server:a	1	1	17	\xE2	byte 0xE2 is not allowed
+06-alphabet-cyrillic-in-braces.policy	alphabet	policy	http/server:a	1	1	25	\xD0	byte 0xD0 is not allowed
+07-lexing-hash-is-not-a-comment.policy	lexing	policy	http/server:a	1	1	18	#	byte 0x23 is not allowed
+08-lexing-identifier-65-bytes.policy	lexing	policy	http/server:a	1	1	16	@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa	identifier over 64 bytes
+09-lexing-number-00.policy	lexing	policy	http/server:a	1	1	16	00	a leading zero other than 0
+10-lexing-number-010.policy	lexing	policy	http/server:a	1	1	16	010	a leading zero other than 0
+11-lexing-number-sign.policy	lexing	policy	http/server:a	1	1	16	-1	a number with a sign
+12-lexing-number-25-digits.policy	lexing	policy	http/server:a	1	1	16	1234567890123456789012345	more than 10 digits
+13-lexing-number-overflow.policy	lexing	policy	http/server:a	1	1	16	4294967296	above 2^32 - 1
+14-lexing-number-sentinel.policy	lexing	policy	http/server:a	1	1	16	4294967295	the sentinel 4294967295
+15-lexing-asdot.policy	lexing	policy	http/server:a	1	1	16	as1.10	asdot
+16-lexing-unknown-country-code-or.policy	lexing	policy	http/server:a	1	1	27	or	an unknown country code
+17-lexing-uk.policy	lexing	policy	http/server:a	1	1	20	uk	did you mean GB
+18-lexing-upper-case-keyword.policy	lexing	policy	http/server:a	1	1	1	DENY	an upper-case keyword or literal
+19-lexing-bare-literal-after-in.policy	lexing	policy	http/server:a	1	1	20	RU	write country in { RU } or country == RU
+20-lexing-stray-at.policy	lexing	policy	http/server:a	1	1	16	@	a stray @
+21-lexing-unknown-operator.policy	lexing	policy	http/server:a	1	1	14	===	an unknown operator
+22-parsing-nesting-17-parentheses.policy	parsing	policy	http/server:a	1	1	25	(	nesting over 16
+23-parsing-nesting-17-not.policy	parsing	policy	http/server:a	1	1	73	not	nesting over 16
+24-parsing-trailing-input.policy	parsing	policy	http/server:a	1	1	18	garbage	trailing input
+25-parsing-and-or-mixed.policy	parsing	policy	http/server:a	1	1	25	or	and/or mixed in a chain
+26-parsing-unterminated-brace.policy	parsing	policy	http/server:a	1	1	20	{	unbalanced or nested braces
+27-parsing-nested-braces.policy	parsing	policy	http/server:a	1	1	22	{	unbalanced or nested braces
+28-parsing-stray-close-brace.policy	parsing	policy	http/server:a	1	1	19	}	a stray }
+29-parsing-bare-action-without-if.policy	parsing	policy	http/server:a	1	1	5		deny if not <condition>
+30-parsing-empty-argument.policy	parsing	policy	http/server:a	1	1	1		an empty expression
+31-parsing-whitespace-only-argument.policy	parsing	policy	http/server:a	1	2	3		an empty expression
+32-parsing-cr-only-is-whitespace.policy	parsing	policy	http/server:a	1	1	18	garbage	trailing input
+33-parsing-unknown-attribute.policy	parsing	policy	http/server:a	1	1	9	tor_exits	an unknown attribute or word
+34-parsing-65-operations-in-one-rule.policy	parsing	policy	http/server:a	1	1	201	c2	over 64 operations in a rule
+35-typing-wrong-class.policy	typing	policy	http/server:a	1	1	17	NL	rpki takes valid, invalid, not-found, unrouted or undetermined
+36-typing-before-unknown-code.policy	typing	policy	http/server:a	1	1	17	XX	rpki takes valid, invalid, not-found, unrouted or undetermined
+37-typing-ordered-comparison-on-asn.policy	typing	policy	http/server:a	1	1	13	>=	an ordered comparison on anything but listed
+38-typing-equality-on-a-bool.policy	typing	policy	http/server:a	1	1	18	==	in or == on a bool
+39-sets-undefined.policy	sets	policy	http/server:a	1	1	16	@nosuch	undefined in this context or an enclosing one
+40-sets-duplicate-definition.policy	sets	set	http/server:a	2	1	1	@x	a duplicate definition in one scope
+41-sets-shadowing-an-outer-set.policy	sets	set	http/server:a	1	1	1	@x	a definition shadowing an outer set
+42-sets-empty-inline-set.policy	sets	policy	http/server:a	1	1	20	{	an empty set
+43-sets-class-mismatch.policy	sets	policy	http/server:a	1	1	16	@e	a set used against an attribute of another class
+44-sets-1025-in-the-configuration.policy	sets	set	http	1025	1	1	@s1025	more than 1,024 sets in the configuration
+45-program-257-rules.policy	program	policy	http/server:a	257	1	1	deny	over 256 rules in a context
+46-program-4097-operations.policy	program	policy	http/server:a	65	1	9	c2	over 4,096 operations in a context
+47-program-allow-in-floor.policy	program	floor	http	1	1	1	allow	allow in a floor program
+48-program-threshold-with-policy-lines.policy	program	threshold	http/server:a	1	1	1	high	deny if listed >= high
+49-polarity-is-unknown-positive-in-deny.policy	polarity	policy	http/server:a	1	1	18	is	that is a fail-closed rule
+50-polarity-design-example.policy	polarity	policy	http/server:a	1	1	19	is	that is a fail-closed rule

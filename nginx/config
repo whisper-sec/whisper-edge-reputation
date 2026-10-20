@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026, viaGraph B.V.
+# nginx dynamic-module descriptor. The core sources are compiled IN rather than linked as a library,
+# so an operator building this needs only nginx's own build system and a C compiler - no install step
+# for us, no shared-library versioning, no LD_LIBRARY_PATH.
+#
+# The policy compiler (we_policy.c) and the modules' shared half (we_module.c: the arena, the binding
+# of the planes, the trust checks, the module's thread, the writers) are part of the module: the
+# directives are compiled to policy programs at configuration time and the planes are verified and
+# mapped before any worker exists, so a tree without them is not a tree this module builds from.
+ngx_addon_name=ngx_http_whisper_edge_module
+
+WHISPER_EDGE_CORE_DIR=$ngx_addon_dir/../core
+WHISPER_EDGE_SRCS="$WHISPER_EDGE_CORE_DIR/whisper_edge.c \
+                   $WHISPER_EDGE_CORE_DIR/we_sha256.c \
+                   $WHISPER_EDGE_CORE_DIR/we_counters.c \
+                   $WHISPER_EDGE_CORE_DIR/we_policy.c \
+                   $WHISPER_EDGE_CORE_DIR/we_module.c"
+for f in $WHISPER_EDGE_SRCS; do
+    if test ! -f "$f"; then
+        echo "$0: $ngx_addon_name: $f is missing; the module is built from a complete edge/ tree" >&2
+        exit 1
+    fi
+done
+
+# The module's own thread (the planes' verification and the writers run off the event loop) needs
+# pthread_create. Before glibc 2.34 it lives in libpthread.so, which an nginx configured without
+# --with-threads does not link, so the module names it: on a newer glibc the flag is a no-op.
+WHISPER_EDGE_LIBS="-lpthread"
+
+if test -n "$ngx_module_link"; then
+    # two modules in the one object: the http module, and a core module whose init_conf asserts the phase
+    # order after the whole configuration is parsed, where a failure refuses the configuration (a reload
+    # is refused and the running one keeps serving) rather than exiting a running master
+    ngx_module_type=HTTP
+    ngx_module_name="ngx_http_whisper_edge_module ngx_http_whisper_edge_order_module"
+    ngx_module_incs="$WHISPER_EDGE_CORE_DIR"
+    ngx_module_srcs="$ngx_addon_dir/ngx_http_whisper_edge_module.c $WHISPER_EDGE_SRCS"
+    ngx_module_libs="$WHISPER_EDGE_LIBS"
+    . auto/module
+else
+    CORE_MODULES="$CORE_MODULES ngx_http_whisper_edge_order_module"
+    HTTP_MODULES="$HTTP_MODULES ngx_http_whisper_edge_module"
+    CORE_INCS="$CORE_INCS $WHISPER_EDGE_CORE_DIR"
+    CORE_LIBS="$CORE_LIBS $WHISPER_EDGE_LIBS"
+    NGX_ADDON_SRCS="$NGX_ADDON_SRCS $ngx_addon_dir/ngx_http_whisper_edge_module.c $WHISPER_EDGE_SRCS"
+fi

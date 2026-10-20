@@ -1,0 +1,21 @@
+# evaluator-worst.tsv - the shape of the evaluator-worst fixture, which cg_driver builds into a floor
+# program and a context program (the same shape in each) and cachegrind-gate.sh measures.
+#
+# The fixture must attain the instruction maximum over every feasible count vector under the program
+# limits, for the solved constants of the toolchain measuring it (gate/cost-model.py `worst`), and the
+# maximum is a property of the toolchain: against one evaluator, gcc's is an or-chain (an `or` link costs
+# it one instruction more than an `and`) and clang's an and-chain. So there is one row per architecture
+# and compiler, and each driver builds the row its own build matches. When a row does not attain its
+# toolchain's maximum the gate fails and prints the row that does; the fix is that one line, never a
+# looser check. `flip` says which operands take the nots first (T: those the chain needs TRUE, F: those
+# it needs FALSE), which decides how many atoms run TRUE and how many FALSE where a kind's two outcomes
+# cost differently.
+#
+# The aarch64 rows are the enumeration's answer against the evaluator as measured for this commit; the
+# x86_64 rows are the same until an x86_64 run prints its own.
+#
+# arch	compiler	kind	rules	atoms	unary_not	negated	link	flip
+aarch64	gcc	INSET_ASN	256	2176	0	0	or	T
+aarch64	clang	INSET_ASN	256	2176	0	0	and	T
+x86_64	gcc	INSET_ASN	256	2176	0	0	or	T
+x86_64	clang	INSET_ASN	256	2176	0	0	and	T

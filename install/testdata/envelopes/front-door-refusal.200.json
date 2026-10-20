@@ -1,0 +1,1 @@
+{"columns":["op","ok","status","result","error","retry_after","elapsed_ms"],"rows":[{"op":"list","ok":false,"status":403,"result":null,"error":{"code":"FORBIDDEN_SCOPE","message":"Missing required scope: dns:zone:read","retryable":false},"retry_after":null,"elapsed_ms":0}],"statistics":{"rowCount":1,"executionTimeMs":0}}

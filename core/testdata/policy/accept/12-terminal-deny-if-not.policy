@@ -1,0 +1,3 @@
+set http/server:a @partners AS64496 AS64497 AS64498
+policy http/server:a allow if asn in @partners
+policy http/server:a deny if not country in { NL BE DE }

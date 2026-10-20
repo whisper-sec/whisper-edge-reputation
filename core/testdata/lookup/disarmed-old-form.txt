@@ -1,0 +1,14 @@
+snapshot disarmed.snap
+  format 1, tier 0, generation 1, 0 IPv4 + 0 IPv6 ranges, 192 bytes
+  built 1700000000000, valid until 4000000000000, within its validity window
+  threshold high, inferences not enforced
+
+  1.1.1.1                                    allow  no verdict
+  8.8.8.8                                    allow  no verdict
+  192.0.2.1                                  allow  no verdict
+  198.51.100.200                             allow  no verdict
+  0.0.0.0                                    allow  no verdict
+  255.255.255.255                            allow  no verdict
+  2001:db8::1                                allow  no verdict
+  ::                                         allow  no verdict
+  ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff    allow  no verdict

@@ -1,0 +1,34 @@
+program records-ffff-forms seeds
+dir mode http deny
+dir mode http/server:a deny
+dir policy http/server:a deny if tor_exit
+dir policy http/server:a log if listed >= low
+run http/server:a
+case mapped-equal
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 1800000000001
+addr floor 198.51.100.7
+addr server ::ffff:198.51.100.7
+flags 0 0
+rec floor tor flags=1 source=0 reason=0
+end
+case compat-distinct
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 1800000000001
+addr floor 198.51.100.7
+addr server ::198.51.100.7
+flags 0 0
+rec floor tor flags=0 source=0 reason=0
+rec server tor flags=1 source=0 reason=0
+end
+case mapped-hold-harmless
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 1800000000001
+addr floor ::ffff:192.168.1.1
+addr server ::ffff:192.168.1.1
+flags 1 0
+rec floor tor flags=1 source=0 reason=0
+end

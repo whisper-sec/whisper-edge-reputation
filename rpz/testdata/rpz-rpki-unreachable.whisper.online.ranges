@@ -1,0 +1,5 @@
+# The plane the rpki-unreachable fixture was written from: <family> <first> <last>. A membership plane:
+# every range is enforced, each written as its minimal CIDR cover (the IPv4 range is two /28s). Its
+# validity is two hours, so its EXPIRE is 7200 and not the reputation zone's 86400.
+4 203.0.113.16 203.0.113.47
+6 2001:db8:a:: 2001:db8:b:ffff:ffff:ffff:ffff:ffff

@@ -1,0 +1,8 @@
+layer	typing
+kind	policy
+context	http/server:a
+rule	1
+line	1
+col	18
+token	==
+message	in or == on a bool

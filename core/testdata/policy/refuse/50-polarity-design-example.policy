@@ -1,0 +1,2 @@
+policy http/server:a allow if tor_exit is not unknown and not tor_exit
+policy http/server:a deny if listed >= low

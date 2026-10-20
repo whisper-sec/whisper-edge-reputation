@@ -1,0 +1,8 @@
+# The plane the reputation fixture was written from: <family> <first> <last> <severity>, severity 0 to 4
+# (NONE, LOW, MEDIUM, HIGH, CRITICAL). A NONE range is in the plane and enforces nothing, so it has no
+# trigger: 198.51.100.0/25 here, right below an enforced /25, is a boundary the probes cross.
+4 192.0.2.0 192.0.2.255 4
+4 198.51.100.0 198.51.100.127 0
+4 198.51.100.128 198.51.100.255 3
+6 2001:db8:0:1:: 2001:db8:0:1:ffff:ffff:ffff:ffff 2
+6 2001:db8:beef:: 2001:db8:beef:ffff:ffff:ffff:ffff:ffff 3

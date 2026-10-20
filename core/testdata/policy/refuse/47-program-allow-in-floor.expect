@@ -1,0 +1,8 @@
+layer	program
+kind	floor
+context	http
+rule	1
+line	1
+col	1
+token	allow
+message	allow in a floor program

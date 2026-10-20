@@ -1,0 +1,18 @@
+# expected-counts.tsv - the hardware-independent columns of the routing-plane layout table,
+# written by run-x86.sh --write-expected on aarch64. run-x86.sh fails on any difference in them.
+# input   6d21f6a224160e10b7af081064eb289575b75fe4e3be9374193e94672e454cee  routeviews-rv2-20261009-1200.pfx2as.gz
+# input   270dcc20b304df7c06dded6614ab9905374d5bdf9c098ef79fe7c88e092f7a82  routeviews-rv6-20261009-1200.pfx2as.gz
+# output  6224f960d6edb0fb2b108b44d22cf77b6a1166e39aad6d5704ca4da8d1be18d5  v4.start (1169047 rows)
+# output  2a1667fdea860211c3cd597ed4a0b2e6925306206f14c0eee4f6262fe63b5511  v4.rec16 (1169047 rows)
+# output  c1b1c1f1128d0bec6945d8b6f2f01c7bc9cb3e3de7abf1816478e11fb469b253  v6.start (298246 rows)
+# output  453171a8003ccfc428c36f96e2155e6e7e0a5e7ba6aac57be6cfa3e3a2ea3496  v6.rec24 (298246 rows)
+# streams xorshift64, seed 0x9e3779b97f4a7c15; 1,000,000 sampled per stream; uniform over IPv4 and 2000::/3
+# columns: probes, cold lines (outside the index) and all lines at 64 bytes, pages at 4 KiB;
+# the exact_ columns are over every outcome class, address-weighted; the others are sampled.
+family	kind	ranges	hot_bytes	probes_max	cold64_max	cold128_max	lines64_max	pages4k_max	exact_uniform_cold64_p50	exact_uniform_cold64_p99	uniform_cold64_p50	uniform_cold64_p99	uniform_cold64_max	uniform_lines64_p99	dense_cold64_p50	dense_cold64_p99	dense_cold64_max	dense_lines64_p99
+v4	radix-16	1169047	262148	9	6	5	8	5	2	5	2	5	6	6	4	5	6	7
+v4	radix-18	1169047	1048580	7	5	4	6	5	1	3	1	3	4	5	3	4	5	5
+v4	rank-64s	1169047	146176	10	4	3	9	6	3	4	3	4	4	9	3	4	4	9
+v6	radix-16	298246	262148	16	15	14	16	10	2	2	2	2	14	4	11	14	15	15
+v6	radix-18	298246	1048580	15	15	13	16	9	2	2	2	2	14	4	10	14	15	15
+v6	rank-64s	298246	55968	10	6	5	11	7	3	5	3	5	6	10	4	6	6	11

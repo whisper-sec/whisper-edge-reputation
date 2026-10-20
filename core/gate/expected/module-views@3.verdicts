@@ -1,0 +1,16 @@
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-
+verdict step=4 action=deny program=ctx rule=1 reason=- log_floor=- log_ctx=-

@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026, viaGraph B.V.
+[Unit]
+Description=Refresh the Whisper edge policy zone %i and reload it in named
+Documentation=https://whisper.online/edge/
+# Its own unit, one instance per zone (whisper-edge-rpz@<origin>.service), not a second line in
+# whisper-edge-refresh.service: a failed zone refresh must show up as that zone's unit failing, and must
+# never stop the snapshot refresh, or another zone's, from running.
+After=network-online.target named.service bind9.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# install.sh renders the paths below for this host; these are the Debian and Ubuntu defaults.
+# --if-due makes the every-five-minutes timer a secondary's schedule: a fetch once the installed
+# zone's SOA REFRESH has passed, or its RETRY after a failure, read from the zone itself. The instance
+# is the zone's origin, and --zone-file names the directory, so each zone gets its own file there:
+# rpz.zone for rpz.whisper.online, <origin>.zone for every other.
+ExecStart=/usr/local/sbin/whisper-edge-refresh --if-due --quiet --zone-file /var/cache/bind/whisper-edge/ --base https://whisper.online/edge --zone %i
+# The same sandbox as the snapshot unit, plus the two things a zone reload needs and nothing else.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# AF_INET and AF_INET6 also carry rndc, which talks to named's control channel on 127.0.0.1:953.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+# The zone lives under named's own directory, the one tree AppArmor (Debian, Ubuntu) and SELinux
+# (RHEL) let named read, so that is the one writable path.
+ReadWritePaths=/var/cache/bind/whisper-edge
+# rndc reads named's control key, which Debian and Ubuntu ship as bind:bind 0640. With no
+# capabilities, root cannot read a file it does not own, so the key is reached the way named's own
+# tools reach it: through named's group. RHEL ships the key root-owned and needs no group.
+SupplementaryGroups=bind
+# The refresh's exit codes, and the LSB names systemd prints for them in `systemctl status` and the
+# journal, which mean something else here:
+#   1 FAILURE          the fetch or a check failed; nothing changed
+#   2 INVALIDARGUMENT  usage, or a missing tool
+#   3 NOTIMPLEMENTED   the zone is installed but named did not confirm loading it
+#   4 NOPERMISSION     named's configuration loads the zone from another file, or the file holds another zone
+#   5 NOTINSTALLED     the zone is not published yet and nothing is installed (a 404): counted as
+#                      success below; a 404 for a zone that IS installed exits 1 and fails the unit
+#   6 NOTCONFIGURED    the origin is not one the feed publishes
+#   7 NOTRUNNING       named loads this file under another zone name (named IS running)
+SuccessExitStatus=5
+# The run's own worst case, from its request caps: the body (120 s), its signature (60 s), then for each
+# view named loads the zone in, a reload confirmed within 30 s plus one second for a stale-mtime retry;
+# two views give 244 s. 300 s leaves room for the checks, and a stop still saves the state file.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

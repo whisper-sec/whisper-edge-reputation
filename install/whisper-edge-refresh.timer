@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026, viaGraph B.V.
+[Unit]
+Description=Refresh the Whisper edge reputation feed hourly
+Documentation=https://whisper.online/edge/
+
+[Timer]
+# Hourly, and the snapshot's own validity window is 24 hours, so a host that misses twenty-three
+# refreshes in a row is still enforcing a snapshot it is entitled to enforce. That ratio is the
+# point: the timer is for freshness, not for correctness.
+OnCalendar=hourly
+# Up to fifteen minutes of jitter. Without it every installation on the internet asks for the same
+# 550 KB file in the same second of the same minute, which is a thundering herd we would have
+# built ourselves and then had to explain.
+RandomizedDelaySec=900
+# A host that was off, or whose network was down, refreshes shortly after it comes back rather
+# than waiting for the next hour boundary.
+Persistent=yes
+# ...but not in the first half minute of boot, when the network is usually still settling.
+OnBootSec=2min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

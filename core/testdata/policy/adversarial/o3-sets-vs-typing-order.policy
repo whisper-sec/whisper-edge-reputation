@@ -1,0 +1,2 @@
+policy http/server:a deny if asn in @nosuch
+policy http/server:a deny if tor_exit == 1

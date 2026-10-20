@@ -1,0 +1,6 @@
+policy http/server:a deny if country in @late
+policy http/server:a log if country in {RU,SY}
+policy http/server:a log if country in { ,NL,, BE, }
+policy http/server:a log if registry_country in @lead
+set http/server:a @late KP,SY,,CU,
+set http/server:a @lead ,NL BE

@@ -1,0 +1,13 @@
+# residency-baseline.tsv - index-region misses per lookup from cachegrind-gate.sh's LRU residency
+# model, per geometry (the numbers are part of the key, so editing a geometry cannot reuse an old
+# row). v4, v6, both: the routing planes on the dense stream; reputation, tor, rpki-unreachable:
+# each default-policy plane ALONE on the default slot's q4 stream, the level stated. Gated within
+# +-10% of misses / lookups (a baseline of zero must stay zero); the radix routing plane against
+# the LLC is asserted zero whatever this file says. Rows are rewritten per geometry by --write-baseline.
+# geometry	l2_bytes	l2_ways	llc_bytes	llc_ways	line	planes	level	index_misses	lookups
+reference	1048576	8	33554432	16	64	v4	LLC	0	1000000
+reference	1048576	8	33554432	16	64	v6	L2	6353	1000000
+reference	1048576	8	33554432	16	64	both	LLC	444	2000000
+reference	1048576	8	33554432	16	64	reputation	L2	0	1000000
+reference	1048576	8	33554432	16	64	tor	L2	0	1000000
+reference	1048576	8	33554432	16	64	rpki-unreachable	L2	0	1000000

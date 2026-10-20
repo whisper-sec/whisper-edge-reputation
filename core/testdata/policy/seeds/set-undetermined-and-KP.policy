@@ -1,0 +1,2 @@
+set http/server:a @s undetermined KP
+policy http/server:a deny if country in @s

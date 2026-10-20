@@ -1,0 +1,12 @@
+# geometry.tsv - the cache geometries cachegrind-gate.sh's residency model can be run at.
+#
+# The residency check is a claim about ONE machine: that after one sequential sweep of the index
+# region, no lookup misses on an index line, in that machine's L2 where the referenced indexes fit in
+# it and in its LLC otherwise. So the geometry is named, never guessed from the host the gate happens
+# to run on. `production` is the box the plane manifest names; its numbers are filled in at deploy from
+# that box's lscpu (the L2 per core and the LLC available to one socket), and until they are, the gate
+# runs at `reference` and says so. WE_RESIDENCY_GEOMETRY=<name> picks a row.
+#
+# name	l2_bytes	l2_ways	llc_bytes	llc_ways	line	what it is
+reference	1048576	8	33554432	16	64	a 1 MiB 8-way L2 per core (the low end of current x86 and arm server parts) and a 32 MiB 16-way LLC
+production	-	-	-	-	64	the production box named in the manifest; filled in at deploy

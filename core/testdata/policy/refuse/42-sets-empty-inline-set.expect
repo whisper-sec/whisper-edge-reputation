@@ -1,0 +1,8 @@
+layer	sets
+kind	policy
+context	http/server:a
+rule	1
+line	1
+col	20
+token	{
+message	an empty set

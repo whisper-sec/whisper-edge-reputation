@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026, viaGraph B.V.
+[Unit]
+Description=Refresh the Whisper edge reputation feed
+Documentation=https://whisper.online/edge/
+# Only meaningful once there is a network. Not Requires=: a boot with no network should leave the
+# previously installed snapshot in place and let the timer try again, never fail the unit.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/whisper-edge-refresh --quiet
+# The refresh writes one file in one directory and needs nothing else, so it says so. None of this
+# is theatre: a script that curls the public internet as root on a web server is exactly the thing
+# an operator is right to be suspicious of, and the narrower it can be the easier it is to accept.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# One capability, CAP_LINUX_IMMUTABLE. This unit's own command never uses it: the default mode writes
+# snapshot.bin, which is never made immutable. It is here so this unit and the per-plane template grant
+# the same sandbox and differ only in their command and their time budget, and so a --plane run through
+# this unit (an ExecStart edited by hand) installs its plane immutable, as the template's does. It is
+# the only capability, and ProtectSystem=strict leaves it nothing to act on outside the one writable path.
+CapabilityBoundingSet=CAP_LINUX_IMMUTABLE
+ReadWritePaths=/var/lib/whisper-edge
+# A feed fetch that hangs must not hold the timer's next run hostage, and a slow one must end by its own
+# bounds, not this timeout. Those bounds: the pair is ONE curl with two transfers, and --max-time 120
+# applies to each transfer (measured), so a fetch is at most 240 s; a pair that does not verify is fetched
+# once more after a sleep of at most 10 s; 240 + 10 + 240 = 490 s. The rest of a run (openssl, cmp, mv)
+# is seconds, so 600 s leaves 110 s of slack.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

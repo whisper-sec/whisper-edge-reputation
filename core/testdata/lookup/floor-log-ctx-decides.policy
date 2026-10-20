@@ -1,0 +1,4 @@
+mode http log
+floor http deny if listed >= high
+policy http log if listed >= low
+policy http allow if listed >= low

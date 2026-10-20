@@ -1,0 +1,1 @@
+policy http/server:a deny if asn == AS0

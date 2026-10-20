@@ -1,0 +1,10 @@
+set http/server:a @partners undetermined AS0 as64496 64497
+set http/server:a @embargo KP SY CU
+set http/server:a @rpki-bad invalid not-found
+set http/server:a @severe high critical
+set http/server:a @unrouted-only undetermined
+policy http/server:a allow if asn in @partners
+policy http/server:a deny if country in @embargo
+policy http/server:a log if rpki in @rpki-bad
+policy http/server:a deny if listed in @severe
+policy http/server:a log if asn in @unrouted-only

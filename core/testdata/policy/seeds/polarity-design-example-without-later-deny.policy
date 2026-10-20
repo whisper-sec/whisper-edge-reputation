@@ -1,0 +1,1 @@
+policy http/server:a allow if tor_exit is not unknown and not tor_exit

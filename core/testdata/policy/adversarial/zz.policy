@@ -1,0 +1,1 @@
+policy http/server:a/location:l0/location:l1/location:l2/location:l3/location:l4/location:l5/location:l6/location:l7/location:l8/location:l9/location:l10/location:l11 deny if tor_exit

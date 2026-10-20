@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026, viaGraph B.V.
+[Unit]
+Description=Refresh the Whisper edge %i plane
+Documentation=https://whisper.online/edge/
+# One instance per plane the policy reads: whisper-edge-refresh@reputation, @tor, @rpki-unreachable.
+# The installer renders the command and the writable path for the directory it installed into; the
+# instance name is the plane, passed through as %i and never escaped.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/whisper-edge-refresh --plane %i --quiet
+# The keyless unit's sandbox, with one capability added: a plane is installed immutable, so a cp or
+# an in-place write over a live mapping fails with EPERM instead of crashing a worker, and replacing
+# it means clearing the attribute first. Both need CAP_LINUX_IMMUTABLE, and an empty bounding set
+# would leave every plane this unit installs without the attribute.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=CAP_LINUX_IMMUTABLE
+ReadWritePaths=/var/lib/whisper-edge
+# A plane run's own bound is 1,300 s (four fetches of 120 s, eight after a 404 re-run, its sleep, the
+# two directory locks' 300 s and the failure counter's 30 s); the unit allows 120 s more, so that
+# bound, never this timeout, ends a slow run.
+TimeoutStartSec=1420

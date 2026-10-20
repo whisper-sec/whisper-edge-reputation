@@ -1,0 +1,3105 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026, viaGraph B.V.
+# Fetch the Whisper edge feed, verify it, and install it atomically.
+#
+# This is the loop the README used to describe and leave to the reader to assemble. It is a
+# script instead of a paragraph because four of its details are load-bearing and every operator
+# who writes it by hand gets to discover which:
+#
+#   1. VERIFY BEFORE REPLACE. An unverified artifact must never reach the path the server reads.
+#      The download lands on a temp file; only a passing check moves it into place.
+#   2. ATOMIC REPLACE. `mv` within one filesystem is atomic, so a reader that opens the path
+#      mid-refresh sees the old file or the new one, never a half-written one. Downloading
+#      straight onto the live path is the single most common way to make a server read a
+#      truncated snapshot, and the core would then correctly refuse it and enforce nothing.
+#   3. FAIL WITHOUT TOUCHING ANYTHING. Every failure here leaves the previously installed
+#      artifact exactly where it was. A feed we cannot reach must not disarm a policy that is
+#      already loaded and working - the same fail-open rule the core applies to its own reads -
+#      until that policy is past its own validity, which is a different rule and the next point.
+#   4. EACH SERVER IS TOLD WHAT IT NEEDS TO BE TOLD, AND NOTHING MORE. The web-server modules
+#      re-read the snapshot on their own timer and get no reload: a refresh that bounced them
+#      would make a routine data update an availability event. BIND never re-reads a zone file
+#      by itself, so --rpz reloads that ONE zone, and only when its serial moved.
+#
+# Usage:  whisper-edge-refresh [--plane NAME] [--dir DIR] [--base URL] [--quiet]
+#         whisper-edge-refresh --zone ORIGIN [--zone-file PATH] [--named-conf FILE] [--if-due]
+#   --zone        fetch one policy zone for a resolver, by its origin: rpz.whisper.online (reputation)
+#                 or rpz-rpki-unreachable.whisper.online. Signed, checked, installed atomically, and
+#                 reloaded in named. Any other name is refused before anything is fetched
+#   --rpz         the same as --zone rpz.whisper.online, when no --zone is given
+#   --zone-file   where the zone lives, or the directory it lives in (default: the file named's
+#                 configuration loads for the zone, else whisper-edge/<origin>.zone under named's own
+#                 directory; in either directory the reputation zone's file is rpz.zone)
+#   --named-conf  the named.conf to read (default: the one named-checkconf reads)
+#   --if-due      fetch only when the installed zone's SOA REFRESH (RETRY after a failure) has passed;
+#                 the timer passes this, a person running it by hand does not need to
+#   --plane NAME  fetch one plane (tor, routing, ...) from the signed manifest and install it as
+#                 NAME.bin, pinned to one address; needs python3 or jq to read the manifest
+#
+# With a feed key (the tenant plane: your own allow and deny lists from op:policy{edge}):
+#         whisper-edge-refresh --enroll [--label L] [--force]   mint a feed key with your CLI key
+#         whisper-edge-refresh --keyed-set                       fetch and install tenant.bin
+#         whisper-edge-refresh --unenroll                        revoke the key; this box is keyless again
+#         whisper-edge-refresh --repin                           accept a different account's tenant plane
+#   --key-file F  the feed key's file (default /etc/whisper-edge/key, or WHISPER_EDGE_KEY_FILE)
+#   --no-timer    with --enroll: schedule nothing (install.sh --no-timer passes it)
+#   The keyed path needs python3, flock and curl 7.55.0 or later. It sends the feed key only to
+#   https://whisper.online and the CLI key only to https://graph.whisper.online. --plane tenant is
+#   --keyed-set.
+#
+# Environment:
+#   WHISPER_EDGE_BASE, WHISPER_EDGE_DIR   as --base and --dir
+#   WHISPER_EDGE_RESOLVE=host:port:addr   pin every fetch of the run to one address (curl --resolve):
+#                 the default mode, --zone (and --rpz) and --plane. host:port must be the feed's own
+#                 (from --base); one naming another host would be ignored by curl and leave the run
+#                 unpinned, so the run is refused instead. Under --zone the pin covers the by-name
+#                 body; its signature is fetched by hash from the address the body came from, so the
+#                 pair always comes from one node. The keyed path takes only its address, for the
+#                 keyed host.
+#
+# Exit 0 = a verified artifact is in place (fetched now, or unchanged and already current).
+# Exit non-zero = read the message; for a zone the codes are listed under "the resolver half" below.
+set -eu
+
+BASE="${WHISPER_EDGE_BASE:-https://whisper.online/edge}"
+DIR="${WHISPER_EDGE_DIR:-/var/lib/whisper-edge}"
+MODE=snapshot
+QUIET=0
+PLANE=""
+ZONE=""
+ZONE_ARG=""
+ZONE_GIVEN=0
+RPZ_FLAG=0
+TARGET=""
+NAMED_CONF=""
+IF_DUE=0
+# The keyed tier's files live outside $DIR: the key beside the configuration, and the two state files
+# the module reads in a root-owned subdirectory, the only part of /etc/whisper-edge the keyed unit may
+# write. WHISPER_EDGE_ETC moves the whole tree, for a test or a host with another layout.
+ETC="${WHISPER_EDGE_ETC:-/etc/whisper-edge}"
+KEYFILE="${WHISPER_EDGE_KEY_FILE:-}"
+LABEL=""
+FORCE=0
+NO_TIMER=0
+# How long to wait for named to report the serial it was asked to load. A reload of a large zone is
+# queued and applied asynchronously; a few seconds is normal, thirty is a stuck server.
+RELOAD_WAIT="${WHISPER_EDGE_RELOAD_WAIT:-30}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --rpz)        RPZ_FLAG=1 ;;
+    --plane)      PLANE="${2:?--plane needs a plane name}"; MODE=plane; shift ;;
+    --dir)        DIR="${2:?--dir needs a path}"; shift ;;
+    --base)       BASE="${2:?--base needs a URL}"; shift ;;
+    --quiet)      QUIET=1 ;;
+    --zone)       ZONE_ARG="${2:?--zone needs a zone name}"; ZONE_GIVEN=1; shift ;;
+    --zone-file)  TARGET="${2:?--zone-file needs a path}"; shift
+                  case "$TARGET" in /*) ;; *) TARGET="$PWD/$TARGET" ;; esac ;;
+    --named-conf) NAMED_CONF="${2:?--named-conf needs a path}"; shift ;;
+    --if-due)     IF_DUE=1 ;;
+    --keyed-set)  MODE=keyed ;;
+    --enroll)     MODE=enroll ;;
+    --unenroll)   MODE=unenroll ;;
+    --repin)      MODE=repin ;;
+    --label)      LABEL="${2?--label needs a value}"; shift ;;
+    --force)      FORCE=1 ;;
+    --no-timer)   NO_TIMER=1 ;;
+    --key-file)   KEYFILE="${2:?--key-file needs a path}"; shift ;;
+    -h|--help)
+      # the header comment, however long it grows (a fixed line range printed code for years)
+      awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"
+      exit 0 ;;
+    *) echo "whisper-edge-refresh: unknown option $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+BASE="${BASE%/}"
+KEYFILE="${KEYFILE:-$ETC/key}"
+# --plane tenant is the keyed fetch: the tenant plane is never in the keyless manifest
+if [ "$MODE" = plane ] && [ "$PLANE" = tenant ]; then MODE=keyed; fi
+# --zone names the zone and implies the zone mode; --rpz is --zone rpz.whisper.online when no --zone
+# is given, in either order. Neither combines with another mode.
+if [ "$ZONE_GIVEN" = 1 ] || [ "$RPZ_FLAG" = 1 ]; then
+  case "$MODE" in
+    snapshot) MODE=rpz ;;
+    *) echo "whisper-edge-refresh: --zone and --rpz fetch a policy zone, and do not combine with --$MODE" >&2; exit 2 ;;
+  esac
+fi
+
+say() { [ "$QUIET" = 1 ] || printf '%s\n' "$*"; }
+die() { printf 'whisper-edge-refresh: %s\n' "$*" >&2; exit 1; }
+
+# The pin's one check. curl applies a --resolve entry only to the host and port it names, so a
+# WHISPER_EDGE_RESOLVE for another host is a silent no-op and the run goes unpinned. Prints the reason
+# and succeeds when the variable is set and does not name BASE's host and port.
+resolve_mismatch() {
+  [ -n "${WHISPER_EDGE_RESOLVE:-}" ] || return 1
+  _hp=${BASE#*://}; _hp=${_hp%%/*}; _bh=${_hp%:*}; _bp=${_hp##*:}
+  if [ "$_bh" = "$_hp" ]; then case "$BASE" in http://*) _bp=80 ;; *) _bp=443 ;; esac; fi
+  _rh=${WHISPER_EDGE_RESOLVE%%:*}; _rr=${WHISPER_EDGE_RESOLVE#*:}; _rp=${_rr%%:*}
+  _bh=$(printf '%s' "$_bh" | tr '[:upper:]' '[:lower:]'); _rh=$(printf '%s' "$_rh" | tr '[:upper:]' '[:lower:]')
+  [ "$_rh" = "$_bh" ] && [ "$_rp" = "$_bp" ] && return 1
+  printf 'WHISPER_EDGE_RESOLVE=%s names %s:%s, but the feed is %s:%s (%s): curl would ignore the pin and the run would not be pinned, so nothing was fetched' \
+    "$WHISPER_EDGE_RESOLVE" "$_rh" "$_rp" "$_bh" "$_bp" "$BASE"
+  return 0
+}
+
+# ==== the resolver half: --zone ORIGIN (and --rpz) =====================================================
+#
+# A policy zone is not a file a server re-reads on its own, and that changes four things relative to
+# the snapshot below. Each was a shipped defect before this section existed:
+#
+#   1. IT HAS TO BE FETCHED ON A SCHEDULE. Each zone has its own unit instance,
+#      whisper-edge-rpz@<origin>.timer, which runs this with --if-due every few minutes, and --if-due
+#      turns that into a secondary's schedule read from the zone itself: a fetch once SOA REFRESH has
+#      passed since the last good check, or SOA RETRY since a failed one.
+#   2. named HAS TO BE TOLD. BIND never re-reads a primary zone's file by itself. `rndc reload <zone>`
+#      reloads that one zone, and its exit code proves nothing ("zone reload up-to-date" and "zone
+#      reload queued" both exit 0 while the old zone stays loaded), so success is `rndc zonestatus`
+#      showing the serial we installed, and nothing less.
+#   3. NOTHING EXPIRES A PRIMARY ZONE. SOA EXPIRE only acts on a secondary, so the validity of a file
+#      we load as a primary is enforced here, by the one rule every Whisper node also follows: content
+#      whose validUntil has passed is replaced by the empty zone at serial
+#      max(slotStart(validUntil), serial + 1), the same bytes at the same serial the nameservers sweep
+#      to, so a resolver and the feed never disagree about what an expired zone is.
+#   4. NOTHING UNVERIFIED IS INSTALLED. The zone is fetched by name, /edge/rpz/<origin>.zone, and its
+#      Ed25519 signature, /edge/zones/<sha256>.zone.sig, from the SAME node, pinned to the address the
+#      body came from. The signature covers the ASCII string whisper-edge-zone-v1, one NUL byte, then
+#      the file, so no other signature by the same key can pass for a zone's.
+#
+# What a zone file must say about itself, checked before it may replace anything: a header of
+# `; key=value` lines (v=wedge-rpz1, origin, state, generation, and for content validUntil and
+# triggers), the SOA owner equal to --zone, named-checkzone's approval, exactly the records the header
+# promises (an empty zone holds only the apex SOA and NS; content holds exactly `triggers=` triggers,
+# zero allowed), the SOA serial equal to the header's generation, and for content a validUntil equal to
+# the serial's slot start plus the SOA EXPIRE, with EXPIRE at most 86400.
+#
+# Never written: a zone named's configuration loads as a SECONDARY. Its file is named's own (raw format
+# by default), and EXPIRE already does there what step 3 does here.
+#
+# Exit codes: 0 in place and loaded (or not due, or unchanged), 1 nothing changed because the fetch or
+# its check failed, 2 usage or a missing tool, 3 the zone is installed but named did not confirm
+# loading it, 4 named's configuration loads this zone from a different file (or the file holds another
+# zone), 5 the origin is one we publish but has no zone yet and nothing is installed (a 404: not
+# published yet; the unit counts it as success; a 404 for a zone that IS installed is a failure, 1), 6 the origin is not one we publish (checked before any network call), 7 named loads
+# this file under another zone name. systemd prints 3 to 7 under LSB names that mean something else
+# here (NOTIMPLEMENTED, NOPERMISSION, NOTINSTALLED, NOTCONFIGURED, NOTRUNNING): whisper-edge-rpz@.service
+# lists them.
+
+rpz_note()  { [ "$QUIET" = 1 ] || printf '%s\n' "$*"; }   # routine lines, silent under --quiet
+rpz_event() { printf '%s\n' "$*"; }                       # anything that changed, always printed
+rpz_alarm() { printf 'whisper-edge-refresh: %s\n' "$*" >&2; }
+
+now() { date +%s; }
+
+# The origins the feed publishes, one per verdict plane, and the profile every one of them carries.
+# A zone file is a pure function of (origin, its plane's entry); the empty zone of (origin, serial).
+RPZ_ORIGINS="rpz.whisper.online rpz-rpki-unreachable.whisper.online"
+NOT_PUBLISHED_BACKOFF=3600   # with nothing installed, a 404 is asked again once a slot, not every tick
+RPZ_CAP=5208704          # the largest zone the writer may produce: 50,000 of the longest trigger lines
+SIG_CAP=1024             # an Ed25519 signature is 64 bytes; anything past this is not one
+ZONE_SIG_PREFIX=whisper-edge-zone-v1
+
+# --zone's value, made canonical or refused: RFC 5890 LDH labels (letters, digits, hyphens, no hyphen
+# at either end, 1 to 63 octets each, 253 in all), lowercased in the C locale (never the ambient one,
+# where a Turkish I folds to a dotless i), and one trailing dot removed. Prints the origin, or nothing.
+canon_origin() {
+  _o=$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+  _o=${_o%.}
+  [ -n "$_o" ] && [ "${#_o}" -le 253 ] || return 1
+  case "$_o" in *[!a-z0-9.-]*|.*|*..*) return 1 ;; esac
+  _rest=$_o
+  while [ -n "$_rest" ]; do
+    _l=${_rest%%.*}
+    case "$_rest" in *.*) _rest=${_rest#*.} ;; *) _rest="" ;; esac
+    [ -n "$_l" ] && [ "${#_l}" -le 63 ] || return 1
+    case "$_l" in -*|*-) return 1 ;; esac
+  done
+  printf '%s' "$_o"
+}
+origin_listed() { case " $RPZ_ORIGINS " in *" $1 "*) return 0 ;; esac; return 1; }
+# The file a zone lives in by default: rpz.zone for the reputation zone (where every install before
+# per-zone files put it), <origin>.zone for every other.
+origin_file() { if [ "$1" = rpz.whisper.online ]; then printf 'rpz.zone'; else printf '%s.zone' "$1"; fi; }
+# A name as named's configuration may spell it, folded the way named folds it: case, one trailing dot.
+fold_name() { printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | sed 's/\.$//'; }
+
+# The empty zone of (origin, serial), byte for byte what every node serves when a zone expires or is
+# withheld. The profile (MNAME, RNAME, timers, TTL, the two nameservers) is fixed; EXPIRE is 86400.
+wedge_empty() {  # $1 origin, $2 serial
+  # shellcheck disable=SC2016  # $TTL is the zone-file directive, written literally
+  printf '; v=wedge-rpz1\n; origin=%s\n; state=empty\n; generation=%s\n$TTL 300\n' "$1" "$2"
+  printf '%s.\tIN\tSOA\tns1.whisper.online. hostmaster.whisper.online. ( %s 900 300 86400 300 )\n%s.\tIN\tNS\tns1.whisper.online.\n%s.\tIN\tNS\tns2.whisper.online.\n' "$1" "$2" "$1" "$1"
+}
+
+# Every exit after the state is loaded goes through here, so the textfile counts it.
+rpz_exit() { st_save; exit "$1"; }
+rpz_tmp() { mktemp "$ZDIR/.$(basename "$TARGET").new.XXXXXX" 2>/dev/null; }
+# Called in THIS shell, never inside $( ), so the count it makes is the one that is saved.
+rpz_tmp_failed() {
+  st_bump errors_total
+  rpz_alarm "cannot create a temp file in $ZDIR, so nothing was changed. Under the timer this means
+    the directory is not root-owned, or is not the unit's ReadWritePaths."
+  rpz_exit 1
+}
+# A signal removes the temp files (the EXIT trap) and then really exits. A trap that only cleaned up
+# would let the script carry on after SIGTERM and act on files it had just deleted.
+rpz_traps() {
+  trap 'rm -f ${NEW:+"$NEW" "$NEW.hdr" "$NEW.err" "$NEW.ip" "$NEW.rc" "$NEW.sig" "$NEW.shdr" "$NEW.msg"} ${EMPTY:+"$EMPTY"}' EXIT
+  rpz_signal_traps
+}
+# Once the state is loaded, a signal (systemd's TimeoutStartSec, a stop) saves it before exiting, so the
+# counters of the run that was cut short are not lost with it.
+rpz_signal_traps() {
+  if [ -n "${ST_LOADED:-}" ]; then
+    trap 'st_save; exit 130' INT
+    trap 'st_save; exit 143' TERM
+  else
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+  fi
+}
+
+# RFC 1982 serial arithmetic. a > b exactly when (a - b) mod 2^32 is in 1 .. 2^31 - 1.
+serial_gt() { _d=$(( ($1 - $2 + 4294967296) % 4294967296 )); [ "$_d" -gt 0 ] && [ "$_d" -lt 2147483648 ]; }
+serial_inc() { printf '%s' $(( ($1 + 1) % 4294967296 )); }
+
+# BIND's own reading of a zone file, canonical: one record per line, owner, TTL, class, type, RDATA.
+# Empty, and non-zero, when the file does not load as $ZONE.
+zone_dump() { LC_ALL=C named-compilezone -q -s full -i none -o - "$ZONE" "$1" 2>/dev/null; }
+# The SOA as "serial refresh retry expire minimum", from the dump: BIND's numbers, not a regex's.
+zone_soa() {
+  zone_dump "$1" | LC_ALL=C WE_AWK_apex="$ZDOT" awk 'BEGIN { apex = ENVIRON["WE_AWK_apex"] } tolower($1) == tolower(apex) && $4 == "SOA" { print $7, $8, $9, $10, $11; exit }'
+}
+zone_loads() { LC_ALL=C named-checkzone -q "$ZONE" "$1" >/dev/null 2>&1; }
+
+# The zone file's own header, the `; key=value` lines above $TTL, read in the C locale. Sets H_STATE,
+# H_ORIGIN, H_GEN, H_VALID (epoch seconds) and H_TRIG, or returns 1 with the reason in H_WHY. The
+# first four lines are fixed (v, origin, state, generation); content adds validUntil and triggers,
+# then at most 16 sources lines. No header line is longer than 255 bytes.
+hdr_parse() {  # $1 file
+  H_STATE=""; H_ORIGIN=""; H_GEN=""; H_VALID=""; H_VALID_TXT=""; H_TRIG=""; H_WHY=""
+  _h=$(LC_ALL=C awk 'NR > 32 || !/^;/ { exit } length($0) > 255 { print "!long " NR; exit } { print }' "$1" 2>/dev/null)
+  case "$_h" in *"!long "*) H_WHY="header line ${_h##*!long } is longer than 255 bytes"; return 1 ;; esac
+  _l1=$(printf '%s\n' "$_h" | sed -n 1p)
+  [ "$_l1" = "; v=wedge-rpz1" ] || { H_WHY="no wedge-rpz1 header"; return 1; }
+  H_ORIGIN=$(printf '%s\n' "$_h" | sed -n '2s/^; origin=\([a-z0-9.-]\{1,253\}\)$/\1/p')
+  case "$(printf '%s\n' "$_h" | sed -n 3p)" in
+    "; state=content") H_STATE=content ;;
+    "; state=empty")   H_STATE=empty ;;
+  esac
+  # No leading zero anywhere a number is read: the shell's arithmetic would take it for octal.
+  H_GEN=$(printf '%s\n' "$_h" | sed -n '4s/^; generation=\([0-9]\{1,10\}\)$/\1/p')
+  case "$H_GEN" in 0?*) H_GEN="" ;; esac
+  if [ -z "$H_ORIGIN" ] || [ -z "$H_STATE" ] || [ -z "$H_GEN" ]; then
+    H_WHY="the header's origin, state and generation lines are not in their fixed form and order"; return 1
+  fi
+  [ "$H_GEN" -le 4294967295 ] || { H_WHY="generation $H_GEN is not a 32-bit serial"; return 1; }
+  [ "$H_STATE" = content ] || return 0
+  H_VALID_TXT=$(printf '%s\n' "$_h" | sed -n '5s/^; validUntil=\([0-9]\{4\}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\)$/\1/p')
+  H_TRIG=$(printf '%s\n' "$_h" | sed -n '6s/^; triggers=\([0-9]\{1,6\}\)$/\1/p')
+  case "$H_TRIG" in 0?*) H_TRIG="" ;; esac
+  if [ -z "$H_VALID_TXT" ] || [ -z "$H_TRIG" ]; then
+    H_WHY="a content header without validUntil (RFC 3339 UTC) and triggers on lines 5 and 6"; return 1
+  fi
+  _d=$(printf '%s' "$H_VALID_TXT" | sed 's/T/ /; s/Z$//')
+  H_VALID=$(date -u -d "$_d" +%s 2>/dev/null) || H_VALID=""
+  # A round trip, so a date the parser normalised (a 31st of a 30-day month) is refused, not moved.
+  if [ -z "$H_VALID" ] || [ "$(date -u -d "@$H_VALID" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" != "$H_VALID_TXT" ]; then
+    H_WHY="validUntil $H_VALID_TXT is not a real UTC time"; return 1
+  fi
+  return 0
+}
+
+# The file's records against its header, from BIND's own dump: the SOA owner is the zone, only SOA and
+# NS sit at the apex, no record is out of the zone, and the non-apex records are exactly the triggers
+# the header names (none for an empty zone). Sets C_SOA ("serial refresh retry expire minimum"); returns
+# 1 with the reason in H_WHY.
+content_check() {  # $1 file, after hdr_parse
+  C_SOA=""
+  _dump=$(zone_dump "$1") || { H_WHY="named-compilezone refuses it as zone $ZONE"; return 1; }
+  _summary=$(printf '%s\n' "$_dump" | LC_ALL=C WE_AWK_apex="$ZDOT" awk 'BEGIN { apex = ENVIRON["WE_AWK_apex"] }
+    { o = tolower($1) }
+    o == tolower(apex) && $4 == "SOA" { soa = $7 " " $8 " " $9 " " $10 " " $11; next }
+    o == tolower(apex) && $4 == "NS" { next }
+    o == tolower(apex) { apexother++; next }
+    { body++ }
+    END { printf "%s|%d|%d\n", soa, apexother, body }')
+  C_SOA=${_summary%%|*}; _r=${_summary#*|}; _apexother=${_r%%|*}; _body=${_r#*|}
+  [ -n "$C_SOA" ] || { H_WHY="no SOA owned by $ZONE"; return 1; }
+  [ "$_apexother" = 0 ] || { H_WHY="the apex holds $_apexother record(s) other than SOA and NS"; return 1; }
+  _serial=${C_SOA%% *}
+  [ "$_serial" = "$H_GEN" ] || { H_WHY="SOA serial $_serial is not the header's generation $H_GEN"; return 1; }
+  if [ "$H_STATE" = empty ]; then
+    [ "$_body" = 0 ] || { H_WHY="state=empty, but $_body record(s) below the apex"; return 1; }
+  else
+    [ "$_body" = "$H_TRIG" ] || { H_WHY="the header promises $H_TRIG trigger(s), the file holds $_body"; return 1; }
+    _expire=$(printf '%s' "$C_SOA" | awk '{ print $4 }')
+    [ "$_expire" -le 86400 ] || { H_WHY="SOA EXPIRE $_expire is over 86400"; return 1; }
+    _want=$(( _serial / 3600 * 3600 + _expire ))
+    [ "$H_VALID" = "$_want" ] || {
+      H_WHY="validUntil $H_VALID_TXT is not the serial's slot start plus EXPIRE ($_want)"; return 1; }
+  fi
+  return 0
+}
+
+# The file as text, before any BIND tool reads it: the writer's format has no directive but $TTL, every
+# owner absolute and inside the zone, and no line without an owner. An $INCLUDE would make named read,
+# at every reload, bytes nobody verified (and named-compilezone read them during the check), $GENERATE
+# makes records the header never counted, and an owner outside the zone is silently dropped by
+# named-compilezone, so the record count could never see it. Returns 1 with the reason in H_WHY.
+raw_check() {  # $1 file
+  H_WHY=$(LC_ALL=C WE_AWK_z="$ZDOT" awk 'BEGIN { z = ENVIRON["WE_AWK_z"] }
+    /^[ \t]*$/ || /^;/ { next }
+    /^\$TTL[ \t]+[0-9]+[ \t]*$/ { next }
+    /^\$/ { split($0, d, /[ \t]/); printf "line %d is a %s directive, which the format never carries", NR, d[1]; exit }
+    /^[ \t]/ { printf "line %d has no owner", NR; exit }
+    $1 ~ /\\/ { printf "line %d owner %s carries an escape, which the format never writes", NR, $1; exit }
+    { o = tolower($1); if (o != z && substr(o, length(o) - length(z)) != "." z) { printf "line %d owner %s is outside %s", NR, $1, z; exit } }
+  ' "$1")
+  [ -z "$H_WHY" ]
+}
+
+# The serial every node sweeps an expired content zone to.
+sweep_serial() {  # $1 serial, $2 validUntil (epoch seconds)
+  _s=$(( $2 / 3600 * 3600 ))
+  if serial_gt "$_s" "$1"; then printf '%s' "$_s"; else serial_inc "$1"; fi
+}
+
+# ---- state, as a Prometheus textfile beside the zone -----------------------------------------------
+#
+# The counters are the alarm that outlives the journal: point a node_exporter textfile collector at
+# this file, or read it by eye. It is parsed by sed and never sourced, so a hostile file runs nothing.
+# Every series carries zone="<origin>": the zones' files sit in one directory, and without the label a
+# collector reading it would see two files publishing the same series with the same labels.
+ST_KEYS="last_attempt_seconds last_attempt_ok last_ok_seconds last_advance_seconds content_serial
+swept_content_serial installed_serial loaded_serial disarmed valid_until_seconds not_published_since_seconds fetch_failures_total refused_total
+stale_feed_total current_total not_published_total withdrawn_total expired_on_fetch_total sweeps_total reloads_total
+reload_failures_total disarms_total config_failures_total errors_total"
+st_load() {
+  for _k in $ST_KEYS; do
+    # this zone's labelled series, or the unlabelled one an earlier version wrote
+    _v=$(sed -n "s/^whisper_edge_rpz_${_k}\\({zone=\"$ZONE\"}\\)\\{0,1\\} \\(-\\{0,1\\}[0-9]\\{1,\\}\\)\$/\\2/p" "$STATE" 2>/dev/null | tail -1)
+    eval "st_${_k}=\${_v:-}"
+  done
+}
+st_save() {
+  _t=$(mktemp "$ZDIR/.$(basename "$STATE").XXXXXX") || { rpz_alarm "cannot write state beside $TARGET"; return 0; }
+  {
+    printf '# whisper-edge-refresh state for zone %s (%s). Counters only ever go up.\n' "$ZONE" "$TARGET"
+    for _k in $ST_KEYS; do
+      eval "_v=\${st_${_k}:-}"
+      [ -n "$_v" ] || continue
+      case "$_k" in
+        *_total) printf '# TYPE whisper_edge_rpz_%s counter\n' "$_k" ;;
+        *)       printf '# TYPE whisper_edge_rpz_%s gauge\n' "$_k" ;;
+      esac
+      printf 'whisper_edge_rpz_%s{zone="%s"} %s\n' "$_k" "$ZONE" "$_v"
+    done
+  } > "$_t"
+  chmod 0644 "$_t"; mv -f "$_t" "$STATE"
+}
+st_bump() { eval "st_$1=\$(( \${st_$1:-0} + 1 ))"; }
+
+# ---- what named's configuration says about this file -------------------------------------------------
+#
+# Read, never assumed: the zone statement that loads our file gives the zone's name, its type and the
+# view it is in, and named's `directory` gives the default place for the file (the one tree an
+# AppArmor- or SELinux-confined named may read). `named-checkconf -p` prints the whole effective
+# configuration, includes resolved, in one canonical layout, so the parse is of BIND's own rendering
+# rather than of whatever was typed. Output: "D<TAB>dir" once, "Z<TAB>view<TAB>zone<TAB>type<TAB>file"
+# per zone statement. Returns 1 when there is no named-checkconf, and 2, printing its error, when it
+# FAILS: an include nobody in the sandbox can read, a syntax error. A failed read is not an empty
+# configuration. Taken for one, the zone would be treated as a primary nobody loads and written,
+# even if named loads that very file as a secondary.
+named_config() {
+  command -v named-checkconf >/dev/null 2>&1 || return 1
+  _cc=$(named-checkconf -p ${NAMED_CONF:+"$NAMED_CONF"} 2>&1) || { printf '%s\n' "$_cc" | head -3; return 2; }
+  printf '%s\n' "$_cc" | LC_ALL=C awk '
+    function unq(s) { sub(/^[^"]*"/, "", s); sub(/".*$/, "", s); return s }
+    depth == 0 && /^options[ \t]*[{]/ { inopt = 1 }
+    depth == 0 && /^view[ \t]+"/      { view = unq($0) }
+    inopt && depth == 1 && /^[ \t]*directory[ \t]+"/ { print "D\t" unq($0) }
+    # A zone STATEMENT opens its block on the same line. `zone "x";` inside response-policy does not,
+    # and taking it for one would hide the real statement behind a zone with no file.
+    /^[ \t]*zone[ \t]+"[^"]*"[^;]*[{]/ { zname = unq($0); zdepth = depth; inz = 1; ztype = ""; zfile = "" }
+    inz && depth == zdepth + 1 && /^[ \t]*type[ \t]/ { t = $2; sub(/;.*/, "", t); ztype = t }
+    inz && depth == zdepth + 1 && /^[ \t]*file[ \t]+"/ { zfile = unq($0) }
+    { o = gsub(/[{]/, "{"); c = gsub(/[}]/, "}"); depth += o - c }
+    inz && depth == zdepth { print "Z\t" view "\t" zname "\t" ztype "\t" zfile; inz = 0 }
+    depth == 0 { inopt = 0; view = "" }
+  '
+}
+
+# rndc, as configured. WHISPER_EDGE_RNDC replaces the command (word-split on purpose, so a config file
+# or a port can ride along), which is also how a test drives a named of its own.
+rndc_cmd() {
+  # shellcheck disable=SC2086
+  ${WHISPER_EDGE_RNDC:-rndc} "$@"
+}
+have_rndc() { command -v "$(printf '%s' "${WHISPER_EDGE_RNDC:-rndc}" | awk '{ print $1 }')" >/dev/null 2>&1; }
+
+# The serial named has LOADED for this zone in this view, or empty when rndc cannot tell us.
+loaded_serial() {  # $1 = view, or empty
+  if [ -n "$1" ]; then _o=$(rndc_cmd zonestatus "$ZONE" IN "$1" 2>&1) || return 0
+  else _o=$(rndc_cmd zonestatus "$ZONE" 2>&1) || return 0; fi
+  printf '%s\n' "$_o" | sed -n 's/^serial: \([0-9]\{1,\}\)$/\1/p' | head -1
+}
+reload_zone() {  # $1 = view, or empty; prints rndc's own words
+  if [ -n "$1" ]; then rndc_cmd reload "$ZONE" IN "$1" 2>&1 || true
+  else rndc_cmd reload "$ZONE" 2>&1 || true; fi
+}
+# Poll until named reports the serial we want, with a deadline. A poll with no deadline is a hang.
+wait_loaded() {  # $1 = view, $2 = serial
+  _i=0
+  while [ "$_i" -lt "$RELOAD_WAIT" ]; do
+    [ "$(loaded_serial "$1")" = "$2" ] && return 0
+    sleep 1; _i=$((_i + 1))
+  done
+  [ "$(loaded_serial "$1")" = "$2" ]
+}
+
+# Bring every view that loads this file to the installed serial. A reload is issued ONLY where named's
+# loaded serial differs from the file's, so an unchanged run asks named for its status and nothing
+# else, and a reload that failed last time is retried on the next run.
+sync_named() {
+  _want="$1"; _rc=0
+  # VIEWS is one name per line; split on newlines only, so a view called "two words" stays one view.
+  _oifs=$IFS; IFS='
+'
+  for _view in $VIEWS; do
+    IFS=$_oifs
+    [ "$_view" = "-" ] && _view=""
+    _where="zone $ZONE${_view:+ in view $_view}"
+    if ! have_rndc; then
+      st_bump reload_failures_total; st_loaded_serial=-1
+      rpz_alarm "rndc not found, so nothing told named about serial $_want of $_where. named keeps
+    serving whatever it last loaded until something runs: rndc reload $ZONE"
+      _rc=3; continue
+    fi
+    _have=$(loaded_serial "$_view")
+    if [ "$_have" = "$_want" ]; then
+      st_loaded_serial=$_have
+      rpz_note "named already serves $_where at serial $_want"
+      continue
+    fi
+    _said=$(reload_zone "$_view")
+    case "$_said" in
+      *"up-to-date"*)
+        # BIND judged the file by its mtime and kept the old zone. The file IS different (the serials
+        # say so), so make the mtime now and ask once more rather than let a timestamp decide.
+        touch "$TARGET"; sleep 1; _said=$(reload_zone "$_view") ;;
+    esac
+    if wait_loaded "$_view" "$_want"; then
+      st_bump reloads_total; st_loaded_serial=$_want
+      rpz_event "reloaded $_where, serial $_want (named confirms)"
+    else
+      st_bump reload_failures_total
+      _have=$(loaded_serial "$_view")
+      # shellcheck disable=SC2034  # every st_* is written out by st_save, through eval
+      st_loaded_serial=${_have:--1}
+      _zerr=$( { if [ -n "$_view" ]; then rndc_cmd zonestatus "$ZONE" IN "$_view"; else rndc_cmd zonestatus "$ZONE"; fi; } 2>&1 | head -1)
+      rpz_alarm "named did NOT load serial $_want of $_where. rndc reload said: \"$(printf '%s' "$_said" | head -1)\";
+    zonestatus reports serial ${_have:-<none: \"$_zerr\">}. The file at $TARGET is complete and checked,
+    and named keeps enforcing what it last loaded. Two causes, told apart by rndc's own words above:
+    - rndc itself failed (no key, connection refused, \"does not exist\"): under the timer, rndc must read
+      named's control key (Debian: /etc/bind/rndc.key, bind:bind 0640), which a unit with no
+      capabilities can only do as a member of named's group: SupplementaryGroups= in
+      whisper-edge-rpz@.service. A refused connection means named is not running.
+    - rndc worked and named kept the old serial: read named's log. A zone file outside named's own
+      directory is refused by AppArmor (journalctl -k | grep -i 'apparmor.*named') or SELinux."
+      _rc=3
+    fi
+  done
+  IFS=$_oifs   # the list was split once, before the first iteration; this covers an empty list
+  return "$_rc"
+}
+
+# ---- the fetch: the body by name, its signature by hash from the same node ---------------------------
+#
+# The body goes through `head -c` one byte past the cap, so a body of unknown length (chunked) can
+# never fill the disk, whatever curl's version (--max-filesize bounds an unknown length only from
+# curl 8.4). curl writes the body to fd 9, the pipe into head, and its write-out (the address it
+# connected to) to a file; its exit status reaches the shell through a file too, because POSIX sh has
+# no pipefail. The status line comes from curl's own header dump. If-None-Match is the sha256 of the
+# installed file, computed here; no header the feed sent is ever stored or sent back.
+# Sets F_CODE (the HTTP status, or "fail"), F_WHY, F_ADDR. The body is in $NEW.
+fetch_body() {
+  # -q: no ~/.curlrc (a hand run as root reads root's); --proto: the base's own scheme and no other.
+  set -- -q -sS --proto "=$BASE_SCHEME" --max-time 120 -D "$NEW.hdr" -o /dev/fd/9 -w '%{remote_ip}'
+  [ -n "${WHISPER_EDGE_RESOLVE:-}" ] && set -- "$@" --resolve "$WHISPER_EDGE_RESOLVE"
+  if [ -s "$TARGET" ]; then
+    _inm=$(sha256sum < "$TARGET" | cut -d' ' -f1)
+    set -- "$@" -H "If-None-Match: \"$_inm\""
+  fi
+  { curl "$@" "$BASE/rpz/$ZONE.zone" >"$NEW.ip" 2>"$NEW.err"; echo "$?" > "$NEW.rc"; } 9>&1 \
+    | head -c $((RPZ_CAP + 1)) > "$NEW"
+  # A connection that never opened leaves no header dump: read as nothing, never as a reason to stop.
+  F_ADDR=$(cat "$NEW.ip" 2>/dev/null) || F_ADDR=""
+  F_CODE=$(LC_ALL=C awk '/^HTTP\// { c = $2 } END { print c }' "$NEW.hdr" 2>/dev/null) || F_CODE=""
+  _crc=$(cat "$NEW.rc" 2>/dev/null) || _crc=""
+  _size=$(wc -c < "$NEW" | tr -d ' ')
+  F_WHY=""
+  if [ "$_size" -gt "$RPZ_CAP" ]; then
+    F_CODE=fail; F_WHY="the body is over the $RPZ_CAP-byte cap; nothing past it was written"
+  elif [ "$_crc" != 0 ]; then
+    F_CODE=fail; F_WHY=$(head -1 "$NEW.err" 2>/dev/null); F_WHY=${F_WHY:-curl exited ${_crc:-?}}
+  elif [ -z "$F_CODE" ]; then
+    F_CODE=fail; F_WHY="no HTTP status line in the response"
+  fi
+}
+
+# The signature, from the node the body came from. Returns 1 with the reason in F_WHY.
+fetch_sig() {  # $1 sha256 of the body
+  _sha=$1
+  _hp=${BASE#*://}; _hp=${_hp%%/*}
+  case "$_hp" in
+    \[*\]:*) _host=${_hp%:*}; _port=${_hp##*:} ;;
+    \[*\])   _host=$_hp; _port="" ;;
+    *:*)     _host=${_hp%:*}; _port=${_hp##*:} ;;
+    *)       _host=$_hp; _port="" ;;
+  esac
+  [ -n "$_port" ] || case "$BASE" in http://*) _port=80 ;; *) _port=443 ;; esac
+  set -- -q -sS --proto "=$BASE_SCHEME" --max-time 60 -D "$NEW.shdr" -o /dev/fd/9
+  # A name is pinned to the address the body came from; an address literal is its own pin. With no
+  # address reported the request goes unpinned, which can only fail closed: another node's signature
+  # either is this body's, or does not verify.
+  _lit=1
+  case "$_host" in \[*\]) ;; *[!0-9.]*) _lit=0 ;; esac
+  if [ "$_lit" = 0 ] && [ -n "$F_ADDR" ]; then
+    case "$F_ADDR" in *:*) _pin="[$F_ADDR]" ;; *) _pin=$F_ADDR ;; esac
+    set -- "$@" --resolve "$_host:$_port:$_pin"
+  fi
+  { curl "$@" "$BASE/zones/$_sha.zone.sig" >/dev/null 2>"$NEW.err"; echo "$?" > "$NEW.rc"; } 9>&1 \
+    | head -c $((SIG_CAP + 1)) > "$NEW.sig"
+  _crc=$(cat "$NEW.rc" 2>/dev/null) || _crc=""
+  _sc=$(LC_ALL=C awk '/^HTTP\// { c = $2 } END { print c }' "$NEW.shdr" 2>/dev/null) || _sc=""
+  _ss=$(wc -c < "$NEW.sig" | tr -d ' ')
+  if [ "$_crc" != 0 ]; then F_WHY="the signature could not be fetched from ${F_ADDR:-the feed}: $(head -1 "$NEW.err" 2>/dev/null)"; return 1; fi
+  [ "$_sc" = 200 ] || { F_WHY="the signature is HTTP ${_sc:-?} from ${F_ADDR:-the feed}"; return 1; }
+  if [ "$_ss" -eq 0 ] || [ "$_ss" -gt "$SIG_CAP" ]; then F_WHY="the signature is $_ss bytes"; return 1; fi
+  { printf '%s\000' "$ZONE_SIG_PREFIX"; cat "$NEW"; } > "$NEW.msg"
+  openssl pkeyutl -verify -pubin -inkey "$KEY" -rawin -in "$NEW.msg" -sigfile "$NEW.sig" >/dev/null 2>&1 \
+    || { F_WHY="THE SIGNATURE DID NOT VERIFY against $KEY"; return 1; }
+  return 0
+}
+
+# Write bytes over the zone file the way every install here does: a temp in the same directory, 0644,
+# a rename, then a fresh mtime because BIND reloads by mtime.
+install_file() {  # $1 the temp file
+  chmod 0644 "$1"
+  mv -f "$1" "$TARGET"
+  touch "$TARGET"
+}
+
+# Replace an expired content zone, or a legacy file past EXPIRE without an advance, by the empty zone.
+# Returns 0 when nothing needed doing or it was done, 1 on a failure (counted, alarmed).
+validity_sweep() {
+  [ -n "$CUR_SERIAL" ] || return 0
+  if [ "$CUR_STATE" = content ]; then
+    [ "$T_NOW" -ge "$CUR_VALID" ] || return 0
+    _e=$(sweep_serial "$CUR_SERIAL" "$CUR_VALID")
+    rpz_traps
+    EMPTY=$(rpz_tmp) || rpz_tmp_failed
+    wedge_empty "$ZONE" "$_e" > "$EMPTY"
+    if [ "$(zone_soa "$EMPTY" | awk '{ print $1 }')" = "$_e" ]; then
+      install_file "$EMPTY"; EMPTY=""
+      st_bump sweeps_total
+      rpz_event "EXPIRED zone $ZONE: content serial $CUR_SERIAL was valid until $(date -u -d "@$CUR_VALID" '+%Y-%m-%dT%H:%M:%SZ'). Installed the
+    empty zone at serial $_e, the bytes and serial every Whisper nameserver sweeps to, so this resolver
+    stops enforcing a list nobody vouches for any more. The next newer zone re-arms it."
+      # The content this host swept, kept so a feed that still serves it is told apart from a replay.
+      # shellcheck disable=SC2034  # written out by st_save, through eval
+      st_swept_content_serial=$CUR_SERIAL
+      CUR_SERIAL=$_e; CUR_STATE=empty; CUR_VALID=""
+      return 0
+    fi
+    rm -f "$EMPTY"; EMPTY=""
+    st_bump errors_total
+    rpz_alarm "could not build a loadable empty zone for $ZONE, so the EXPIRED zone is still installed
+    and named still enforces it. To stop enforcing it by hand: remove the zone from named's
+    response-policy clause and rndc reconfig."
+    return 1
+  fi
+  # A file from before per-zone files (no header) keeps the rule it was installed under: emptied once it
+  # has not advanced for longer than its own SOA EXPIRE. A header-carrying empty zone is never touched.
+  [ "$CUR_STATE" = legacy ] && [ "$DISARMED" = 0 ] || return 0
+  _age=$(( T_NOW - ${st_last_advance_seconds:-$T_NOW} ))
+  [ "$_age" -gt "$EXPIRE" ] || return 0
+  E=$(serial_inc "$CUR_SERIAL")
+  rpz_traps
+  EMPTY=$(rpz_tmp) || rpz_tmp_failed
+  {
+    printf '; whisper-edge: DISARMED content serial %s expired at %s (no advance for %ss, EXPIRE %ss).\n' \
+      "$CUR_SERIAL" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$_age" "$EXPIRE"
+    printf '; An empty policy zone, so this resolver stops enforcing a list nobody can vouch for. The\n'
+    printf '; next fetch with a newer serial replaces it; nothing has to be edited by hand.\n'
+    # SOA and apex NS, plus the A and AAAA of any NS target INSIDE the zone: without that glue an
+    # empty zone whose nameserver lives in it fails named-checkzone, and the stale zone stays armed.
+    zone_dump "$TARGET" | LC_ALL=C WE_AWK_apex="$ZDOT" WE_AWK_s="$E" awk 'BEGIN { apex = ENVIRON["WE_AWK_apex"]; s = ENVIRON["WE_AWK_s"] }
+      { line[NR] = $0; own[NR] = tolower($1); typ[NR] = $4 }
+      tolower($1) == tolower(apex) && $4 == "NS" { ns[tolower($5)] = 1 }
+      END {
+        for (i = 1; i <= NR; i++) {
+          if (own[i] == tolower(apex) && typ[i] == "SOA") { split(line[i], f); f[7] = s
+            o = f[1]; for (j = 2; j in f; j++) o = o " " f[j]; print o }
+          else if (own[i] == tolower(apex) && typ[i] == "NS") print line[i]
+          else if ((typ[i] == "A" || typ[i] == "AAAA") && (own[i] in ns)) print line[i]
+        }
+      }'
+  } > "$EMPTY"
+  if zone_loads "$EMPTY" && [ "$(zone_soa "$EMPTY" | awk '{ print $1 }')" = "$E" ]; then
+    install_file "$EMPTY"; EMPTY=""
+    st_bump disarms_total
+    rpz_event "DISARMED zone $ZONE: content serial $CONTENT has not advanced for ${_age}s, past its
+    EXPIRE of ${EXPIRE}s. Installed an empty zone, serial $E, so this resolver stops enforcing a
+    stale list. The next fetch with a newer serial re-arms it."
+    CUR_SERIAL=$E; DISARMED=1
+    return 0
+  fi
+  _why=$(LC_ALL=C named-checkzone "$ZONE" "$EMPTY" 2>&1 | head -2)
+  rm -f "$EMPTY"; EMPTY=""
+  st_bump errors_total
+  rpz_alarm "could not build a loadable empty zone for $ZONE, so the EXPIRED zone is still installed
+    and named still enforces it. The check said: $_why
+    To stop enforcing it by hand: remove the zone from named's response-policy clause and rndc reconfig."
+  return 1
+}
+
+# What is installed now: its SOA, and what its header (or, for a file from before per-zone files, its
+# first line) says it is. Sets CUR_SOA CUR_SERIAL CUR_STATE (content, empty, legacy) CUR_VALID CONTENT
+# DISARMED, and the SOA timers.
+read_installed() {
+  CUR_SOA=""; CUR_STATE=""; CUR_VALID=""; CUR_ORIGIN=""; DISARMED=0; CONTENT=""
+  if [ -s "$TARGET" ]; then
+    CUR_SOA=$(zone_soa "$TARGET")
+    if hdr_parse "$TARGET"; then
+      CUR_STATE=$H_STATE; CUR_VALID=$H_VALID; CUR_ORIGIN=$H_ORIGIN
+    else
+      CUR_STATE=legacy
+      if head -1 "$TARGET" | grep -q '^; whisper-edge: DISARMED'; then
+        DISARMED=1
+        CONTENT=$(head -1 "$TARGET" | sed -n 's/.*content serial \([0-9]\{1,\}\).*/\1/p')
+      fi
+    fi
+    [ -n "$CONTENT" ] || CONTENT=$(printf '%s' "$CUR_SOA" | awk '{ print $1 }')
+    [ -n "$st_last_advance_seconds" ] || st_last_advance_seconds=$(date -r "$TARGET" +%s 2>/dev/null || now)
+  fi
+  CUR_SERIAL=$(printf '%s' "$CUR_SOA" | awk '{ print $1 }')
+  REFRESH=$(printf '%s' "$CUR_SOA" | awk '{ print $2 }'); REFRESH=${REFRESH:-900}
+  RETRY=$(printf '%s' "$CUR_SOA" | awk '{ print $3 }');   RETRY=${RETRY:-300}
+  EXPIRE=$(printf '%s' "$CUR_SOA" | awk '{ print $4 }');  EXPIRE=${EXPIRE:-86400}
+}
+
+rpz_main() {
+  # The origin first, before any tool is looked for and before anything touches the network or disk.
+  if [ "$ZONE_GIVEN" = 1 ]; then
+    if ! ZONE=$(canon_origin "$ZONE_ARG"); then
+      printf 'whisper-edge-refresh: --zone %s is not a zone name (letters, digits and hyphens in dot-separated\n    labels). The published zones are: %s. Nothing was fetched or changed.\n' \
+        "$ZONE_ARG" "$RPZ_ORIGINS" >&2
+      exit 6
+    fi
+    if ! origin_listed "$ZONE"; then
+      printf 'whisper-edge-refresh: %s is not a zone the feed publishes. The published zones are:\n    %s\n  Nothing was fetched or changed. A zone is signed for its own name and its owners are absolute,\n  so named must load it under that name; if named.conf loads one of them as %s, rename the\n  statement, for example:\n    zone "rpz.whisper.online" { type master; file "whisper-edge/rpz.zone"; };\n' \
+        "$ZONE" "$RPZ_ORIGINS" "$ZONE" >&2
+      exit 6
+    fi
+  else
+    ZONE=rpz.whisper.online
+  fi
+  # Everything from here reads bytes, names and numbers, so it reads them in the C locale: a bracket
+  # range or a case fold in the operator's locale is not the one the zone file was written in.
+  LC_ALL=C; export LC_ALL
+  command -v curl >/dev/null 2>&1 || die "curl is required"
+  if _why=$(resolve_mismatch); then printf 'whisper-edge-refresh: %s\n' "$_why" >&2; exit 2; fi
+  for _t in named-checkzone named-compilezone; do
+    command -v "$_t" >/dev/null 2>&1 && continue
+    printf '%s\n' "whisper-edge-refresh: $_t is required for a policy zone. A zone nobody checked must
+    never reach named: a broken file keeps the OLD policy in force with nothing saying so. It ships with
+    BIND (bind9-utils on Debian and Ubuntu, bind-utils on RHEL)." >&2
+    exit 2
+  done
+  command -v openssl >/dev/null 2>&1 || { rpz_alarm "openssl is required to verify the zone's signature"; exit 2; }
+  command -v sha256sum >/dev/null 2>&1 || { rpz_alarm "sha256sum is required"; exit 2; }
+  KEY="$DIR/edge.pub"
+  case "$BASE" in
+    https://*) BASE_SCHEME=https ;;
+    http://*)  BASE_SCHEME=http ;;
+    *) rpz_alarm "--base $BASE is neither https:// nor http://; nothing was fetched"; exit 2 ;;
+  esac
+
+  ZDOT="$ZONE."
+  CONF=$(named_config) && CONF_RC=0 || CONF_RC=$?
+  if [ "$CONF_RC" = 2 ]; then
+    # named-checkconf exists and FAILED. Nothing can be known about how named loads this file, so
+    # nothing is written: a secondary's file, or a zone named loads from somewhere else, would
+    # otherwise be overwritten or kept current in the wrong place with no word said.
+    rpz_alarm "named-checkconf could not read named's configuration, so whether and how named loads
+    this zone is unknown, and nothing was written. It said:
+$CONF
+    Under the timer, the usual cause is an included file that neither root (which runs it with no
+    capabilities) nor named's group can read: make it readable by named's group, the same way the
+    control key is."
+    [ -n "$TARGET" ] && [ -d "$(dirname "$TARGET")" ] && {
+      ZDIR=$(dirname "$TARGET"); STATE="$TARGET.prom"; st_load; st_bump config_failures_total; st_save; }
+    exit 4
+  fi
+  [ "$CONF_RC" = 0 ] || CONF=""
+  NAMED_DIR=$(printf '%s\n' "$CONF" | awk -F'\t' '$1 == "D" { print $2; exit }')
+
+  # --zone-file may name a directory (the per-zone unit passes one for every instance): the zone's
+  # file is then <dir>/rpz.zone for the reputation zone and <dir>/<origin>.zone for any other.
+  if [ -n "$TARGET" ] && [ -d "$TARGET" ]; then TARGET="${TARGET%/}/$(origin_file "$ZONE")"; fi
+  if [ -z "$TARGET" ]; then
+    # No explicit file: the one named's configuration already loads for this zone, else the default
+    # under named's own directory, else beside the snapshot.
+    _f=$(printf '%s\n' "$CONF" | LC_ALL=C WE_AWK_z="$ZONE" awk -F'\t' \
+      'BEGIN { z = ENVIRON["WE_AWK_z"] } $1 == "Z" { n = tolower($3); sub(/\.$/, "", n); if (n == z) { print $5; exit } }')
+    if [ -n "$_f" ]; then
+      case "$_f" in /*) TARGET="$_f" ;; *) TARGET="${NAMED_DIR:-}/$_f" ;; esac
+    elif [ -n "$NAMED_DIR" ] && [ -d "$NAMED_DIR" ]; then
+      TARGET="$NAMED_DIR/whisper-edge/$(origin_file "$ZONE")"
+    else
+      TARGET="$DIR/$(origin_file "$ZONE")"
+    fi
+  fi
+  ZDIR=$(dirname "$TARGET")
+  [ -d "$ZDIR" ] || die "$ZDIR does not exist - run install.sh, or create it (root-owned, 0755) and pass --zone-file"
+  STATE="$TARGET.prom"
+
+  # The zone statements that load THIS file, with relative paths resolved the way named resolves them.
+  MATCH=$(printf '%s\n' "$CONF" | WE_AWK_t="$TARGET" WE_AWK_d="$NAMED_DIR" awk -F'\t' 'BEGIN { t = ENVIRON["WE_AWK_t"]; d = ENVIRON["WE_AWK_d"] }
+    $1 == "Z" { f = $5; if (f != "" && substr(f, 1, 1) != "/") f = d "/" f; if (f == t) print }')
+  ZTYPE=""; VIEWS=""; _other=""; RENAMED=""
+  if [ -n "$MATCH" ]; then
+    _zn=$(printf '%s\n' "$MATCH" | awk -F'\t' '{ print $3; exit }')
+    # named loads this file under ANOTHER name: refused (after the expiry sweep below), never renamed.
+    # A zone file is signed for one origin and its owners are absolute, so under any other name it is
+    # either refused by named or, worse, means something else.
+    [ "$(fold_name "$_zn")" = "$ZONE" ] || RENAMED="$_zn"
+    ZTYPE=$(printf '%s\n' "$MATCH" | awk -F'\t' '{ print $4; exit }')
+    # One view per line, so a view name with a space in it stays one name.
+    VIEWS=$(printf '%s\n' "$MATCH" | awk -F'\t' '{ print ($2 == "" ? "-" : $2) }')
+  else
+    _other=$(printf '%s\n' "$CONF" | LC_ALL=C WE_AWK_z="$ZONE" awk -F'\t' \
+      'BEGIN { z = ENVIRON["WE_AWK_z"] } $1 == "Z" { n = tolower($3); sub(/\.$/, "", n); if (n == z) { print $5; exit } }')
+    case "$_other" in ""|/*) ;; *) _other="${NAMED_DIR:-}/$_other" ;; esac
+  fi
+
+  # What named ITSELF has loaded under this name, asked before anything is written. The configuration
+  # says what named will load next; rndc says what it serves now, and the two differ on a host whose
+  # named.conf was edited and not yet reloaded, or when there is no named-checkconf to read it with.
+  _rtype=""; _rfile=""
+  if have_rndc && [ -z "$RENAMED" ]; then
+    _zs=$(rndc_cmd zonestatus "$ZONE" 2>/dev/null) || _zs=""
+    _rtype=$(printf '%s\n' "$_zs" | sed -n 's/^type: //p' | head -1)
+    # "files: <zone file>, <included file>..." when the loaded zone pulled others in: the zone's own is the
+    # first, and the next clean install replaces the rest (an $INCLUDE is refused before it installs).
+    _rfile=$(printf '%s\n' "$_zs" | sed -n 's/^files: //p' | head -1); _rfile=${_rfile%%, *}
+  fi
+
+  case "$ZTYPE:$_rtype" in
+    secondary:*|slave:*|mirror:*|*:secondary|*:slave|*:mirror)
+      rpz_note "named loads zone ${RENAMED:-$ZONE} as a ${ZTYPE:-$_rtype}: its file is named's own, and SOA EXPIRE already applies there."
+      rpz_note "Nothing to do; this script only ever writes a zone named loads as a primary."
+      exit 0 ;;
+  esac
+
+  # One run at a time, so the stale-temp sweep below can never delete a download that is in flight.
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$ZDIR/.$(basename "$TARGET").lock"
+    flock -n 9 || { rpz_note "another refresh of $TARGET is running; leaving it to finish"; exit 0; }
+  fi
+  # A run killed mid-download (SIGKILL, power loss) leaves its temp files behind: the download and the
+  # state file's own temp copy. Neither was ever renamed into place, and under the lock both are safe
+  # to remove.
+  find "$ZDIR" -maxdepth 1 \( -name ".$(basename "$TARGET").new.*" -o -name ".$(basename "$STATE").*" \) \
+    -exec rm -f {} + 2>/dev/null || true
+
+  st_load
+  ST_LOADED=1; rpz_signal_traps
+  T_NOW=$(now)
+
+  # From here on every exit is counted in the state file, through rpz_exit.
+  if [ -n "$_other" ]; then
+    st_bump config_failures_total
+    rpz_alarm "named's configuration loads zone $ZONE from $_other, not from $TARGET. Refusing to
+    guess which one you meant: point the zone statement at $TARGET (under named's own directory, where
+    AppArmor and SELinux let named read), or pass --zone-file $_other."
+    rpz_exit 4
+  fi
+  case "$ZTYPE" in
+    ""|primary|master) ;;
+    *)
+      st_bump config_failures_total
+      rpz_alarm "named loads $TARGET as a zone of type $ZTYPE, which is not a policy zone this script maintains"
+      rpz_exit 4 ;;
+  esac
+  if [ -n "$_rfile" ]; then
+    case "$_rfile" in
+      /*) _rabs="$_rfile" ;;
+      *)  if [ -n "$NAMED_DIR" ]; then _rabs="$NAMED_DIR/$_rfile"; else _rabs=""; fi ;;
+    esac
+    _same=0
+    if [ -n "$_rabs" ]; then [ "$_rabs" = "$TARGET" ] && _same=1
+    else case "$TARGET" in */"$_rfile") _same=1 ;; esac; fi
+    if [ "$_same" = 0 ]; then
+      st_bump config_failures_total
+      rpz_alarm "named is serving zone $ZONE from '$_rfile', not from $TARGET, so a zone kept current
+    here would never be the one named enforces. If named.conf was just changed to point at $TARGET,
+    run: rndc reconfig. Otherwise point the zone statement at $TARGET, or pass --zone-file."
+      rpz_exit 4
+    fi
+    # named serves this file, but the configuration could not be read: that is enough to reload it.
+    [ -z "$VIEWS" ] && VIEWS="-"
+  fi
+
+  read_installed
+
+  # The file holds ANOTHER zone (its own header says so): --zone-file named the wrong file, and writing
+  # this zone over it would delete that one. Refused, nothing fetched.
+  # A file from before per-zone files has no header to say whose it is: one that does not load as this
+  # zone but does load under the absolute owner of its own SOA is that zone's file. (A file that loads
+  # as no zone at all is nobody's, and may be replaced.)
+  if [ -z "$CUR_ORIGIN" ] && [ -s "$TARGET" ] && [ -z "$CUR_SOA" ]; then
+    _own=$(LC_ALL=C awk '!/^[ \t]*;/ && $0 ~ /[ \t]SOA[ \t]/ && !seen++ { print tolower($1) }' "$TARGET")
+    case "$_own" in
+      *.) if [ "$_own" != "$ZDOT" ] && LC_ALL=C named-checkzone -q "${_own%.}" "$TARGET" >/dev/null 2>&1; then CUR_ORIGIN=${_own%.}; fi ;;
+    esac
+  fi
+  if [ -n "$CUR_ORIGIN" ] && [ "$CUR_ORIGIN" != "$ZONE" ]; then
+    rpz_alarm "$TARGET holds zone $CUR_ORIGIN, not $ZONE: refusing to write one zone over another. Pass
+    the zone's own file, or a directory (each zone then gets its own file in it)."
+    exit 4   # not rpz_exit: the state file beside $TARGET is the other zone's, and is left as it is
+  fi
+
+  # named loads the file under another name: the installed content is still held to its validity
+  # first, so a refusal never strands an expired list on disk, and then the run stops, naming both.
+  if [ -n "$RENAMED" ]; then
+    validity_sweep || true
+    st_bump config_failures_total
+    # shellcheck disable=SC2034  # written out by st_save, through eval
+    st_installed_serial=$CUR_SERIAL
+    rpz_alarm "named loads $TARGET as zone \"$RENAMED\", but it holds zone $ZONE, signed for that
+    name with absolute owners: under any other name named refuses it, or it means something else.
+    Nothing was fetched. Load it under its own name: in named.conf, write
+      zone \"$ZONE\" { type master; file \"$TARGET\"; };
+    and name \"$ZONE\" in response-policy { }, then: named-checkconf && rndc reconfig"
+    rpz_exit 7
+  fi
+
+  DUE=1
+  if [ "$IF_DUE" = 1 ] && [ -n "$CUR_SERIAL" ]; then
+    if [ "${st_last_attempt_ok:-0}" = 1 ]; then _since=$(( T_NOW - ${st_last_ok_seconds:-0} )); _need=$REFRESH
+    else _since=$(( T_NOW - ${st_last_attempt_seconds:-0} )); _need=$RETRY; fi
+    [ "$_since" -ge "$_need" ] || DUE=0
+  elif [ "$IF_DUE" = 1 ] && [ -n "${st_not_published_since_seconds:-}" ]; then
+    # Nothing installed and the feed said "not published yet": asked again once a slot, the cadence at
+    # which a zone can first appear, not on every five-minute tick.
+    [ $(( T_NOW - ${st_last_attempt_seconds:-0} )) -ge "$NOT_PUBLISHED_BACKOFF" ] || DUE=0
+  fi
+
+  RC=0
+  EMPTY=""
+  if [ "$DUE" = 1 ]; then
+    st_last_attempt_seconds=$T_NOW
+    rpz_traps
+    NEW=$(rpz_tmp) || rpz_tmp_failed
+    if [ ! -r "$KEY" ]; then
+      st_last_attempt_ok=0; st_bump refused_total
+      rpz_alarm "no signing key at $KEY, so no zone can be verified and nothing was fetched - run
+    install.sh, which fetches it once (or pass --dir to where edge.pub is)"
+      RC=1
+    else
+      fetch_body
+    fi
+    if [ "$RC" != 0 ]; then :
+    elif [ "$F_CODE" = 304 ] && [ -s "$TARGET" ]; then
+      # The feed holds exactly the installed bytes: the If-None-Match was their own sha256.
+      st_last_attempt_ok=1; st_last_ok_seconds=$T_NOW; st_bump current_total; st_not_published_since_seconds=""
+      rpz_note "$ZONE not modified: the feed still serves serial $CUR_SERIAL"
+    elif [ "$F_CODE" = 404 ] && [ -n "$CUR_SERIAL" ]; then
+      # A 404 for a zone this box HAS installed: the feed stopped publishing what it published before.
+      # That is not "not published yet". It is a fetch failure (last_attempt_ok 0, so RETRY applies),
+      # counted on its own, said on stderr on every run, and the unit fails; the installed zone keeps
+      # serving under its own validity, after which the sweep empties it.
+      st_last_attempt_ok=0; st_bump withdrawn_total; st_not_published_since_seconds=""
+      rpz_alarm "the feed answers 404 for $BASE/rpz/$ZONE.zone, which this box has installed at serial $CUR_SERIAL:
+    the zone is no longer published. Kept $CUR_SERIAL; it stops being enforced at its validUntil."
+      RC=1
+    elif [ "$F_CODE" = 404 ]; then
+      # The origin is one we publish, and this node has no zone for it yet, and nothing is installed:
+      # not a failure of this box. Exit 5, which the unit counts as success (SuccessExitStatus=5).
+      # The first such run says so even under --quiet; the later ones only count.
+      st_last_attempt_ok=1; st_last_ok_seconds=$T_NOW; st_bump not_published_total
+      if [ -z "${st_not_published_since_seconds:-}" ]; then
+        st_not_published_since_seconds=$T_NOW
+        if [ -n "$CUR_SERIAL" ]; then _then=", serial $CUR_SERIAL kept"; else _then=". Asked again every ${NOT_PUBLISHED_BACKOFF}s until it is"; fi
+        rpz_event "zone $ZONE is not published yet (HTTP 404 for $BASE/rpz/$ZONE.zone); nothing installed$_then"
+      else
+        rpz_note "zone $ZONE is still not published (HTTP 404); nothing installed${CUR_SERIAL:+, serial $CUR_SERIAL kept}"
+      fi
+      RC=5
+    elif [ "$F_CODE" != 200 ] || [ ! -s "$NEW" ]; then
+      st_last_attempt_ok=0; st_bump fetch_failures_total; st_not_published_since_seconds=""   # RETRY, not the back-off
+      [ "$F_CODE" = fail ] || F_WHY="HTTP $F_CODE${F_ADDR:+ from $F_ADDR}"
+      rpz_alarm "could not fetch $BASE/rpz/$ZONE.zone ($F_WHY) - the installed zone is untouched"
+      RC=1
+    else
+      st_not_published_since_seconds=""
+      NSHA=$(sha256sum < "$NEW" | cut -d' ' -f1)
+      _why=""
+      if ! fetch_sig "$NSHA"; then _why=$F_WHY
+      elif ! hdr_parse "$NEW"; then _why=$H_WHY
+      elif [ "$H_ORIGIN" != "$ZONE" ]; then _why="its header names origin $H_ORIGIN, not $ZONE"
+      elif ! raw_check "$NEW"; then _why=$H_WHY
+      elif ! zone_loads "$NEW"; then
+        _why="named-checkzone refuses it as zone $ZONE: $(LC_ALL=C named-checkzone "$ZONE" "$NEW" 2>&1 | head -1)"
+      elif ! content_check "$NEW"; then _why=$H_WHY
+      fi
+      if [ -n "$_why" ]; then
+        st_last_attempt_ok=0; st_bump refused_total
+        rpz_alarm "the fetched zone $ZONE was refused, so nothing was installed: $_why.
+    The installed zone is untouched and named keeps it."
+        RC=1
+      else
+        st_last_attempt_ok=1; st_last_ok_seconds=$T_NOW
+        NEW_SERIAL=$H_GEN
+        # The order of the questions is the defence. The generation is compared FIRST, raw, against the
+        # installed one: a fetched zone that is not newer is never installed, whatever it says about
+        # itself, so a lagging or hostile node replaying an old, correctly signed zone can never move
+        # this resolver backwards. Only a NEWER zone is then held to its own validity: one already past
+        # its validUntil is refused too, never turned into anything, and the installed zone keeps
+        # serving under its own validUntil, which the sweep below enforces.
+        NEW_STATE=$H_STATE; NEW_VALID=$H_VALID
+        if [ -n "$CUR_SERIAL" ] && [ "$CUR_STATE" = legacy ] && [ "$DISARMED" = 1 ] \
+           && [ "$NEW_SERIAL" = "$CONTENT" ]; then
+          rpz_note "the feed still serves serial $NEW_SERIAL, the one that expired; the zone stays disarmed until it advances"
+        elif [ -n "$CUR_SERIAL" ] && [ "$NEW_SERIAL" = "$CUR_SERIAL" ]; then
+          if cmp -s "$NEW" "$TARGET"; then
+            st_bump current_total
+            rpz_note "$ZONE serial $NEW_SERIAL is already installed, byte for byte"
+          else
+            # One serial, two bodies. named would see the serial it already loaded and keep the old
+            # zone, so installing it changes nothing named serves and hides the disagreement: refused.
+            st_bump refused_total
+            rpz_alarm "the feed serves serial $NEW_SERIAL of $ZONE with a body other than the installed
+    one at the same serial. Kept the installed zone; the next serial replaces it."
+          fi
+        elif [ -n "$CUR_SERIAL" ] && ! serial_gt "$NEW_SERIAL" "$CUR_SERIAL"; then
+          # Not newer: a node a publication behind, or a replay. Refused and said, even under --quiet;
+          # the run still succeeds, because a lagging node is not a fault of this box. One case is
+          # neither: the very content this host swept at its validUntil, still served. Then the feed's
+          # zone has expired and nothing has been published since, and the message says that instead.
+          st_bump stale_feed_total
+          if [ "$CUR_STATE" = empty ] && [ "${st_swept_content_serial:-}" = "$NEW_SERIAL" ]; then
+            rpz_alarm "refused serial $NEW_SERIAL of $ZONE: it is the content this resolver swept when it passed its
+    validUntil of $H_VALID_TXT, so the feed's zone has expired and it has not published since.
+    Kept the empty zone at serial $CUR_SERIAL; the next newer zone re-arms it."
+          else
+            rpz_alarm "refused serial $NEW_SERIAL of $ZONE: it is not newer than the installed $CUR_SERIAL (RFC 1982),
+    so it is a node a publication behind or a replay. Kept $CUR_SERIAL."
+          fi
+        elif [ "$H_STATE" = content ] && [ "$T_NOW" -ge "$H_VALID" ]; then
+          st_last_attempt_ok=0; st_bump refused_total; st_bump expired_on_fetch_total
+          rpz_alarm "refused serial $NEW_SERIAL of $ZONE: it was valid until $H_VALID_TXT, which has passed, so the
+    node that served it has not published since. Nothing was installed${CUR_SERIAL:+; serial $CUR_SERIAL keeps serving under its own validity}."
+          RC=1
+        else
+          install_file "$NEW"
+          _was=$CUR_SERIAL
+          st_last_advance_seconds=$T_NOW; CONTENT=$NEW_SERIAL; CUR_SERIAL=$NEW_SERIAL; DISARMED=0
+          st_swept_content_serial=""
+          CUR_STATE=$NEW_STATE; CUR_VALID=$NEW_VALID
+          EXPIRE=$(zone_soa "$TARGET" | awk '{ print $4 }')
+          rpz_event "installed zone $ZONE serial $NEW_SERIAL ($NEW_STATE, $(wc -c <"$TARGET" | tr -d ' ') bytes, signature verified, checked by named-checkzone)${_was:+, replacing serial $_was}"
+        fi
+      fi
+    fi
+    rm -f "$NEW" "$NEW.hdr" "$NEW.err" "$NEW.ip" "$NEW.rc" "$NEW.sig" "$NEW.shdr" "$NEW.msg"
+  else
+    rpz_note "not due: last good check $(( T_NOW - ${st_last_ok_seconds:-$T_NOW} ))s ago, REFRESH is ${REFRESH}s"
+  fi
+
+  # ---- validity: whatever is installed is held to it, fetched or not ---------------------------------
+  validity_sweep || RC=1
+
+  # Every st_* is written out by st_save, through eval, which shellcheck cannot follow.
+  # shellcheck disable=SC2034
+  st_installed_serial=$CUR_SERIAL
+  # shellcheck disable=SC2034
+  st_content_serial=$CONTENT
+  # shellcheck disable=SC2034
+  st_disarmed=$DISARMED
+  # shellcheck disable=SC2034
+  st_valid_until_seconds=$CUR_VALID
+
+  # ---- named -----------------------------------------------------------------------------------------
+  if [ -n "$CUR_SERIAL" ]; then
+    if [ -n "$VIEWS" ]; then
+      sync_named "$CUR_SERIAL" || RC=3
+    else
+      rpz_note "named does not load $TARGET (no zone statement names it), so nothing was reloaded."
+      rpz_note "Paste the zone and response-policy block install.sh printed; from then on this keeps it current."
+    fi
+  fi
+
+  rpz_exit "$RC"
+}
+
+if [ "$MODE" = rpz ]; then
+  rpz_main
+fi
+
+# (--plane checks curl itself, where a missing one is a counted failure like every other refusal)
+[ "$MODE" = plane ] || command -v curl >/dev/null 2>&1 || die "curl is required"
+if [ ! -d "$DIR" ]; then
+  # --plane keeps its failure count in $DIR, so with no $DIR this failure cannot be counted and the
+  # fourth-run alarm could never fire: it is an alarm now, said by name, never a silent zero
+  [ "$MODE" = plane ] && printf 'whisper-edge-refresh: ALARM %s cannot count its failures: %s does not exist\n' "$PLANE" "$DIR" >&2
+  die "$DIR does not exist - run install.sh first, or pass --dir"
+fi
+
+KEY="$DIR/edge.pub"
+
+# ---------------------------------------------------------------------------------------------------
+# --plane NAME: one plane from the signed manifest, installed by name with the writer's discipline.
+#
+# The default invocation above this line's caller is untouched; this is a separate path. In order:
+#   1. resolve the feed's host ONCE and pin every fetch to that address (curl --resolve), so the
+#      manifest, its signature and the plane all come from one node (WHISPER_EDGE_RESOLVE=host:port:addr
+#      overrides the lookup);
+#   2. fetch manifest.json, hash it, fetch manifests/<sha>.sig and verify it against the pinned key;
+#   3. a plane in withheld[], or absent, leaves the installed file untouched and says why (not a failure);
+#   4. fetch planes/<sha>.bin and its .sig into a dot-temp made with O_EXCL (mktemp, 0600), verify the
+#      length, the sha256 against the manifest and the signature against the key; then 0444 and fsync;
+#   5. take an flock on the directory for the rest, and under it verify the temp again: the length, the
+#      digest, the header (magic, format, the plane id the name requires); skip by GENERATION (byte 16,
+#      the header's own, for every plane including reputation) and by digest against the installed file
+#      re-read under the lock, never by name;
+#   6. clear the immutable attribute on the live name if it is set, rename over the name (never onto an
+#      existing name with a link, never NOREPLACE), set the attribute on the new inode where the
+#      filesystem can, fsync the directory.
+# A 404 on a hash the manifest names (a node mid-collection) waits 2 to 10 s and re-runs once. Failed
+# runs are counted in .refresh-failures.<plane>; from the fourth consecutive one, each prints an ALARM
+# line. A run that installs, finds the plane current or withheld resets the count.
+plane_id_of() {
+  case "$1" in
+    reputation) echo 1 ;; tor) echo 2 ;; rpki-unreachable) echo 3 ;; routing) echo 4 ;;
+    anonymizer) echo 5 ;; threat) echo 6 ;; registry) echo 7 ;; tenant) echo 8 ;;
+    *) echo 0 ;;
+  esac
+}
+
+# Little-endian integers at an offset, read byte by byte so a big-endian host reads what the file says
+# (od -t u8 reads in HOST order). Generations are below 2^63, inside the shell's signed arithmetic.
+le_at() { # <file> <offset> <bytes>
+  # shellcheck disable=SC2046
+  set -- $(od -An -v -t u1 -j "$2" -N "$3" "$1" 2>/dev/null)
+  v=0; sh_=0
+  for b in "$@"; do v=$((v + (b << sh_))); sh_=$((sh_ + 8)); done
+  [ "$#" -gt 0 ] && echo "$v"
+}
+u64_at() { le_at "$1" "$2" 8; }
+u8_at() { le_at "$1" "$2" 1; }
+
+# The facts an installed or current line names about the file the server reads: the header's own
+# generation (byte 16), its size, digest16 (the first 16 hex digits of its sha256, the rendering every
+# module surface uses) and its valid-until (byte 32, epoch milliseconds, 0 for no bound) in the
+# manifest's own form. A reader of the journal can then match the line to the module's own lines and
+# to the manifest without opening the file.
+utc_of_ms() { # <epoch ms, below 2^63>
+  [ "$1" = 0 ] && { echo "no bound"; return 0; }
+  _s=$(($1 / 1000))
+  # GNU date takes @seconds; BSD date takes -r seconds, where GNU's -r names a reference FILE, so the
+  # BSD form is used only where the GNU one is not understood at all.
+  if date -u -d @0 >/dev/null 2>&1; then
+    date -u -d "@$_s" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "$1 ms"
+  else
+    date -u -r "$_s" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "$1 ms"
+  fi
+}
+# A u64 at or above 2^63 does not fit the shell's signed arithmetic and would wrap negative; a header
+# field never holds one, so it is said as such rather than rendered as a wrong number.
+u64_fact() { # <file> <offset> <what it means>
+  if [ "$(u8_at "$1" $(($2 + 7)))" -ge 128 ]; then echo "out of range (at or above 2^63)"; return 0; fi
+  _v=$(u64_at "$1" "$2")
+  case "$3" in ms) utc_of_ms "$_v" ;; *) echo "$_v" ;; esac
+}
+# Clear the immutable attribute on a live name before replacing it. CLEARED_I says it was cleared (the
+# EXIT path sets it again if the rename never happens); STUCK_I says it is set and could not be, which
+# makes the rename fail with EPERM, and the failure then names the attribute and the capability rather
+# than reading as a bare rename failure.
+# On an SELinux host the installer gives the planes' path a label a confined web server may map
+# (httpd_sys_content_t, by a file context rule). A temp made in the directory gets the directory's own
+# label, so each rename is followed by restorecon: a plane always ends with the label policy gives its
+# path, before it is made immutable (a relabel of an immutable file fails).
+se_relabel() {
+  if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled 2>/dev/null && command -v restorecon >/dev/null 2>&1; then
+    restorecon "$1" 2>/dev/null || :
+  fi
+  return 0
+}
+clear_immutable() { # <file>
+  STUCK_I=""
+  command -v chattr >/dev/null 2>&1 && [ -f "$1" ] || return 0
+  if chattr -i "$1" 2>/dev/null; then
+    CLEARED_I=1
+  else
+    case "$(lsattr -d "$1" 2>/dev/null | cut -d' ' -f1)" in *i*) STUCK_I=1 ;; esac
+  fi
+  return 0
+}
+stuck_reason() { # <file>
+  printf '%s is immutable and this run could not clear the attribute (a missing CAP_LINUX_IMMUTABLE capability), so the verified plane could not replace it' "$1"
+}
+
+file_facts() { # <file>
+  _n=$(wc -c < "$1" | tr -d ' ')
+  _d=$(sha256sum < "$1" | cut -c1-16)
+  if [ "$_n" -lt 40 ]; then
+    printf '%s bytes, digest16 %s, too short for a plane header (40 bytes)' "$_n" "$_d"
+    return 0
+  fi
+  printf 'generation %s, %s bytes, digest16 %s, valid until %s' "$(u64_fact "$1" 16 n)" "$_n" "$_d" \
+    "$(u64_fact "$1" 32 ms)"
+}
+
+# Read the manifest's verdict on one plane: "PLANE <sha256> <bytes>", "WITHHELD <reasons>" or "ABSENT".
+# <reasons> is the manifest's reasons list joined with ", ", or its singular reason where it carries no
+# list (a missing, null or empty reason reads "-"). python3 and jq render it by one rule, so the line is
+# the same whichever the host has: a string as it is, any other value as compact JSON; then every control
+# character (C0, DEL, C1) and every Unicode space becomes a space, by one explicit codepoint list, and
+# runs of them collapse, so a reason can never add a journal line or a terminal escape. The detail string stays in the manifest: it runs to kilobytes, and this line reaches the journal
+# every hour. python3 or jq, whichever the host has; the manifest is JSON and is never parsed with sed.
+manifest_entry() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$1" "$2" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1]))
+for e in m.get("planes") or []:
+    if e.get("name") == sys.argv[2]:
+        print("PLANE %s %s" % (e["sha256"], e["bytes"])); sys.exit(0)
+for w in m.get("withheld") or []:
+    if w.get("name") == sys.argv[2]:
+        def r(v):
+            return v if isinstance(v, str) else json.dumps(v, separators=(",", ":"), ensure_ascii=False)
+        def norm(t):
+            sp = lambda c: (c <= 32 or 127 <= c <= 160 or c == 0x1680 or 0x2000 <= c <= 0x200A
+                            or c in (0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF))
+            t = "".join(" " if sp(ord(ch)) else ch for ch in t)
+            return " ".join(x for x in t.split(" ") if x)
+        rs = w.get("reasons")
+        if isinstance(rs, list) and rs:
+            why = ", ".join(r(x) for x in rs)
+        elif w.get("reason") is None or w.get("reason") == "":
+            why = "-"
+        else:
+            why = r(w.get("reason"))
+        print("WITHHELD %s" % norm(why)); sys.exit(0)
+print("ABSENT")
+PY
+  elif command -v jq >/dev/null 2>&1; then
+    jq -r --arg p "$2" '
+      ([.planes[]? | select(.name == $p) | "PLANE \(.sha256) \(.bytes)"] +
+       [.withheld[]? | select(.name == $p)
+        | def r: if type == "string" then . else tojson end;
+          def norm: explode | map(if (. <= 32) or (. >= 127 and . <= 160) or . == 5760
+                                    or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239
+                                    or . == 8287 or . == 12288 or . == 65279 then 32 else . end)
+                    | implode | split(" ") | map(select(. != "")) | join(" ");
+          "WITHHELD " + ((if ((.reasons | type) == "array") and ((.reasons | length) > 0)
+                          then (.reasons | map(r) | join(", "))
+                          elif (.reason == null) or (.reason == "") then "-"
+                          else (.reason | r) end) | norm)] +
+       ["ABSENT"])[0]' "$1"
+  else
+    return 2
+  fi
+}
+
+plane_failed() { # a failed run: count it, alarm from the fourth, exit non-zero with nothing changed
+  # The read-increment-write runs under a lock on its own file (never the directory lock, which this
+  # run may already hold), so two runs failing at once cannot lose an increment. A counter that cannot
+  # be opened, read or written is never taken as zero: a count stuck at zero is an alarm that can never
+  # fire, so that is itself an ALARM line, naming the file.
+  f="$DIR/.refresh-failures.$PLANE"
+  n=$(
+    # `command` strips exec of its special-builtin status: a failed redirection then returns, not exits
+    command exec 8>> "$DIR/.refresh-failures.lock" 2>/dev/null || { echo LOCK; exit 0; }
+    command -v flock >/dev/null 2>&1 && flock -w 30 8
+    if [ -e "$f" ]; then c=$(cat "$f" 2>/dev/null) || { echo READ; exit 0; }; else c=0; fi
+    case "$c" in ''|*[!0-9]*) c=0 ;; esac
+    c=$((c + 1))
+    { echo "$c" > "$f"; } 2>/dev/null || { echo WRITE; exit 0; }
+    echo "$c"
+  )
+  case "$n" in
+    LOCK) printf 'whisper-edge-refresh: ALARM %s cannot count its failures: %s cannot be opened\n' \
+            "$PLANE" "$DIR/.refresh-failures.lock" >&2 ;;
+    READ) printf 'whisper-edge-refresh: ALARM %s cannot count its failures: %s cannot be read\n' "$PLANE" "$f" >&2 ;;
+    WRITE) printf 'whisper-edge-refresh: ALARM %s cannot count its failures: %s cannot be written\n' "$PLANE" "$f" >&2 ;;
+    *) [ "$n" -ge 4 ] && printf 'whisper-edge-refresh: ALARM %s has failed %s consecutive runs\n' "$PLANE" "$n" >&2 ;;
+  esac
+  die "$* - the installed $PLANE.bin is untouched"
+}
+plane_done() { rm -f "$DIR/.refresh-failures.$PLANE"; say "$*"; exit 0; }
+# The same success, for a line a timer's journal must carry under --quiet: an install, and a plane the
+# manifest withholds or does not name (why a plane is missing is never routine).
+plane_event() { rm -f "$DIR/.refresh-failures.$PLANE"; rpz_event "$*"; exit 0; }
+# A plane the manifest withholds or does not name: what the box has, said as it is. On a fresh box there
+# is no file to be untouched, and the line says what happens instead.
+plane_missing() { # <what the manifest says>
+  if [ -e "$DIR/$PLANE.bin" ]; then
+    plane_event "$1; the installed $PLANE.bin is untouched"
+  fi
+  plane_event "$1; nothing is installed yet: $PLANE.bin lands the day the manifest publishes it, and stays inert until the server is reloaded"
+}
+
+plane_mode() {
+  ID=$(plane_id_of "$PLANE")
+  # Every refusal below is a failed run, counted toward the alarm like any other: a host missing its key,
+  # openssl, or a JSON reader fails every hour for ever, and that is exactly what the alarm is for.
+  [ "$ID" != 0 ] || plane_failed "--plane $PLANE: not a plane name this script knows"
+  command -v curl >/dev/null 2>&1 || plane_failed "curl is required"
+  [ -r "$KEY" ] || plane_failed "no signing key at $KEY - run install.sh, which fetches it once"
+  command -v openssl >/dev/null 2>&1 || plane_failed "openssl is required to verify the signature"
+  command -v python3 >/dev/null 2>&1 || command -v jq >/dev/null 2>&1 \
+    || plane_failed "--plane needs python3 or jq to read the manifest (the default invocation needs neither)"
+  # Leftovers of an interrupted run: dot-temps the module never sees (0600, not <plane>.bin). Judged by
+  # AGE, never by pid: a run's temp is deleted only when it is older than any run can live. The worst run:
+  # four fetches of 120 s, a 404 re-run that makes them eight (960 s), its sleep of at most 10 s, one
+  # 300 s budget for both directory locks and 30 s on the failure counter's lock: 1300 s, under 22
+  # minutes. 30 is the bound, and the gate keeps a 25-minute temp so it cannot drift below a run. A pid
+  # says nothing reliable here: kill -0 on a root run's pid from a non-root run is EPERM, read as dead; a
+  # run in another pid namespace has a pid this one cannot see; and in a container every run is pid 1,
+  # so a crashed run's temp would look live for ever. The install gate holds each of those cases.
+  find "$DIR" -maxdepth 1 \( -name ".$PLANE.bin.*" -o -name ".refresh.*" -o -name ".refresh.lock.d" \) \
+    -mmin +30 -exec rm -rf {} + 2>/dev/null || true
+
+  # 1. one address for the whole run
+  hostport=${BASE#*://}; hostport=${hostport%%/*}
+  host=${hostport%:*}; port=${hostport##*:}
+  if [ "$host" = "$hostport" ]; then
+    case "$BASE" in http://*) port=80 ;; *) port=443 ;; esac
+  fi
+  if [ -n "${WHISPER_EDGE_RESOLVE:-}" ]; then
+    if _why=$(resolve_mismatch); then plane_failed "$_why"; fi
+    PIN="$WHISPER_EDGE_RESOLVE"
+  else
+    addr=$(getent ahosts "$host" 2>/dev/null | awk 'NR == 1 { print $1 }')
+    [ -n "$addr" ] || plane_failed "cannot resolve $host"
+    PIN="$host:$port:$addr"
+  fi
+  T=$(mktemp -d "$DIR/.refresh.XXXXXX") || plane_failed "cannot create a temporary directory in $DIR"
+  # called from the EXIT trap only
+  # shellcheck disable=SC2317
+  plane_cleanup() {
+    rm -rf "$T"
+    [ -n "${PTMP:-}" ] && rm -f "$PTMP" "$PTMP.sig"
+    # a signal between clearing the live file's immutable bit and the rename must not leave it cleared
+    [ -n "${CLEARED_I:-}" ] && [ -f "${TARGET:-}" ] && chattr +i "$TARGET" 2>/dev/null
+    [ -n "${MKDIR_LOCK:-}" ] && rmdir "$MKDIR_LOCK" 2>/dev/null
+    return 0
+  }
+  trap 'plane_cleanup' EXIT
+  # Under /bin/sh an INT or TERM trap that does not exit lets the script carry on: exit, and let EXIT clean.
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  # -q: no ~/.curlrc (a hand run as root reads root's); --proto: the base's own scheme and no other
+  get() { curl -q -fsS --proto "=${BASE%%://*}" --proto-redir "=${BASE%%://*}" --max-time 120 --resolve "$PIN" -o "$2" "$BASE/$1"; }
+  code() { curl -q -sS --proto "=${BASE%%://*}" --proto-redir "=${BASE%%://*}" --max-time 120 --resolve "$PIN" -o "$2" -w '%{http_code}' "$BASE/$1" 2>/dev/null; }
+
+  attempt=1
+  while :; do
+    # 2. the manifest and its signature
+    get manifest.json "$T/manifest.json" || plane_failed "could not fetch $BASE/manifest.json from $PIN"
+    msha=$(sha256sum < "$T/manifest.json" | cut -d' ' -f1)
+    c=$(code "manifests/$msha.sig" "$T/manifest.sig")
+    if [ "$c" = 404 ] && [ "$attempt" = 1 ]; then
+      say "manifests/$msha.sig is 404 (a node between commits); re-running once"
+      attempt=2; sleep "$(shuf -i 2-10 -n 1 2>/dev/null || echo 5)"; continue
+    fi
+    [ "$c" = 200 ] || plane_failed "could not fetch the manifest's signature (HTTP $c)"
+    openssl pkeyutl -verify -pubin -inkey "$KEY" -rawin -in "$T/manifest.json" -sigfile "$T/manifest.sig" \
+        >/dev/null 2>&1 || plane_failed "THE MANIFEST'S SIGNATURE DID NOT VERIFY against $KEY"
+
+    # 3. what the manifest says about this plane
+    verdict=$(manifest_entry "$T/manifest.json" "$PLANE") \
+      || plane_failed "--plane could not read the manifest with python3 or jq"
+    case "$verdict" in
+      WITHHELD*) plane_missing "$PLANE is withheld (${verdict#WITHHELD }; details: $BASE/manifest.json)" ;;
+      ABSENT) plane_missing "the manifest names no $PLANE plane" ;;
+      PLANE*) ;;
+      *) plane_failed "the manifest could not be read" ;;
+    esac
+    psha=$(printf '%s\n' "$verdict" | cut -d' ' -f2)
+    pbytes=$(printf '%s\n' "$verdict" | cut -d' ' -f3)
+
+    # 4. the plane and its signature, into an exclusive dot-temp
+    PTMP=$(mktemp "$DIR/.$PLANE.bin.XXXXXX") || plane_failed "cannot create a temporary file in $DIR"
+    c=$(code "planes/$psha.bin" "$PTMP")
+    c2=$(code "planes/$psha.bin.sig" "$PTMP.sig")
+    if { [ "$c" = 404 ] || [ "$c2" = 404 ]; } && [ "$attempt" = 1 ]; then
+      say "planes/$psha.bin is 404 (collected between the manifest and the fetch); re-running once"
+      rm -f "$PTMP" "$PTMP.sig"; PTMP=""
+      attempt=2; sleep "$(shuf -i 2-10 -n 1 2>/dev/null || echo 5)"; continue
+    fi
+    if [ "$c" != 200 ] || [ "$c2" != 200 ]; then
+      plane_failed "could not fetch planes/$psha.bin and its signature (HTTP $c, $c2)"
+    fi
+    break
+  done
+  [ "$(wc -c < "$PTMP" | tr -d ' ')" = "$pbytes" ] || plane_failed "planes/$psha.bin is not the $pbytes bytes the manifest states"
+  [ "$(sha256sum < "$PTMP" | cut -d' ' -f1)" = "$psha" ] || plane_failed "planes/$psha.bin does not hash to its name"
+  openssl pkeyutl -verify -pubin -inkey "$KEY" -rawin -in "$PTMP" -sigfile "$PTMP.sig" >/dev/null 2>&1 \
+    || plane_failed "SIGNATURE DID NOT VERIFY for planes/$psha.bin"
+  rm -f "$PTMP.sig"
+  [ "$(id -u)" = 0 ] && chown 0:0 "$PTMP"
+  chmod 0444 "$PTMP"
+  sync "$PTMP" 2>/dev/null || true
+
+  # 5. under the directory's lock: the temp again, the header, and the skip by generation and digest
+  # (WHISPER_EDGE_REFRESH_TEST_NO_FLOCK=1 takes the mkdir path on a host that has flock, for the gate)
+  # Two locks, one 300 s budget. flock where the host has it, and ALWAYS the mkdir lock, which is atomic
+  # everywhere: a run with no flock (macOS, a minimal image, a container sharing this directory with its
+  # host) takes only that one, so a flock-capable run takes it too or the two would not exclude each
+  # other. A mkdir lock left by a run that died is older than any run can live and is cleared above.
+  lock_from=$(date +%s)
+  if command -v flock >/dev/null 2>&1 && [ -z "${WHISPER_EDGE_REFRESH_TEST_NO_FLOCK:-}" ]; then
+    command exec 9< "$DIR" || plane_failed "cannot open $DIR to lock it"
+    flock -w 300 9 || plane_failed "could not lock $DIR within 300 s"
+  fi
+  until mkdir "$DIR/.refresh.lock.d" 2>/dev/null; do
+    [ $(($(date +%s) - lock_from)) -lt 300 ] \
+      || plane_failed "could not lock $DIR within 300 s (held: $DIR/.refresh.lock.d)"
+    sleep 1
+  done
+  MKDIR_LOCK="$DIR/.refresh.lock.d"
+  if [ -n "${WHISPER_EDGE_REFRESH_TEST_LOCKED_FILE:-}" ]; then
+    : > "$WHISPER_EDGE_REFRESH_TEST_LOCKED_FILE"
+  fi
+  if [ -n "${WHISPER_EDGE_REFRESH_TEST_PAUSE_AFTER_LOCK:-}" ]; then
+    sleep "$WHISPER_EDGE_REFRESH_TEST_PAUSE_AFTER_LOCK"
+  fi
+  if [ "$(wc -c < "$PTMP" | tr -d ' ')" != "$pbytes" ] || [ "$(sha256sum < "$PTMP" | cut -d' ' -f1)" != "$psha" ]; then
+    plane_failed "the verified temp changed before the install"
+  fi
+  [ "$(head -c 8 "$PTMP")" = WEDGSNP1 ] || plane_failed "planes/$psha.bin has no plane header"
+  fmt=$(le_at "$PTMP" 8 4)
+  case "$fmt" in 1|2) ;; *) plane_failed "planes/$psha.bin is format $fmt" ;; esac
+  flags=$(le_at "$PTMP" 12 4)
+  if [ $((flags & 4)) -ne 0 ] && [ "$(u8_at "$PTMP" 136)" != "$ID" ]; then
+    plane_failed "planes/$psha.bin carries plane id $(u8_at "$PTMP" 136), not $PLANE's $ID"
+  fi
+  TARGET="$DIR/$PLANE.bin"
+  if [ -f "$TARGET" ]; then
+    if [ "$(sha256sum < "$TARGET" | cut -d' ' -f1)" = "$psha" ]; then
+      rm -f "$PTMP"; PTMP=""
+      plane_done "$PLANE.bin unchanged, already current ($(file_facts "$TARGET"))"
+    fi
+    new_gen=$(u64_at "$PTMP" 16); cur_gen=$(u64_at "$TARGET" 16)
+    if [ -n "$new_gen" ] && [ -n "$cur_gen" ] && [ "$new_gen" -le "$cur_gen" ]; then
+      rm -f "$PTMP"; PTMP=""
+      plane_done "$PLANE.bin: generation $new_gen is not newer than the installed $cur_gen, already current (installed: $(file_facts "$TARGET"))"
+    fi
+  fi
+
+  # 6. the rename, and the attribute that turns a cp over a live plane into EPERM instead of SIGBUS
+  # A server binds the planes present when its configuration is read, and only those: a newer
+  # generation of a bound name arms on the module's own timer, while a name that did not exist then
+  # stays inert in the running workers until the server is reloaded. So the installed line says which.
+  FIRST=1; [ -e "$TARGET" ] && FIRST=0
+  clear_immutable "$TARGET"
+  if ! mv -f "$PTMP" "$TARGET"; then
+    [ -n "$STUCK_I" ] && plane_failed "$(stuck_reason "$TARGET")"
+    plane_failed "could not rename the verified plane over $TARGET"
+  fi
+  PTMP=""; CLEARED_I=""
+  se_relabel "$TARGET"
+  # The attribute needs CAP_LINUX_IMMUTABLE as well as a filesystem that has it. A unit whose bounding set
+  # leaves the capability out fails here exactly like tmpfs does, so the line names both, and it is
+  # always printed: under --quiet a timer's journal is the only place anyone would ever read it.
+  if command -v chattr >/dev/null 2>&1; then
+    chattr +i "$TARGET" 2>/dev/null \
+      || rpz_event "could not set the immutable attribute on $TARGET (a missing capability or an unsupported filesystem); installed without it"
+  fi
+  sync "$DIR" 2>/dev/null || true
+  if [ "$FIRST" = 1 ]; then
+    plane_event "installed $PLANE.bin ($(file_facts "$TARGET")) - first install of this plane: it stays inert until the server is reloaded; reload the server to arm it"
+  fi
+  plane_event "installed $PLANE.bin ($(file_facts "$TARGET")) - the module picks it up on its own timer"
+}
+
+# ---------------------------------------------------------------------------------------------------
+# The keyed tier: a feed key, the tenant plane, and the revocation that removes it.
+#
+# Everything here that reads a key, a JSON document, a plane's feed-name table or a state file does it
+# in python3, never in shell: a key must never pass through argv, the environment or a URL, a state
+# file's grammar has exact bounds, and `$(( ))` reads rev:010 as octal. So the keyed path needs
+# python3 (and flock), says so once a day where it is missing, and the keyless path above needs neither.
+#
+# The files, and who reads them:
+#   $ETC/key, $ETC/key.id                  the feed key (0600 root) and its ag_ id (no key material)
+#   $ETC/state/tenant.high-water            the revocation mark the module reads at every tenant reload
+#   $ETC/state/tenant.installed             the generation of the last tenant.bin this script installed
+#   $ETC/state/tenant.plane-id              "<st_dev> <st_ino> <st_ctime_ns>" of that tenant.bin, so a
+#                                           restored plane never passes for this script's install
+#   $DIR/tenant.bin                         the plane, 0444 and immutable where the filesystem allows
+#   $DIR/.tenant-tombstone                  "<epoch-seconds> <generation>": a revocation happened here
+#   $DIR/.revocation-epoch                  bumped by every step that changes what a fetched answer means
+#   $DIR/.tenant-id, $DIR/.tenant-rev       the pinned tenant and the installed content revision
+#   $DIR/.keyed-etag, $DIR/.revocation-seen the manifest's ETag, and a first KEY_REVOKED observation
+#
+# The directory lock is held only around local file steps, never across a request: every locked step
+# that acts on a fetched answer proceeds only when the epoch and key.id read under the lock equal what
+# the run read before its first request, so a run that fetched before a removal, an --unenroll, a
+# --repin or an --enroll --force can neither reinstall the plane nor tombstone the box after it.
+keyed_py() {
+  cat <<'PY'
+import json, os, re, stat, struct, sys, time, hashlib, unicodedata
+
+MAXV = 2 ** 63 - 1
+GRAM = re.compile(rb"^[1-9][0-9]{0,18}\n$")
+DIGITS = re.compile(rb"^[1-9][0-9]{0,18}$")
+REV = re.compile(r"^[1-9][0-9]{0,18}$")
+TOMB = re.compile(rb"^([1-9][0-9]{0,18}) (0|[1-9][0-9]{0,18})\n$")
+ID = re.compile(r"^ag_[A-Za-z0-9_-]{16}$")
+MAGIC = 0x31504E5347444557
+CEILING = 86400
+
+def out(*a):
+    print(" ".join(str(x) for x in a))
+
+def key_shape(k):
+    # the resolver's own rule: 20 to 256 characters, no whitespace and no control character
+    return 20 <= len(k) <= 256 and not any(c.isspace() or unicodedata.category(c) == "Cc" for c in k)
+
+def write_header(path, key):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("Authorization: Bearer %s\n" % key)
+
+def hook(point):
+    d = os.environ.get("WHISPER_EDGE_REFRESH_TEST_HOOK_DIR")
+    if not d or not os.path.exists(os.path.join(d, point + ".wait")):
+        return
+    open(os.path.join(d, point + ".reached"), "w").close()
+    for _ in range(1200):
+        if os.path.exists(os.path.join(d, point + ".go")):
+            return
+        time.sleep(0.1)
+
+def read_reg(path, n):
+    """Up to n bytes of a regular file, opened without following a symlink and without blocking, so a
+    FIFO or a device in place of a state file is unreadable, never a hang. FileNotFoundError when
+    absent, OSError for anything else."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise OSError("not a regular file")
+        return f.read(n)
+
+def cmd_sdcheck(path):
+    """The state directory as the owner-file rule reads a key's directory: not a symlink, owned by the
+    user this runs as, writable by nobody else. 'ok' or 'absent', else the rule it breaks."""
+    try:
+        d = os.lstat(path)
+    except FileNotFoundError:
+        return out("absent")
+    except OSError:
+        return out("cannot be read")
+    if stat.S_ISLNK(d.st_mode):
+        return out("is a symbolic link")
+    if not stat.S_ISDIR(d.st_mode):
+        return out("is not a directory")
+    if d.st_uid != os.geteuid():
+        return out("is owned by uid %d, not by the user this runs as" % d.st_uid)
+    if d.st_mode & 0o022:
+        return out("is writable by its group or by others")
+    out("ok")
+
+def state_value(path, now):
+    """('absent'|'ok'|'bad', value or reason) for a state file, the refresh's band included."""
+    try:
+        b = read_reg(path, 64)
+    except FileNotFoundError:
+        return ("absent", "")
+    except OSError:
+        return ("bad", "unreadable")
+    if not GRAM.match(b) or int(b) > MAXV:
+        return ("bad", "grammar")
+    v = int(b)
+    if v > now + CEILING:
+        return ("bad", "ceiling")
+    return ("ok", v)
+
+def ident(st):
+    """The identity the record holds and the reader compares, in one place."""
+    return "%d %d %d" % (st.st_dev, st.st_ino, st.st_ctime_ns)
+
+def plane_id(path):
+    """'<st_dev> <st_ino> <st_ctime_ns>' of a file, or None."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return ident(st)
+
+def plane_gen(path, idfile=None):
+    """(generation or None, restored) of a plane file. tenant.bin counts as this script's install only
+    when its device, inode and change time equal the line state/tenant.plane-id holds: the install
+    writes it under the lock after the rename and the immutable bit, and every mark raise removes it
+    before the plane is unlinked; the install removes the previous record before its rename. Any other
+    tenant.bin, and every tenant.bin when that file is absent or malformed, is restored: a copy of the
+    file by any tool is a new inode or a new change time, and a rollback of the plane directory alone
+    after a revocation finds the record gone. A rollback of the whole box brings the record back with
+    the state files it belongs to, so no hand repair is asked and the next keyed poll sees the
+    revocation again. A later chmod or chattr, a backup that resets access times, a crash between the
+    rename and the record, or a device number that moves across a reboot (btrfs, ZFS, overlay) makes a
+    live plane read restored: the conservative direction, until the next generation installs."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as f:
+            st = os.fstat(f.fileno())
+            if not stat.S_ISREG(st.st_mode):
+                return (None, False)
+            b = f.read(24)
+    except OSError:
+        return (None, False)
+    if len(b) < 24:
+        return (None, False)
+    g = struct.unpack_from("<Q", b, 16)[0]
+    mine = ident(st)
+    rec = None
+    if idfile:
+        try:
+            raw = read_reg(idfile, 128)
+            if re.fullmatch(rb"[0-9]{1,20} [0-9]{1,20} [0-9]{1,30}\n", raw):
+                rec = raw.decode().strip()
+        except OSError:
+            rec = None
+    return (g, rec != mine)
+
+def cmd_planeid(path):
+    v = plane_id(path)
+    out(v if v else "none")
+
+def cmd_feedkey(path, hdr):
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except FileNotFoundError:
+        return out("absent")
+    except OSError:
+        return out("notkey")
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            return out("notkey")
+        if st.st_mode & 0o044:
+            return out("exposed")
+        data = f.read(4097)
+    if len(data) > 4096:
+        return out("notkey")
+    try:
+        k = data.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return out("notkey")
+    if not key_shape(k):
+        return out("notkey")
+    write_header(hdr, k)
+    out("ok", "sha-" + hashlib.sha256(k.encode()).hexdigest()[:16])
+
+def read_owner_file(path, uid):
+    """The CLI's key file, read the one safe way: no symlink, the expected owner, not writable by
+    anybody else, in a directory of the same owner that nobody else can write, and read from the one
+    descriptor the checks ran on. Returns (key, None) or (None, rule)."""
+    try:
+        d = os.lstat(os.path.dirname(path))
+    except OSError:
+        return (None, "its directory cannot be read")
+    if stat.S_ISLNK(d.st_mode) or d.st_uid != uid or d.st_mode & 0o022:
+        return (None, "its directory is not owned by the same user, or is writable by others")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as e:
+        if e.errno == 40:
+            return (None, "is a symbolic link")
+        return (None, "cannot be opened")
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            return (None, "is not a regular file")
+        if st.st_uid != uid:
+            return (None, "is owned by another user")
+        if st.st_mode & 0o022:
+            return (None, "is writable by its group or by others")
+        hook("enroll-open")
+        data = f.read(4097)
+        try:
+            now = os.lstat(path)
+        except OSError:
+            now = None
+        if now is None or (now.st_dev, now.st_ino) != (st.st_dev, st.st_ino):
+            return (None, "changed while it was being read")
+    try:
+        k = data.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return (None, "does not hold a key")
+    if len(data) > 4096 or not key_shape(k):
+        return (None, "does not hold a key")
+    return (k, None)
+
+def cmd_ownerkey(hdr):
+    for var in ("WHISPER_API_KEY", "WHISPER_KEY"):
+        v = os.environ.get(var)
+        if v:
+            k = v.strip()
+            if not key_shape(k):
+                return out("refused", "$" + var, "does not hold a key")
+            write_header(hdr, k)
+            return out("ok", "$" + var)
+    homes = []
+    su = os.environ.get("SUDO_USER")
+    if su:
+        try:
+            import pwd
+            p = pwd.getpwnam(su)
+            home = p.pw_dir
+            # the install gate's stand-in for another user's home, honoured only in its loopback mode
+            if os.environ.get("WHISPER_EDGE_TEST_LOOPBACK") == "1" and os.environ.get("WHISPER_EDGE_TEST_SUDO_HOME"):
+                home = os.environ["WHISPER_EDGE_TEST_SUDO_HOME"]
+            homes.append((home, p.pw_uid))
+        except KeyError:
+            pass
+    if os.environ.get("HOME"):
+        homes.append((os.environ["HOME"], os.getuid()))
+    for home, uid in homes:
+        path = os.path.join(home, ".config", "whisper", "key")
+        if not os.path.lexists(path):
+            continue
+        k, why = read_owner_file(path, uid)
+        if k is None:
+            return out("refused", path, why)
+        write_header(hdr, k)
+        return out("ok", path)
+    out("none")
+
+def cmd_state(hw, rec, now):
+    now = int(now)
+    for name, path in (("hw", hw), ("rec", rec)):
+        st, v = state_value(path, now)
+        out(name, st, v if v != "" else "-")
+
+def cmd_gen(path, now, idfile=""):
+    g, restored = plane_gen(path, idfile or None)
+    if g is None:
+        return out("none")
+    out(g, "ok" if 1 <= g <= int(now) + CEILING else "ceiling", "restored" if restored else "installed")
+
+def iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+def cmd_repair(hw, rec, tomb, plane, now, idfile):
+    """The hand repair, per file and from file evidence only: one value for each malformed
+    state file, from the first end of its chain that applies, else the last resort."""
+    now = int(now)
+    C = now + CEILING
+    P = "whisper-edge-refresh: "
+    hst, hv = state_value(hw, now)
+    rst, rv = state_value(rec, now)
+    if hst != "bad" and rst != "bad":
+        return
+    def held(path):
+        try:
+            b = read_reg(path, 64)
+        except OSError:
+            return None
+        # leading and trailing whitespace only, a CRLF or a missing newline: the digits are still there
+        d = b.strip(b" \t\r\n\v\f")
+        if d != b.rstrip(b"\n") or not b.endswith(b"\n"):
+            if DIGITS.match(d) and int(d) <= MAXV and int(d) <= C:
+                return int(d)
+        return None
+    tg = None
+    tomb_present = os.path.lexists(tomb)
+    try:
+        m = TOMB.match(open(tomb, "rb").read(64))
+        if m and int(m.group(2)) != 0 and int(m.group(2)) <= MAXV and int(m.group(2)) <= C:
+            tg = int(m.group(2))
+    except OSError:
+        pass
+    g, restored = plane_gen(plane, idfile)
+    gok = g is not None and 1 <= g <= C and not restored
+    lines = [P + "this box's UTC time is %s (%d s since the epoch); check it with timedatectl." % (iso(now), now)]
+    rule = ("it must hold one generation, [1-9][0-9]{0,18} and a newline, at most %d, this box's UTC time"
+            " plus 86,400 s" % C)
+    fixed = ("an edge whose state file (tenant.high-water or tenant.installed) is malformed applies no"
+             " revocation and no list change until the file is repaired, and says so on every run.")
+    why = {"grammar": "it is not one generation and a newline", "unreadable": "it cannot be read",
+           "ceiling": "its value is above this box's UTC time plus 86,400 s"}
+    if hst == "bad":
+        v = held(hw); src = "the digits it still holds"
+        if v is None and tg is not None and rst in ("absent", "ok"):
+            if rst == "absent":
+                v, src = tg, "the tombstone's generation"
+            else:
+                v, src = max(tg, rv), "the greater of the tombstone's generation and tenant.installed"
+        if v is None and gok and g >= 2:
+            v, src = g - 1, "tenant.bin's generation minus one"
+        if v is None and rst == "ok":
+            v, src = rv, "tenant.installed's value"
+        if v is None:
+            v, src = C, "the last resort, this box's UTC time plus 86,400 s"
+        lines.append(P + "%s is malformed (%s): %s; %s" % (hw, why[hv], rule, fixed))
+        lines.append(P + "if this time is right, write %d into it (%s): printf '%%s\\n' %d > %s ."
+                     " If this clock is behind, fix it with timedatectl and run again, and change nothing:"
+                     " do not lower the files." % (v, src, v, hw))
+        if hv == "ceiling":
+            lines.append(P + "then reload the web server, the one step that reseeds the module's mark, in"
+                         " this order for whichever of them this box runs: nginx -s reload, apachectl"
+                         " graceful, /usr/local/lsws/bin/lswsctrl restart.")
+        lines.append(P + "warning: a value at or above the installed tenant.bin's generation revokes this"
+                     " box's tenant plane; with tenant.bin absent a value too high only delays the re-arm,"
+                     " and a value too low lets a restored plane arm.")
+    if rst == "bad":
+        v = None
+        if gok:
+            v, src = g, "tenant.bin's generation"
+        if v is None:
+            v = held(rec); src = "the digits it still holds"
+        if v is None and tomb_present and hst == "ok":
+            v, src = hv, "the high-water file's value, since a revocation followed the last install"
+        if v is None:
+            v, src = C, "the last resort, this box's UTC time plus 86,400 s"
+        lines.append(P + "%s is malformed (%s): %s; %s" % (rec, why[rv], rule, fixed))
+        if hst == "bad":
+            lines.append(P + "repair tenant.high-water first, then run again: this file's value can come"
+                         " from it.")
+        lines.append(P + "if this time is right, write %d into it (%s): printf '%%s\\n' %d > %s ."
+                     " If this clock is behind, fix it with timedatectl and run again, and change nothing:"
+                     " do not lower the files." % (v, src, v, rec))
+        lines.append(P + "warning: nothing arms or revokes on tenant.installed today, but it becomes the"
+                     " next revocation's, --unenroll's or --repin's mark: a value above the last installed"
+                     " generation holds the re-arm after that until a generation passes it, and a value"
+                     " below it reopens the restore.")
+    print("\n".join(lines))
+
+def cmd_resp(hdrs, body):
+    """status node realm retry-after etag code, from one response's last header block and body."""
+    status, h = "000", {}
+    try:
+        text = open(hdrs, "rb").read().decode("latin-1")
+    except OSError:
+        text = ""
+    for block in re.split(r"\r?\n\r?\n", text):
+        lines = [l for l in re.split(r"\r?\n", block) if l]
+        if lines and lines[0].startswith("HTTP/"):
+            parts = lines[0].split()
+            status = parts[1] if len(parts) > 1 else "000"
+            h = {}
+            for l in lines[1:]:
+                if ":" in l:
+                    k, v = l.split(":", 1)
+                    h[k.strip().lower()] = v.strip()
+    code = "-"
+    try:
+        j = json.load(open(body, "rb"))
+        if isinstance(j, dict) and isinstance(j.get("code"), str):
+            code = j["code"]
+    except (OSError, ValueError):
+        pass
+    def tok(v):
+        v = re.sub(r"[^\x21-\x7e]", "_", v or "")[:200]
+        return v or "-"
+    realm = "1" if re.search(r'^\s*bearer\b.*\brealm\s*=\s*"whisper-edge"', h.get("www-authenticate", ""), re.I) else "0"
+    out(status, tok(h.get("whisper-node")), realm, tok(h.get("retry-after")), tok(h.get("etag")), tok(code))
+
+def cmd_manifest(path):
+    try:
+        m = json.load(open(path, "rb"))
+    except (OSError, ValueError):
+        return out("BAD", "the keyed manifest is not JSON")
+    if not isinstance(m, dict) or m.get("tier") != "keyed":
+        return out("BAD", "the manifest is not a keyed manifest")
+    ten = m.get("tenant")
+    if not isinstance(ten, str) or not re.match(r"^[0-9a-f]{16}$", ten):
+        return out("BAD", "the manifest's tenant is not 16 lower-case hex characters")
+    es = [e for e in (m.get("planes") or []) if isinstance(e, dict) and e.get("name") == "tenant"]
+    if len(es) != 1:
+        return out("BAD", "the manifest names no single tenant entry")
+    e = es[0]
+    if e.get("state") == "none":
+        return out("NONE", ten)
+    sha, size, rev = e.get("sha256"), e.get("bytes"), e.get("rev")
+    if not isinstance(sha, str) or not re.match(r"^[0-9a-f]{64}$", sha):
+        return out("BAD", "the tenant entry's sha256 is malformed")
+    if not isinstance(size, int) or isinstance(size, bool) or not 192 <= size <= 64 * 1024 * 1024:
+        return out("BAD", "the tenant entry's bytes is malformed")
+    if not isinstance(rev, str) or not REV.match(rev) or int(rev) > MAXV:
+        return out("BAD", "the tenant entry's rev is not a canonical decimal string")
+    out("PLANE", ten, sha, size, rev)
+
+def cmd_table(path, tenant, rev):
+    """FORMAT.md's fourth amendment, a writer rule the refresh checks before install: entry 0 empty,
+    entry 1 tenant:<the manifest's tenant>, entry 2 rev:<the manifest's rev>, exactly three, and every
+    record's source 1."""
+    try:
+        b = open(path, "rb").read()
+    except OSError:
+        return out("bad", "cannot be read")
+    if len(b) < 192:
+        return out("bad", "is shorter than a header")
+    magic, fmt, flags = struct.unpack_from("<QII", b, 0)
+    if magic != MAGIC or fmt != 2 or not flags & 4 or b[136] != 8:
+        return out("bad", "is not a format-2 tenant plane (plane id 8)")
+    n4, n6 = struct.unpack_from("<II", b, 44)
+    boff, blen = struct.unpack_from("<II", b, 92)
+    if boff + blen > len(b) or blen < 2:
+        return out("bad", "has no feed-name table")
+    blob = b[boff:boff + blen]
+    count = struct.unpack_from("<H", blob, 0)[0]
+    names, at = [], 2
+    for _ in range(count):
+        end = blob.find(b"\0", at)
+        if end < 0:
+            return out("bad", "has a feed-name table that runs past its blob")
+        names.append(blob[at:end]); at = end + 1
+    if count != 3 or names[0] != b"":
+        return out("bad", "does not carry exactly three feed names with entry 0 empty")
+    if names[1] != ("tenant:" + tenant).encode():
+        return out("bad", "names tenant %s, not the manifest's %s" % (names[1].decode("latin-1")[7:23], tenant))
+    if not REV.match(rev) or names[2] != ("rev:" + rev).encode():
+        return out("bad", "carries %s, not the manifest's rev:%s" % (names[2].decode("latin-1")[:24], rev))
+    s4, s6 = struct.unpack_from("<HH", b, 144)
+    r4, r6 = struct.unpack_from("<II", b, 148)
+    for n, off, stride, need in ((n4, r4, s4, 16), (n6, r6, s6, 32)):
+        if n and (stride < need or off + n * stride > len(b)):
+            return out("bad", "has a record column that does not fit the file")
+    for n, off, stride, at in ((n4, r4, s4, 8), (n6, r6, s6, 20)):
+        for i in range(n):
+            p = off + i * stride + at
+            if p >= len(b) or b[p] != 1:
+                return out("bad", "has a record whose source is not 1")
+    out("ok")
+
+def cmd_rev(path):
+    try:
+        b = open(path, "rb").read(64)
+    except FileNotFoundError:
+        return out("absent")
+    except OSError:
+        return out("bad")
+    if not GRAM.match(b) or int(b) > MAXV:
+        return out("bad")
+    out("ok", int(b))
+
+def cmd_seen(path, kid, now):
+    """The earlier KEY_REVOKED observation for this key, if any: 'record <node> <age>' for a record of
+    the same key under 24 h old, else 'none'. It is read before this run writes its own."""
+    now = int(now)
+    try:
+        f = open(path, "rb").read(200).decode("latin-1").split()
+    except OSError:
+        return out("none")
+    if len(f) != 4 or not f[3].isdigit() or kid in ("", "-"):
+        return out("none")
+    rid, code, rnode, t = f[0], f[1], f[2], int(f[3])
+    if rid != kid or code != "KEY_REVOKED" or not 0 <= now - t <= 86400:
+        return out("none")
+    out("record", rnode, now - t)
+
+def cmd_reqbody(sub, key, value):
+    args = {"sub": sub}
+    if key != "-":
+        args[key] = value
+    print(json.dumps({"query": "CALL whisper.agents($p)", "parameters": {"p": {"op": "edge", "args": args}}}))
+
+def row_of(columns, row):
+    """A row as a dict: the front door writes an object keyed by column; a positional array is
+    matched to the columns by name, never by a fixed index."""
+    if isinstance(row, dict):
+        return row
+    if isinstance(row, list) and isinstance(columns, list) and len(columns) == len(row):
+        return dict(zip(columns, row))
+    raise ValueError("a row that is neither an object nor a list the columns name")
+
+def envelope(path):
+    """The whisper.agents envelope: {columns:[op, ok, status, result, error, retry_after, elapsed_ms],
+    rows:[{...}]} as the front door (graph.whisper.online) answers it, or a bare {ok, status, result,
+    error} object, or a top-level ok with the payload in the outer row: the shapes the CLI's
+    DecodeEnvelope reads."""
+    try:
+        j = json.load(open(path, "rb"))
+    except RecursionError:
+        raise ValueError("too deeply nested")
+    if isinstance(j, dict) and "ok" in j:
+        if not isinstance(j.get("result"), dict) and isinstance(j.get("columns"), list) and j.get("rows"):
+            row = row_of(j["columns"], j["rows"][0])
+            merged = dict(row)
+            merged["ok"] = j["ok"]
+            if j.get("error") is not None:
+                merged["error"] = j["error"]
+            return merged
+        return j
+    if isinstance(j, dict) and isinstance(j.get("columns"), list) and j.get("rows"):
+        return row_of(j["columns"], j["rows"][0])
+    raise ValueError("no envelope")
+
+def result_rows(env):
+    res = env.get("result")
+    if not isinstance(res, dict):
+        raise ValueError("no result")
+    return [row_of(res.get("columns"), r) for r in res.get("rows") or []]
+
+def err_of(env):
+    e = env.get("error")
+    if isinstance(e, dict):
+        return str(e.get("code") or "-"), str(e.get("message") or e.get("detail") or "")
+    return str(e or "-"), ""
+
+def final_refusal(env):
+    """The front door's own contract for a refusal it will stand by: ok false, retryable false, and an
+    inner status from 400 to 499. One retryable answer is also certain to have minted nothing: the
+    inner 429 RATE_LIMITED, the per-principal shed the front door answers before it dispatches the op
+    (its only producer). Anything else with ok false (a 5xx such as INTERNAL, a MALFORMED_RESULT built
+    after dispatch committed, or another retryable answer) leaves the outcome open."""
+    e = env.get("error")
+    st = env.get("status")
+    if not (env.get("ok") is False and isinstance(e, dict) and isinstance(st, int) and not isinstance(st, bool)):
+        return False
+    if e.get("code") == "RATE_LIMITED" and st == 429:
+        return True
+    return e.get("retryable") is False and 400 <= st <= 499
+
+def pre_dispatch(path, status):
+    """A 4xx the front door answers before any dispatch ({error: code, detail}: bad_request, 405, 413,
+    429 rate_limited or busy): (code, detail), or None when the body is not that typed answer."""
+    if not (len(status) == 3 and status.isdigit() and status[0] == "4"):
+        return None
+    try:
+        j = json.load(open(path, "rb"))
+    except (OSError, ValueError, RecursionError):
+        return None
+    if isinstance(j, dict) and isinstance(j.get("error"), str) and j["error"].strip():
+        return (j["error"].strip(), re.sub(r"\s+", " ", str(j.get("detail") or ""))[:400])
+    return None
+
+def cmd_envelope(path, status, keyout):
+    """The mint's answer, read from the envelope and never from the HTTP status: the front door answers
+    a gate refusal as an HTTP 200 carrying an inner error."""
+    if status == "400":
+        try:
+            j = json.load(open(path, "rb"))
+            if isinstance(j, dict) and j.get("error") == "unknown_op":
+                return out("UNKNOWN_OP")
+        except (OSError, ValueError, RecursionError):
+            pass
+    if status in ("401", "403"):
+        return out("REFUSED", "HTTP_" + status, "the front door refused the key")
+    pd = pre_dispatch(path, status)
+    if pd:
+        return out("REFUSED", pd[0], pd[1])
+    if status != "200":
+        return out("HTTP", status)
+    try:
+        env = envelope(path)
+    except (OSError, ValueError, TypeError):
+        return out("LOST")
+    if env.get("ok") is True:
+        try:
+            d = result_rows(env)[0]
+            k, kid = d["api_key"].strip(), d["id"].strip()
+        except (KeyError, IndexError, TypeError, AttributeError, ValueError):
+            return out("LOST")
+        if not ID.match(kid) or not key_shape(k):
+            return out("LOST")
+        fd = os.open(keyout, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(k + "\n")
+        return out("MINTED", kid)
+    code, msg = err_of(env)
+    if code == "EDGE_OWNER_ONLY":
+        return out("OWNER_ONLY")
+    if code == "NOT_YET":
+        return out("NOT_YET")
+    if code == "BAD_ARGS":
+        return out("BAD_ARGS", re.sub(r"\s+", " ", msg)[:400])
+    if final_refusal(env) and code not in ("-", ""):
+        # a final refusal (FORBIDDEN_SCOPE, ANONYMOUS_WRITE, EDGE_KEY_LIMIT, ...): nothing was minted
+        return out("REFUSED", code, re.sub(r"\s+", " ", msg)[:400])
+    out("ERROR", code, re.sub(r"\s+", " ", msg)[:400])
+
+def cmd_revoked(path, status, kid):
+    if status == "400":
+        try:
+            if json.load(open(path, "rb")).get("error") == "unknown_op":
+                return out("UNKNOWN_OP")
+        except (OSError, ValueError, AttributeError):
+            pass
+    if status != "200":
+        return out("HTTP", status)
+    try:
+        env = envelope(path)
+    except (OSError, ValueError, TypeError):
+        return out("LOST")
+    if env.get("ok") is True:
+        try:
+            d = result_rows(env)[0]
+        except (IndexError, ValueError, TypeError):
+            return out("LOST")
+        if d.get("id") == kid and d.get("state") == "revoked":
+            return out("REVOKED")
+        return out("ERROR", "unexpected", "the answer names %s %s" % (d.get("id"), d.get("state")))
+    code, msg = err_of(env)
+    out("REFUSED" if final_refusal(env) else "ERROR", code, re.sub(r"\s+", " ", msg)[:400])
+
+cmd = sys.argv[1]
+a = sys.argv[2:]
+{"feedkey": cmd_feedkey, "ownerkey": cmd_ownerkey, "state": cmd_state, "gen": cmd_gen,
+ "repair": cmd_repair, "resp": cmd_resp, "manifest": cmd_manifest, "table": cmd_table,
+ "seen": cmd_seen, "sdcheck": cmd_sdcheck, "rev": cmd_rev, "planeid": cmd_planeid, "reqbody": cmd_reqbody, "envelope": cmd_envelope, "revoked": cmd_revoked}[cmd](*a)
+PY
+}
+kpy() { python3 -c "$(keyed_py)" "$@"; }
+
+SD="$ETC/state"
+HWF="$SD/tenant.high-water"
+RECF="$SD/tenant.installed"
+IDF="$SD/tenant.plane-id"
+KEYIDF="$ETC/key.id"
+TPLANE="$DIR/tenant.bin"
+TOMBF="$DIR/.tenant-tombstone"
+EPOCHF="$DIR/.revocation-epoch"
+TIDF="$DIR/.tenant-id"
+REVF="$DIR/.tenant-rev"
+ETAGF="$DIR/.keyed-etag"
+SEENF="$DIR/.revocation-seen"
+CONTROL_URL="https://graph.whisper.online/api/query"
+SYSTEMCTL="${WHISPER_EDGE_SYSTEMCTL:-systemctl}"
+# Every request has --max-time 120, and starts only while the run's 1,300 s cover it.
+KEYED_BUDGET=1300
+KEYED_MAX_TIME=120
+
+# Lines that carry an instruction reach the journal under --quiet: the stderr form, never say().
+kalarm() { rpz_alarm "$*"; }
+# At most once per UTC day per topic for the timer (a box without python3 asks every 15 minutes);
+# every time for a command a person runs.
+daily() {
+  if [ "$MODE" != keyed ]; then shift; kalarm "$*"; return 0; fi
+  _topic=$1; shift
+  _day=$(date -u +%Y-%m-%d)
+  [ "$(cat "$DIR/.said.$_topic" 2>/dev/null)" = "$_day" ] && return 0
+  kalarm "$*"
+  { printf '%s\n' "$_day" > "$DIR/.said.$_topic"; } 2>/dev/null || true
+}
+need_python() {
+  command -v python3 >/dev/null 2>&1 && return 0
+  daily python3 "keyed enrolment needs python3; this box stays on the keyless planes"
+  exit 0
+}
+need_flock() {
+  command -v flock >/dev/null 2>&1 && return 0
+  daily flock "the keyed path needs flock (util-linux); this box stays on the keyless planes"
+  exit 0
+}
+# `curl -H @file` arrived in 7.55.0; an older curl would send the literal "@file" as a header.
+curl_ok() {
+  _v=$(curl --version 2>/dev/null | awk 'NR == 1 { print $2 }')
+  _maj=${_v%%.*}; _rest=${_v#*.}; _min=${_rest%%.*}
+  case "$_maj$_min" in ''|*[!0-9]*) _maj=0; _min=0 ;; esac
+  [ "$_maj" -gt 7 ] || { [ "$_maj" -eq 7 ] && [ "$_min" -ge 55 ]; } && return 0
+  daily oldcurl "curl ${_v:-unknown} cannot send a header from a file (7.55.0 or later can), so the keyed path is refused; this box stays on the keyless planes"
+  return 1
+}
+
+# Test seams. Without their variables they do nothing: a pause point the gate arms by creating
+# <point>.wait, and a kill point that ends the run as a crash would, with no trap and no cleanup.
+khook() {
+  _hd="${WHISPER_EDGE_REFRESH_TEST_HOOK_DIR:-}"
+  [ -n "$_hd" ] && [ -e "$_hd/$1.wait" ] || return 0
+  : > "$_hd/$1.reached"
+  _i=0
+  while [ ! -e "$_hd/$1.go" ] && [ "$_i" -lt 1200 ]; do sleep 0.1; _i=$((_i + 1)); done
+}
+kkill() { if [ "${WHISPER_EDGE_REFRESH_TEST_KILL_AT:-}" = "$1" ]; then kill -KILL $$; fi; return 0; }
+
+# The directory lock: flock on $DIR and always the mkdir lock beside it, as the keyless --plane takes
+# them, so a keyed run and a keyless run exclude each other. Held for local file steps only.
+lk_take() {
+  # a mkdir lock older than any run can live was left by a run that died (the 30-minute reaper above)
+  find "$DIR" -maxdepth 1 -name .refresh.lock.d -mmin +30 -exec rm -rf {} + 2>/dev/null || true
+  command exec 9< "$DIR" || return 1
+  flock -w 300 9 || { exec 9<&-; return 1; }
+  _lfrom=$(date +%s)
+  until mkdir "$DIR/.refresh.lock.d" 2>/dev/null; do
+    [ $(($(date +%s) - _lfrom)) -lt 300 ] || { flock -u 9; exec 9<&-; return 1; }
+    sleep 1
+  done
+  MKDIR_LOCK="$DIR/.refresh.lock.d"
+}
+lk_drop() {
+  rmdir "$DIR/.refresh.lock.d" 2>/dev/null
+  MKDIR_LOCK=""
+  flock -u 9 2>/dev/null
+  exec 9<&-
+  return 0
+}
+
+# One file by a unique-name temp, fsync, rename and a directory fsync. Exit status is the rename's.
+put_file() { # <dir> <live name> <mode> <content>
+  _pt=$(mktemp "$1/.$2.XXXXXX") || return 1
+  { printf '%s' "$4" > "$_pt"; } 2>/dev/null || { rm -f "$_pt"; return 1; }
+  chmod "$3" "$_pt" || { rm -f "$_pt"; return 1; }
+  sync "$_pt" 2>/dev/null || true
+  kkill "temp:$2"
+  mv -f "$_pt" "$1/$2" || { rm -f "$_pt"; return 1; }
+  sync "$1" 2>/dev/null || true
+}
+# Each locked step removes stale temps of its own templates and nothing else: never a live name, never
+# another run's download temp (.tenant.bin.*, which the 30-minute reaper above owns).
+sweep() {
+  find "$SD" -maxdepth 1 -type f \( -name '.tenant.high-water.??????' -o -name '.tenant.installed.??????' \
+    -o -name '.tenant.plane-id.??????' \) \
+    -mmin +60 -delete 2>/dev/null
+  find "$DIR" -maxdepth 1 -type f \( -name '.tenant-tombstone.??????' -o -name '.revocation-epoch.??????' \
+    -o -name '.tenant-rev.??????' -o -name '.keyed-etag.??????' -o -name '.revocation-seen.??????' \
+    -o -name '.tenant-id.??????' \) -mmin +60 -delete 2>/dev/null
+  return 0
+}
+rd_epoch() {
+  _e=$(cat "$EPOCHF" 2>/dev/null || true)
+  case "$_e" in ''|*[!0-9]*) _e=0 ;; esac
+  printf '%s' "$_e"
+}
+epoch_inc() { put_file "$DIR" .revocation-epoch 0644 "$(( $(rd_epoch) + 1 ))
+"; }
+rd_keyid() { cat "$KEYIDF" 2>/dev/null || true; }
+
+# The two state files, validated with the refresh's band: HW_ST/REC_ST absent, ok or bad.
+state_check() {
+  SD_BAD=""
+  _sdc=$(kpy sdcheck "$SD")
+  case "$_sdc" in
+    ok|absent) ;;
+    *) SD_BAD=$_sdc; HW_ST=bad; REC_ST=bad; return 1 ;;
+  esac
+  # shellcheck disable=SC2046
+  set -- $(kpy state "$HWF" "$RECF" "$(date +%s)")
+  HW_ST=$2; HW_V=$3; REC_ST=$5; REC_V=$6
+  [ "$HW_ST" != bad ] && [ "$REC_ST" != bad ]
+}
+repair_sentence() {
+  if [ -n "${SD_BAD:-}" ]; then
+    case "$SD_BAD" in
+      "is a symbolic link") _fix="replace the link with a real directory: rm $SD && install -d -m 0755 $SD" ;;
+      *) _fix="make it a directory owned by the user this runs as and writable by nobody else: chown root:root $SD && chmod 0755 $SD" ;;
+    esac
+    printf '%s\n' "the state directory $SD $SD_BAD, so no state file in it was read; $_fix, then run again" >&2
+    return 0
+  fi
+  kpy repair "$HWF" "$RECF" "$TOMBF" "$TPLANE" "$(date +%s)" "$IDF" >&2
+}
+# tenant.bin's generation if it is present and at or below this run's UTC time + 86,400, else empty.
+plane_gen_ok() {
+  # shellcheck disable=SC2046
+  set -- $(kpy gen "$1" "$(date +%s)")
+  [ "${2:-}" = ok ] && printf '%s' "$1"
+  return 0
+}
+# max(the existing mark, the installed plane's generation, tenant.installed), empty when none exists.
+mark_value() {
+  _m=""
+  for _x in "$( [ "$HW_ST" = ok ] && printf '%s' "$HW_V")" "$(plane_gen_ok "$TPLANE")" \
+            "$( [ "$REC_ST" = ok ] && printf '%s' "$REC_V")"; do
+    [ -n "$_x" ] || continue
+    if [ -z "$_m" ] || [ "$_x" -gt "$_m" ]; then _m=$_x; fi
+  done
+  printf '%s' "$_m"
+}
+# Raise the high-water file to the mark; never lower it, never write it when nothing was installed.
+raise_mark() {
+  KMARK=$(mark_value)
+  [ -n "$KMARK" ] || return 0
+  if [ "$HW_ST" = ok ] && [ "$HW_V" -ge "$KMARK" ]; then return 0; fi
+  put_file "$SD" tenant.high-water 0444 "$KMARK
+"
+}
+unlink_plane() {
+  [ -e "$TPLANE" ] || return 0
+  command -v chattr >/dev/null 2>&1 && chattr -i "$TPLANE" 2>/dev/null
+  rm -f "$TPLANE"
+}
+lk_fail() { lk_drop; kalarm "$*"; exit 1; }
+
+# Credentials go only over https to the canonical host, never to another name or over http. With
+# WHISPER_EDGE_TEST_LOOPBACK=1 a loopback address stands in for it, for the install gate.
+is_loopback() {
+  case "$1" in 127.*.*.*|::1|'[::1]') return 0 ;; esac
+  return 1
+}
+url_parts() { # <url> -> UP_SCHEME UP_HOST UP_PORT
+  UP_SCHEME=${1%%://*}; _r=${1#*://}; _hp=${_r%%/*}
+  case "$_hp" in
+    \[*\]:*) UP_HOST=${_hp%%]*}]; UP_PORT=${_hp##*]:} ;;
+    \[*\]) UP_HOST=$_hp; UP_PORT="" ;;
+    *:*) UP_HOST=${_hp%:*}; UP_PORT=${_hp##*:} ;;
+    *) UP_HOST=$_hp; UP_PORT="" ;;
+  esac
+}
+cred_target() { # <url> -> CRED_HOST CRED_PORT, or non-zero when no credential may go there
+  url_parts "$1"
+  [ "$UP_SCHEME" = https ] || return 1
+  CRED_HOST=$UP_HOST; CRED_PORT=${UP_PORT:-443}
+  if [ "$UP_HOST" = whisper.online ] && [ "$CRED_PORT" = 443 ]; then return 0; fi
+  [ "${WHISPER_EDGE_TEST_LOOPBACK:-}" = 1 ] && is_loopback "$UP_HOST"
+}
+# The distinct addresses the name resolves to, in getent's order: it prints each once per socket type.
+addr_list() { getent ahosts "$1" 2>/dev/null | awk '!seen[$1]++ { print $1 }'; }
+# Another address than the ones named, preferring a unicast A record (both reach a node directly).
+other_addr() { # <addresses to skip, space separated>
+  _best=""
+  for _a in $KADDRS; do
+    case " $1 " in *" $_a "*) continue ;; esac
+    case "$_a" in *:*) [ -n "$_best" ] || _best=$_a ;; *) _best=$_a; break ;; esac
+  done
+  printf '%s' "$_best"
+}
+
+budget_check() {
+  [ $((RUN_START + KEYED_BUDGET - $(date +%s))) -ge "$KEYED_MAX_TIME" ] && return 0
+  kalarm "the keyed run's ${KEYED_BUDGET} s budget does not cover another ${KEYED_MAX_TIME} s request; everything is kept and the next run continues"
+  exit 0
+}
+
+# One keyed request. Sets KS (the HTTP status, 000 for none), KRC (curl's exit), NODE, REALM (1 when
+# WWW-Authenticate names realm="whisper-edge"), RA (Retry-After), KETAG and KC (the body's code).
+# The key travels only in the 0600 header file; WHISPER_EDGE_REQUEST tags the request for the gate.
+# Every answer is size-capped before a byte of it is trusted: the manifest at 1 MiB, a signature at 4 KiB,
+# tenant.bin at the bytes the verified manifest states (KPLANE_MAX). The cap is this script's own byte count, never
+# only curl's: before curl 8.4.0, --max-filesize has no effect on an answer without a Content-Length (chunked), and
+# this script accepts curl from 7.55.0. So the body goes through head -c, at most cap + 1 bytes are written, curl
+# is stopped by the closed pipe, and an answer past its cap is read as curl's exit 63, a failed request that keeps
+# everything. --max-filesize stays, so a curl that knows the size refuses before a byte is read.
+KEYED_MANIFEST_MAX=1048576
+KEYED_SIG_MAX=4096
+kreq() { # <name under k/> <output> <address> [curl header arguments]
+  _name=$1; _out=$2; _addr=$3; shift 3
+  case "$_name" in
+    *.sig) _cap=$KEYED_SIG_MAX ;;
+    tenant.bin) _cap=${KPLANE_MAX:-67108864} ;;
+    *) _cap=$KEYED_MANIFEST_MAX ;;
+  esac
+  budget_check
+  rm -f "$_out" "$T/rh" "$T/krc"
+  { WHISPER_EDGE_REQUEST=keyed curl -q --proto =https --proto-redir =https -sS --max-time "$KEYED_MAX_TIME" \
+        --max-filesize "$_cap" \
+        --resolve "$CRED_HOST:$CRED_PORT:$_addr" -H "@$T/h" "$@" -D "$T/rh" -o - \
+        "$BASE/k/$_name" 2>"$T/cerr"; echo "$?" > "$T/krc"; } | head -c "$((_cap + 1))" > "$_out"
+  KRC=$(cat "$T/krc" 2>/dev/null || true)
+  case "$KRC" in ''|*[!0-9]*) KRC=1 ;; esac
+  _got=$(wc -c < "$_out" | tr -d ' ')
+  if [ "$_got" -gt "$_cap" ]; then
+    KRC=63                                     # past its cap: refused by this count, whatever curl honoured
+  elif [ "$_got" = 0 ]; then
+    rm -f "$_out"                              # no body, as curl -o leaves none
+  fi
+  # shellcheck disable=SC2046
+  set -- $(kpy resp "$T/rh" "$_out")
+  KS=$1; NODE=$2; REALM=$3; RA=$4; KETAG=$5; KC=$6
+  KADDR=$_addr
+}
+# What an answer means to this script: each control-plane answer maps to exactly one class below.
+kclass() {
+  case "$KRC" in
+    0) ;;
+    7|16|35|52|55|56|92) echo transport; return ;;
+    18) echo truncated; return ;;
+    *) echo failed; return ;;
+  esac
+  case "$KS" in
+    200) echo ok ;;
+    304) echo notmod ;;
+    412) echo moved ;;
+    401)
+      if [ "$REALM" = 1 ]; then
+        case "$KC" in
+          KEY_REVOKED) echo revoked ;; KEY_EXPIRED) echo expired ;; invalid_token) echo invalid ;;
+          malformed_key) echo malformed ;; key_required) echo keyreq ;; *) echo untyped ;;
+        esac
+      else
+        echo untyped
+      fi ;;
+    403) if [ "$REALM" = 1 ] && [ "$KC" = FORBIDDEN_SCOPE ]; then echo forbidden; else echo untyped; fi ;;
+    503) echo unavailable ;;
+    429) echo limited ;;
+    404) if [ "$KC" = no_lists ]; then echo nolists; else echo absent; fi ;;
+    *) echo other ;;
+  esac
+}
+kwhere() { printf '%s (Whisper-Node %s)' "$KADDR" "$NODE"; }
+
+seen_clear() {
+  [ -e "$SEENF" ] || return 0
+  lk_take || return 0
+  rm -f "$SEENF"
+  lk_drop
+}
+# A typed key answer that is not KEY_REVOKED: an alarm, everything kept, a failed run.
+key_alarm() {
+  seen_clear
+  kalarm "ALARM $1"
+  plane_failed "the tenant plane is kept ($(kwhere) answered $KS $KC)"
+}
+# An answer that says nothing about the key: try another address once, for the names that matter.
+retry_elsewhere() { # <name> <output> [headers]: returns 0 when the other address answered something
+  _rn=$1; _ro=$2; shift 2
+  _alt=$(other_addr "$KADDR")
+  [ -n "$_alt" ] || return 1
+  _was="$(kwhere) answered ${KS} ${KC} (curl ${KRC})"
+  kreq "$_rn" "$_ro" "$_alt" "$@"
+  say "$_was; asked $_alt instead"
+  return 0
+}
+# A second 412 in one run: the feed moved twice, or this client's pairing is not the server's. Never a silent
+# exit: an alarm and a counted failure, everything kept: it fails closed and keeps its plane.
+moved_twice() { # <name>
+  [ "$attempt" = 1 ] && return 0
+  kalarm "$1 answered 412 on the re-run too (from $(kwhere)): the keyed feed moved twice in one run, or this client pairs differently from the server; everything is kept"
+  plane_failed "$1 answered 412 twice in one run; everything is kept"
+}
+
+keep_failed() {
+  _ra=""; [ "$RA" != - ] && _ra=", Retry-After $RA"
+  plane_failed "$1: $(kwhere) answered ${KS} ${KC} (curl ${KRC})$_ra; everything is kept"
+}
+
+# ---- the revocation: two nodes, or the next poll ----------------------------------------------------
+do_revoke() { # <node> <node>
+  khook before-revoke
+  lk_take || plane_failed "could not lock $DIR within 300 s"
+  if [ "$(rd_epoch)" != "$EPOCH0" ] || [ "$(rd_keyid)" != "$KID_FILE0" ]; then
+    lk_drop
+    kalarm "the key changed during this run; the revocation answer was dropped"
+    exit 0
+  fi
+  if ! state_check; then
+    lk_drop
+    repair_sentence
+    kalarm "the revocation was not applied: a state file is malformed (above), and a revocation never overwrites one"
+    exit 1
+  fi
+  sweep
+  raise_mark || lk_fail "could not write $HWF; the revocation is incomplete and the next run completes it"
+  rm -f "$IDF" || lk_fail "could not remove $IDF; the revocation is incomplete and the next run completes it"
+  sync "$SD" 2>/dev/null || true
+  kkill revoke:after-mark
+  put_file "$DIR" .tenant-tombstone 0444 "$(date +%s) ${KMARK:-0}
+" || lk_fail "could not write $TOMBF; the revocation is incomplete and the next run completes it"
+  kkill revoke:after-tombstone
+  unlink_plane || lk_fail "could not remove $TPLANE; the revocation is incomplete and the next run completes it"
+  kkill revoke:after-unlink
+  epoch_inc || lk_fail "could not write $EPOCHF"
+  rm -f "$ETAGF" "$SEENF"
+  lk_drop
+  rm -f "$DIR/.refresh-failures.tenant"
+  if [ -n "$KMARK" ]; then
+    rpz_event "the feed key $KID0 is revoked (KEY_REVOKED from Whisper-Node $1 and $2): tenant.bin removed, the high-water mark $HWF is $KMARK, the tombstone written; a tenant plane re-arms only above the mark"
+  else
+    rpz_event "the feed key $KID0 is revoked (KEY_REVOKED from Whisper-Node $1 and $2): nothing was installed, so no mark is written; the tombstone holds the box revoked"
+  fi
+  exit 0
+}
+# A KEY_REVOKED completes the removal when another node says it too (in this run, or in a
+# record under 24 h old), or, when no other node answers, at the next scheduled keyed poll, at least
+# 900 s after the first observation, from any node. The other node's addresses are asked first, and
+# an authorised answer from any of them clears the record.
+REVOKE_POLL_FLOOR=900
+on_revoked() {
+  _n1=$NODE
+  # the run's start, the time revocation-bounds.py models: the record's age and a new record both use
+  # it, so the floor runs start to start and the other addresses this run still asks (up to
+  # KEYED_MAX_TIME each, when one is black-holed) never shorten it
+  _now=$RUN_START
+  # shellcheck disable=SC2046
+  set -- $(kpy seen "$SEENF" "$KID0" "$_now")
+  _rnode=""; _rage=0
+  if [ "${1:-}" = record ]; then _rnode=$2; _rage=$3; fi
+  if [ -n "$_rnode" ] && [ "$_rnode" != "$_n1" ]; then do_revoke "$_rnode" "$_n1"; fi
+  _tried="$KADDR"; _nodes=" $_n1 "
+  while :; do
+    _alt=$(other_addr "$_tried")
+    [ -n "$_alt" ] || break
+    _tried="$_tried $_alt"
+    kreq manifest.json "$T/r.json" "$_alt"
+    case "$(kclass)" in
+      revoked)
+        case "$_nodes" in *" $NODE "*) continue ;; esac
+        do_revoke "$_n1" "$NODE" ;;
+      ok|notmod)
+        seen_clear
+        say "Whisper-Node $_n1 says KEY_REVOKED and $(kwhere) still serves this key; nothing is removed"
+        exit 0 ;;
+      expired) key_alarm "the feed says this key has expired; feed keys do not expire in this release, so this box keeps its tenant plane" ;;
+      invalid) key_alarm "the feed does not recognise this key (deleted outside op:edge, or an auth-store fault); the tenant plane is kept and ages out by its own validity" ;;
+      malformed) key_alarm "the key file does not hold a well-formed key" ;;
+      forbidden) key_alarm "this is not a feed key; run whisper-edge-refresh --enroll" ;;
+      keyreq) key_alarm "the key did not reach the server; a proxy may be stripping Authorization" ;;
+      *) _nodes="$_nodes$NODE " ;;
+    esac
+  done
+  # no other node answered: the earlier poll's observation, if it is at least one poll old
+  if [ "$_rnode" = "$_n1" ] && [ "$_rage" -ge "$REVOKE_POLL_FLOOR" ]; then
+    do_revoke "$_n1" "$_n1 again, ${_rage} s later"
+  fi
+  # the first observation's time stands, so the floor is measured from it
+  if [ -z "$_rnode" ]; then
+    lk_take || plane_failed "could not lock $DIR within 300 s"
+    if [ "$(rd_epoch)" = "$EPOCH0" ] && [ "$(rd_keyid)" = "$KID_FILE0" ]; then
+      put_file "$DIR" .revocation-seen 0644 "$KID0 KEY_REVOKED $_n1 $_now
+" || true
+    fi
+    lk_drop
+  fi
+  rpz_event "KEY_REVOKED for $KID0 from Whisper-Node $_n1 only: nothing is removed until a second node, or the next poll at least ${REVOKE_POLL_FLOOR} s after the first, confirms it"
+  exit 0
+}
+
+# Answers every keyed name shares: the key's own state, and the refusals that keep everything.
+common_answer() { # <class> <what was being fetched>
+  case "$1" in
+    revoked) on_revoked ;;
+    expired) key_alarm "the feed says this key has expired; feed keys do not expire in this release, so this box keeps its tenant plane" ;;
+    invalid) key_alarm "the feed does not recognise this key (deleted outside op:edge, or an auth-store fault); the tenant plane is kept and ages out by its own validity" ;;
+    malformed) key_alarm "the key file does not hold a well-formed key" ;;
+    forbidden) key_alarm "this is not a feed key; run whisper-edge-refresh --enroll" ;;
+    keyreq) key_alarm "the key did not reach the server; a proxy may be stripping Authorization" ;;
+    notmod) seen_clear; exit 0 ;;
+    *) keep_failed "$2" ;;
+  esac
+}
+
+# ---- the install, and the other steps that act on a fetched answer --------------------------------
+same_run_or_drop() { # <what is dropped>
+  if [ "$(rd_epoch)" != "$EPOCH0" ] || [ "$(rd_keyid)" != "$KID_FILE0" ]; then
+    lk_drop
+    kalarm "the key changed during this run; $1 was dropped"
+    exit 0
+  fi
+}
+locked_state_or_exit() {
+  if ! state_check; then
+    lk_drop
+    repair_sentence
+    plane_failed "a state file is malformed (above)"
+  fi
+}
+pin_tenant() { [ -s "$TIDF" ] || put_file "$DIR" .tenant-id 0644 "$KTEN
+"; }
+
+state_none() {
+  lk_take || plane_failed "could not lock $DIR within 300 s"
+  same_run_or_drop "the manifest's answer"
+  pin_tenant || true
+  rm -f "$SEENF"
+  lk_drop
+  rm -f "$DIR/.refresh-failures.tenant"
+  if [ -e "$TPLANE" ]; then
+    daily nolists "the feed reports no edge lists for this account; keeping the installed ones"
+  else
+    say "the feed reports no edge lists for this account; there is no tenant plane to install"
+  fi
+  exit 0
+}
+found_current() {
+  lk_take || plane_failed "could not lock $DIR within 300 s"
+  same_run_or_drop "the manifest's answer"
+  locked_state_or_exit
+  sweep
+  _g=$(plane_gen_ok "$TPLANE")
+  if [ -n "$_g" ] && { [ "$REC_ST" = absent ] || [ "$_g" -gt "$REC_V" ]; }; then
+    put_file "$SD" tenant.installed 0444 "$_g
+" || lk_fail "could not write $RECF"
+  fi
+  # a crash between an install's rename and its unlink left the tombstone over an armed plane: finish it
+  if [ -n "$_g" ] && [ -e "$TOMBF" ] && { [ "$HW_ST" = absent ] || [ "$_g" -gt "$HW_V" ]; }; then
+    rm -f "$TOMBF" || lk_fail "could not remove $TOMBF"
+  fi
+  put_file "$DIR" .keyed-etag 0644 "$METAG
+" || true
+  pin_tenant || true
+  rm -f "$SEENF"
+  lk_drop
+  plane_done "tenant.bin unchanged, already current (generation ${_g:-?}, from $(kwhere))"
+}
+install_step() { # <new generation> <rev> <bytes>
+  lk_take || plane_failed "could not lock $DIR within 300 s"
+  same_run_or_drop "the fetched plane"
+  locked_state_or_exit
+  if [ "$HW_ST" = ok ] && [ "$1" -le "$HW_V" ]; then
+    lk_drop; rm -f "$PTMP"; PTMP=""
+    rpz_event "the feed's tenant plane, generation $1, is at or below the high-water mark $HW_V in $HWF, written by a revocation: it is not installed; the plane re-arms at the next list edit, or within 24 h 10 min plus one keyed poll"
+    exit 0
+  fi
+  _ig=$(plane_gen_ok "$TPLANE")
+  if [ -z "$CORRUPT_GEN" ] && [ -n "$_ig" ] && [ "$1" -le "$_ig" ]; then
+    lk_drop; rm -f "$PTMP"; PTMP=""
+    plane_done "tenant.bin: generation $1 is not newer than the installed $_ig (installed by another run meanwhile)"
+  fi
+  sweep
+  if [ "$REC_ST" = absent ] || [ "$1" -gt "$REC_V" ]; then
+    put_file "$SD" tenant.installed 0444 "$1
+" || lk_fail "could not write $RECF; nothing was installed"
+  fi
+  kkill install:after-record
+  # the previous plane's identity goes before the rename, so no crash in between leaves a record that a
+  # rollback of the plane directory alone could match; a plane with no record reads restored
+  rm -f "$IDF" || lk_fail "could not remove the previous plane's identity record $IDF; nothing was installed"
+  sync "$SD" 2>/dev/null || true
+  clear_immutable "$TPLANE"
+  TARGET="$TPLANE"
+  if ! mv -f "$PTMP" "$TPLANE"; then
+    [ -n "$STUCK_I" ] && lk_fail "$(stuck_reason "$TPLANE")"
+    lk_fail "could not rename the verified plane over $TPLANE"
+  fi
+  se_relabel "$TPLANE"
+  PTMP=""; CLEARED_I=""
+  if command -v chattr >/dev/null 2>&1; then
+    chattr +i "$TPLANE" 2>/dev/null \
+      || rpz_event "could not set the immutable attribute on $TPLANE (a missing capability or an unsupported filesystem); installed without it"
+  fi
+  sync "$DIR" 2>/dev/null || true
+  kkill install:after-rename
+  put_file "$SD" tenant.plane-id 0444 "$(kpy planeid "$TPLANE")
+" || kalarm "could not write $IDF; a later hand repair will treat this plane as restored"
+  kkill install:after-plane
+  rm -f "$TOMBF" || lk_fail "could not remove $TOMBF"
+  kkill install:after-unlink
+  put_file "$DIR" .tenant-rev 0644 "$2
+" || lk_fail "could not write $REVF"
+  put_file "$DIR" .keyed-etag 0644 "$METAG
+" || true
+  pin_tenant || true
+  rm -f "$SEENF"
+  lk_drop
+  if [ -n "${CORRUPT_GEN:-}" ]; then
+    kalarm "tenant.bin's generation field read $CORRUPT_GEN, above this box's UTC time plus 86,400 s: the file was damaged on this box, never served so; the verified served plane (generation $1) was installed over it"
+    plane_failed "tenant.bin was damaged on this box and has been replaced"
+  fi
+  plane_done "installed tenant.bin (generation $1, rev $2, $3 bytes) from $(kwhere) - the module picks it up on its own timer"
+}
+
+# ---- --keyed-set ------------------------------------------------------------------------------------
+keyed_main() {
+  PLANE=tenant
+  need_python
+  need_flock
+  curl_ok || exit 0
+  command -v openssl >/dev/null 2>&1 || plane_failed "openssl is required to verify the signature"
+  [ -r "$KEY" ] || plane_failed "no signing key at $KEY - run install.sh, which fetches it once"
+  RUN_START=$(date +%s)
+  find "$DIR" -maxdepth 1 \( -name ".tenant.bin.*" -o -name ".refresh.*" -o -name ".refresh.lock.d" \) \
+    -mmin +30 -exec rm -rf {} + 2>/dev/null || true
+  T=$(mktemp -d) || plane_failed "cannot create a temporary directory"
+  # shellcheck disable=SC2317
+  keyed_cleanup() {
+    rm -rf "$T"
+    [ -n "${PTMP:-}" ] && rm -f "$PTMP"
+    [ -n "${CLEARED_I:-}" ] && [ -f "$TPLANE" ] && chattr +i "$TPLANE" 2>/dev/null
+    [ -n "${MKDIR_LOCK:-}" ] && rmdir "$MKDIR_LOCK" 2>/dev/null
+    return 0
+  }
+  trap 'keyed_cleanup' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  # The first locked step: the key, key.id and the epoch, read together, and both state files checked
+  # before any request, so a malformed one fails the unit on the 304 path too.
+  lk_take || plane_failed "could not lock $DIR within 300 s"
+  sweep
+  EPOCH0=$(rd_epoch)
+  KID_FILE0=$(rd_keyid)
+  if [ -e "$KEYFILE" ]; then KST=$(kpy feedkey "$KEYFILE" "$T/h"); else KST=absent; fi
+  STATE_OK=1; state_check || STATE_OK=0
+  [ -e "$TPLANE" ] || rm -f "$ETAGF"
+  ETAG0=$(cat "$ETAGF" 2>/dev/null || true)
+  TID0=$(cat "$TIDF" 2>/dev/null || true)
+  # shellcheck disable=SC2046
+  set -- $(kpy rev "$REVF")
+  REV_ST=$1; REV0=${2:-}
+  lk_drop
+  khook after-first-step
+  case "$KST" in
+    exposed) kalarm "$KEYFILE is readable by its group or by others: this key may have been read by another user; revoke it with whisper-edge-refresh --unenroll and enrol again" ;;
+    notkey) kalarm "the key file is not a key ($KEYFILE)" ;;
+  esac
+  if [ "$STATE_OK" = 0 ]; then
+    repair_sentence
+    plane_failed "a state file is malformed (above)"
+  fi
+  case "$KST" in
+    absent)
+      rm -f "$DIR/.refresh-failures.tenant"
+      daily nokey "the tenant plane comes with a key: whisper-edge-refresh --enroll"
+      exit 0 ;;
+    ok*) KID0=${KID_FILE0:-${KST#ok }} ;;
+    *) plane_failed "no usable feed key, so no keyed request was made" ;;
+  esac
+  if ! cred_target "$BASE"; then
+    kalarm "the key is sent only to https://whisper.online; this base gets keyless requests ($BASE)"
+    exit 0
+  fi
+  KADDRS=$(addr_list "$CRED_HOST")
+  if [ -n "${WHISPER_EDGE_RESOLVE:-}" ]; then
+    PIN_ADDR=${WHISPER_EDGE_RESOLVE#*:}; PIN_ADDR=${PIN_ADDR#*:}
+  else
+    PIN_ADDR=$(printf '%s\n' "$KADDRS" | awk 'NR == 1')
+  fi
+  [ -n "$PIN_ADDR" ] || plane_failed "cannot resolve $CRED_HOST"
+  KADDRS=$(printf '%s\n%s\n' "$PIN_ADDR" "$KADDRS" | awk 'NF && !seen[$1]++')
+
+  attempt=1
+  while :; do
+    # the manifest
+    if [ -n "$ETAG0" ]; then set -- -H "If-None-Match: $ETAG0"; else set --; fi
+    kreq manifest.json "$T/m.json" "$PIN_ADDR" "$@"
+    c=$(kclass)
+    case "$c" in
+      unavailable|untyped|transport) if retry_elsewhere manifest.json "$T/m.json" "$@"; then c=$(kclass); fi ;;
+    esac
+    case "$c" in
+      ok) ;;
+      absent)
+        say "k/manifest.json is 404 at $(kwhere): a node before the keyed tier; everything is kept"
+        exit 0 ;;
+      *) common_answer "$c" "k/manifest.json" ;;
+    esac
+    PIN_ADDR=$KADDR
+    METAG=$KETAG
+    msha=$(sha256sum < "$T/m.json" | cut -d' ' -f1)
+    # A signature is paired with the revision it signs by Whisper-Edge-Plane;
+    # If-Match is strict on every name and a signature's own ETag is never a bare sha, so If-Match is sent
+    # only on tenant.bin.
+    kreq manifest.json.sig "$T/m.sig" "$PIN_ADDR" -H "Whisper-Edge-Plane: \"$msha\""
+    c=$(kclass)
+    if [ "$c" = moved ]; then
+      moved_twice "k/manifest.json.sig"
+      say "the keyed manifest moved between two requests (412); re-running once"
+      attempt=2; sleep "$(shuf -i 2-10 -n 1 2>/dev/null || echo 5)"; continue
+    fi
+    [ "$c" = ok ] || common_answer "$c" "k/manifest.json.sig"
+    openssl pkeyutl -verify -pubin -inkey "$KEY" -rawin -in "$T/m.json" -sigfile "$T/m.sig" >/dev/null 2>&1 \
+      || plane_failed "THE KEYED MANIFEST'S SIGNATURE DID NOT VERIFY against $KEY (from $(kwhere))"
+    khook after-manifest
+    # shellcheck disable=SC2046
+    set -- $(kpy manifest "$T/m.json")
+    case "${1:-}" in
+      PLANE) KTEN=$2; psha=$3; pbytes=$4; prev=$5 ;;
+      NONE) KTEN=$2 ;;
+      *) shift; plane_failed "the keyed manifest from $(kwhere) cannot be used: $*" ;;
+    esac
+    if [ -n "$TID0" ] && [ "$TID0" != "$KTEN" ]; then
+      kalarm "ALARM the feed names tenant $KTEN, but this box is pinned to tenant $TID0 ($TIDF): nothing is installed until the operator runs whisper-edge-refresh --repin"
+      plane_failed "the feed's tenant is not this box's"
+    fi
+    [ "$1" = NONE ] && state_none
+    # The revision rule first: the content revision never goes back, whatever the generation.
+    if [ "$REV_ST" = bad ]; then
+      kalarm "ALARM $REVF does not hold one content revision ([1-9][0-9]{0,18} and a newline); nothing is installed until it is repaired or removed"
+      plane_failed "the recorded content revision is malformed"
+    fi
+    if [ "$REV_ST" = ok ] && [ "$prev" -lt "$REV0" ]; then
+      rm -f "$DIR/.refresh-failures.tenant"
+      daily olderrev "the feed's lists are older than the installed ones (revision $prev below $REV0); keeping them"
+      exit 0
+    fi
+    if [ -f "$TPLANE" ] && [ "$(sha256sum < "$TPLANE" | cut -d' ' -f1)" = "$psha" ]; then
+      found_current
+    fi
+    # The plane, paired to the verified manifest by If-Match, staged in the run's private directory, never in
+    # the plane directory, and capped at the bytes the signed manifest states; its signature paired to the
+    # same revision by Whisper-Edge-Plane.
+    KSTAGE="$T/tenant.bin"
+    KPLANE_MAX=$pbytes
+    kreq tenant.bin "$KSTAGE" "$PIN_ADDR" -H "If-Match: \"$psha\""
+    c=$(kclass)
+    case "$c" in
+      unavailable|untyped|transport) if retry_elsewhere tenant.bin "$KSTAGE" -H "If-Match: \"$psha\""; then c=$(kclass); fi ;;
+    esac
+    case "$c" in
+      ok)
+        kreq tenant.bin.sig "$T/p.sig" "$KADDR" -H "Whisper-Edge-Plane: \"$psha\""
+        c=$(kclass) ;;
+    esac
+    case "$c" in
+      ok) ;;
+      moved)
+        rm -f "$KSTAGE"
+        moved_twice "k/tenant.bin"
+        say "the tenant plane moved between two requests (412); re-running once"
+        attempt=2; sleep "$(shuf -i 2-10 -n 1 2>/dev/null || echo 5)"; continue ;;
+      nolists) rm -f "$KSTAGE"; state_none ;;
+      *) common_answer "$c" "k/tenant.bin" ;;
+    esac
+    break
+  done
+  [ "$(wc -c < "$KSTAGE" | tr -d ' ')" = "$pbytes" ] || plane_failed "k/tenant.bin is not the $pbytes bytes the manifest states"
+  [ "$(sha256sum < "$KSTAGE" | cut -d' ' -f1)" = "$psha" ] || plane_failed "k/tenant.bin does not hash to the manifest's digest"
+  openssl pkeyutl -verify -pubin -inkey "$KEY" -rawin -in "$KSTAGE" -sigfile "$T/p.sig" >/dev/null 2>&1 \
+    || plane_failed "SIGNATURE DID NOT VERIFY for k/tenant.bin (from $(kwhere))"
+  _t=$(kpy table "$KSTAGE" "$KTEN" "$prev")
+  [ "$_t" = ok ] || plane_failed "k/tenant.bin ${_t#bad }"
+  # Only verified bytes enter the plane directory, into an O_EXCL dot-temp the rename below moves over the plane.
+  PTMP=$(mktemp "$DIR/.tenant.bin.XXXXXX") || plane_failed "cannot create a temporary file in $DIR"
+  cat "$KSTAGE" > "$PTMP" || plane_failed "could not copy the verified tenant plane into $DIR"
+  rm -f "$KSTAGE"
+  [ "$(sha256sum < "$PTMP" | cut -d' ' -f1)" = "$psha" ] || plane_failed "the copy of k/tenant.bin in $DIR does not hash to the manifest's digest"
+  [ "$(id -u)" = 0 ] && chown 0:0 "$PTMP"
+  chmod 0444 "$PTMP"
+  sync "$PTMP" 2>/dev/null || true
+  # shellcheck disable=SC2046
+  set -- $(kpy gen "$PTMP" "$(date +%s)")
+  ngen=$1
+  khook before-install
+  # The install gate compares with tenant.bin's own generation and the high-water file, never with the
+  # record; a field above the ceiling is damage on this box, and the served plane goes over it.
+  CORRUPT_GEN=""
+  if [ -f "$TPLANE" ]; then
+    # shellcheck disable=SC2046
+    set -- $(kpy gen "$TPLANE" "$(date +%s)")
+    if [ "${2:-}" = ceiling ]; then
+      CORRUPT_GEN=$1
+    elif [ "${2:-}" = ok ] && [ "$ngen" -le "$1" ]; then
+      rm -f "$PTMP"; PTMP=""
+      kalarm "the feed names generation $ngen, not newer than the installed $1, and tenant.bin's sha does not match it: either the answering node (Whisper-Node $NODE) has not yet applied a newer edit, rerun in a few minutes, or tenant.bin was changed on this box"
+      plane_failed "tenant.bin was not replaced"
+    fi
+  fi
+  install_step "$ngen" "$prev" "$pbytes"
+}
+
+# ---- --enroll, --unenroll, --repin ------------------------------------------------------------------
+control_target() {
+  _cu="${WHISPER_EDGE_CONTROL_URL:-}"
+  if [ -n "$_cu" ]; then
+    url_parts "$_cu"
+    if [ "${WHISPER_EDGE_TEST_LOOPBACK:-}" = 1 ] && [ "$UP_SCHEME" = https ] && is_loopback "$UP_HOST"; then
+      CONTROL_URL=$_cu
+    else
+      kalarm "WHISPER_EDGE_CONTROL_URL is honoured only in the install gate's loopback mode; using $CONTROL_URL"
+    fi
+  fi
+  url_parts "$CONTROL_URL"
+  CHOST=$UP_HOST; CPORT=${UP_PORT:-443}
+  CADDRS=$(addr_list "$CHOST")
+}
+# POST one control body to one address. Sets CS (HTTP status) and CRC (curl's exit).
+cpost() { # <address> <body file> <output>
+  CRC=0
+  CS=$(curl -q --proto =https --proto-redir =https -sS --max-time 120 --resolve "$CHOST:$CPORT:$1" \
+        -H "@$T/oh" -H 'Content-Type: application/json' --data-binary "@$2" -o "$3" -w '%{http_code}' \
+        "$CONTROL_URL" 2>"$T/cerr") || CRC=$?
+}
+owner_key() { # the CLI's key into $T/oh, or say why not
+  _ok=$(kpy ownerkey "$T/oh")
+  case "$_ok" in
+    ok*) return 0 ;;
+    refused*) _r=${_ok#refused }; kalarm "the CLI key ${_r%% *} was not used: it ${_r#* }; no request was made"; return 2 ;;
+    *) return 1 ;;
+  esac
+}
+enable_keyed_timer() { # <enable|disable>
+  if [ "$1" = enable ] && [ "$NO_TIMER" = 1 ]; then
+    say "--no-timer: nothing scheduled; call whisper-edge-refresh --keyed-set yourself"
+    return 0
+  fi
+  if [ -n "${WHISPER_EDGE_SYSTEMCTL:-}" ] || { [ "$(id -u)" = 0 ] && command -v systemctl >/dev/null 2>&1; }; then
+    if [ "$1" = enable ]; then
+      "$SYSTEMCTL" enable --now whisper-edge-refresh-keyed.timer >/dev/null 2>&1 \
+        || say "could not enable whisper-edge-refresh-keyed.timer; run: systemctl enable --now whisper-edge-refresh-keyed.timer"
+    else
+      "$SYSTEMCTL" disable --now whisper-edge-refresh-keyed.timer >/dev/null 2>&1 || true
+    fi
+  fi
+}
+# key.revoke for one id with the owner's key. 0 revoked, 1 not.
+revoke_id() { # <id>
+  kpy reqbody key.revoke id "$1" > "$T/rb"
+  for _a in $(printf '%s\n' "$CADDRS" | awk 'NR <= 2'); do
+    cpost "$_a" "$T/rb" "$T/rr"
+    [ "$CRC" = 0 ] || continue
+    case "$(kpy revoked "$T/rr" "$CS" "$1")" in
+      REVOKED) return 0 ;;
+      UNKNOWN_OP) continue ;;
+      *) return 1 ;;
+    esac
+  done
+  return 1
+}
+by_hand() { kalarm "revoke feed key $1 by hand: CALL whisper.agents({op:'edge', args:{sub:'key.revoke', id:'$1'}})"; }
+
+enroll_main() {
+  need_python
+  need_flock
+  curl_ok || exit 0
+  if [ -e "$KEYFILE" ] && [ "$FORCE" != 1 ]; then
+    say "this box already has a feed key ($(rd_keyid | tr -d '\n')); whisper-edge-refresh --enroll --force replaces it"
+    exit 0
+  fi
+  T=$(mktemp -d) || die "cannot create a temporary directory"
+  # shellcheck disable=SC2317
+  enroll_cleanup() { rm -rf "$T"; [ -n "${MKDIR_LOCK:-}" ] && rmdir "$MKDIR_LOCK" 2>/dev/null; return 0; }
+  trap 'enroll_cleanup' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  _rc=0; owner_key || _rc=$?
+  case "$_rc" in
+    0) ;;
+    2) exit 1 ;;
+    *) die "no CLI key found (WHISPER_API_KEY, WHISPER_KEY, ~/.config/whisper/key of \$SUDO_USER or \$HOME): log in with the whisper CLI first, then run whisper-edge-refresh --enroll" ;;
+  esac
+  control_target
+  if [ -n "$LABEL" ]; then kpy reqbody key label "$LABEL" > "$T/body"; else kpy reqbody key - - > "$T/body"; fi
+  _a1=$(printf '%s\n' "$CADDRS" | awk 'NR == 1')
+  [ -n "$_a1" ] || die "cannot resolve $CHOST"
+  _verdict=""
+  for _a in $(printf '%s\n' "$CADDRS" | awk 'NR <= 2'); do
+    cpost "$_a" "$T/body" "$T/env"
+    case "$CRC" in
+      0) ;;
+      # 6, 7: no address or no connection; 35, 60: the TLS handshake failed, before any request was sent
+      6|7|35|60) die "could not reach $CONTROL_URL at $_a (curl $CRC); nothing was minted and nothing written" ;;
+      *) kalarm "the mint may have succeeded; key.list shows it; revoke any key you do not use"
+         die "no answer from $CONTROL_URL at $_a (curl $CRC); nothing was written" ;;
+    esac
+    _verdict=$(kpy envelope "$T/env" "$CS" "$T/minted")
+    [ "$_verdict" = UNKNOWN_OP ] || break
+    say "the node at $_a does not know op:edge yet; asking the other address"
+  done
+  case "$_verdict" in
+    MINTED*) MID=${_verdict#MINTED } ;;
+    UNKNOWN_OP|NOT_YET)
+      say "keyed enrolment is not available on this node yet; run whisper-edge-refresh --enroll later"
+      exit 0 ;;
+    OWNER_ONLY)
+      kalarm "this is an agent's key; enrol with the account owner's key"
+      exit 1 ;;
+    BAD_ARGS*)
+      say "the control plane refused the request: ${_verdict#BAD_ARGS }"
+      exit 0 ;;
+    REFUSED*)
+      _r=${_verdict#REFUSED }; _c=${_r%% *}; _m=${_r#"$_c"}; _m=${_m# }
+      die "the control plane refused the mint ($_c${_m:+: $_m}); nothing was minted and nothing written" ;;
+    LOST)
+      kalarm "the mint may have succeeded; key.list shows it; revoke any key you do not use"
+      die "the answer from $CONTROL_URL could not be read; nothing was written" ;;
+    *) kalarm "the mint may have succeeded; key.list shows it; revoke any key you do not use"
+       die "the control plane answered ${_verdict}; nothing was written" ;;
+  esac
+  [ -d "$ETC" ] || install -d -m 0755 "$ETC" || die "cannot create $ETC"
+  [ -d "$SD" ] || install -d -m 0755 "$SD" 2>/dev/null || true
+  lk_take || die "could not lock $DIR within 300 s"
+  find "$ETC" -maxdepth 1 -type f \( -name '.key.??????' -o -name '.key.id.??????' \) -mmin +60 -delete 2>/dev/null
+  sweep
+  STATE_OK=1; state_check || STATE_OK=0
+  if [ -e "$KEYFILE" ] && [ "$FORCE" != 1 ]; then
+    lk_drop
+    say "this box was enrolled while the key was being minted; the new key $MID is surplus and is revoked"
+    revoke_id "$MID" || by_hand "$MID"
+    exit 0
+  fi
+  _kt=$(mktemp "$ETC/.key.XXXXXX") || lk_fail "cannot create a temporary file in $ETC"
+  { cat "$T/minted" > "$_kt"; } || { rm -f "$_kt"; lk_fail "cannot write $_kt"; }
+  chmod 0600 "$_kt"; sync "$_kt" 2>/dev/null || true
+  mv -f "$_kt" "$KEYFILE" || { rm -f "$_kt"; lk_fail "cannot write $KEYFILE"; }
+  put_file "$ETC" key.id 0644 "$MID
+" || lk_fail "cannot write $KEYIDF"
+  sync "$ETC" 2>/dev/null || true
+  epoch_inc || lk_fail "cannot write $EPOCHF"
+  rm -f "$ETAGF" "$SEENF" "$REVF"
+  lk_drop
+  enable_keyed_timer enable
+  say "enrolled: feed key $MID is in $KEYFILE (0600). It adds the tenant plane, your own edge allow and deny"
+  say "lists from op:policy, polled every 15 minutes by whisper-edge-refresh-keyed.timer."
+  say "To return this box to keyless: whisper-edge-refresh --unenroll"
+  if [ "$STATE_OK" = 0 ]; then
+    repair_sentence
+  elif [ "$HW_ST" = ok ]; then
+    say "after a revocation the tenant plane comes back at the next list change, or by itself within 24 hours 10 minutes plus one keyed poll"
+  fi
+  exit 0
+}
+
+# --unenroll and --repin: one locked transition to NULL, refused whole over a malformed state file.
+to_null() { # <unenroll|repin>
+  lk_take || die "could not lock $DIR within 300 s"
+  if ! state_check; then
+    lk_drop
+    repair_sentence
+    die "nothing was changed: a state file is malformed (above)"
+  fi
+  sweep
+  epoch_inc || lk_fail "could not write $EPOCHF; nothing was changed"
+  kkill "$1:after-epoch"
+  raise_mark || lk_fail "could not write $HWF"
+  rm -f "$IDF" || lk_fail "could not remove $IDF"
+  sync "$SD" 2>/dev/null || true
+  kkill "$1:after-mark"
+  unlink_plane || lk_fail "could not remove $TPLANE"
+  kkill "$1:after-unlink"
+  rm -f "$TOMBF" "$REVF" "$ETAGF" "$SEENF" || lk_fail "could not remove the tombstone"
+  if [ "$1" = repin ]; then
+    rm -f "$TIDF"
+  elif [ -e "$KEYFILE" ]; then
+    # set aside, not deleted: a crash before key.revoke leaves the id on disk for the next --unenroll
+    if [ -e "$KEYIDF" ]; then
+      mv -f "$KEYIDF" "$ETC/key.id.unenrolled" || lk_fail "could not set $KEYIDF aside"
+    else
+      : > "$ETC/key.id.unenrolled"
+    fi
+    chmod 0600 "$ETC/key.id.unenrolled"
+    { mv -f "$KEYFILE" "$ETC/key.unenrolled" && chmod 0600 "$ETC/key.unenrolled"; } \
+      || lk_fail "could not set $KEYFILE aside"
+    sync "$ETC" 2>/dev/null || true
+  fi
+  lk_drop
+}
+unenroll_main() {
+  need_python
+  need_flock
+  T=$(mktemp -d) || die "cannot create a temporary directory"
+  # shellcheck disable=SC2317
+  trap 'rm -rf "$T"; [ -n "${MKDIR_LOCK:-}" ] && rmdir "$MKDIR_LOCK" 2>/dev/null; true' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  to_null unenroll
+  _id=$(tr -d '\n' < "$ETC/key.id.unenrolled" 2>/dev/null || true)
+  case "$_id" in
+    ag_????????????????) case "$_id" in ag_*[!A-Za-z0-9_-]*) _id="" ;; esac ;;
+    *) _id="" ;;
+  esac
+  if [ -z "$_id" ] && [ -e "$ETC/key.unenrolled" ]; then
+    kalarm "the feed key had no well-formed key.id beside it, so it cannot be revoked from here: key.list shows it; revoke it with key.revoke"
+  fi
+  if [ -n "$_id" ]; then
+    if curl_ok && owner_key && control_target && revoke_id "$_id"; then
+      say "feed key $_id revoked"
+    else
+      by_hand "$_id"
+    fi
+  fi
+  rm -f "$ETC/key.unenrolled" "$ETC/key.id.unenrolled"
+  enable_keyed_timer disable
+  rpz_event "this box is keyless again: the tenant plane is removed and rules on tenant_allow and tenant_deny read null, as before enrolment"
+  exit 0
+}
+repin_main() {
+  need_python
+  need_flock
+  to_null repin
+  if [ -n "${KMARK:-}" ]; then
+    rpz_event "tenant pin cleared: the next keyed manifest's tenant becomes the pin, and its plane arms once its generation passes the old one's (the high-water file $HWF holds $KMARK), at its next list edit or within 24 h 10 min plus one keyed poll"
+  else
+    rpz_event "tenant pin cleared: the next keyed manifest's tenant becomes the pin; nothing was installed, so no mark holds it back"
+  fi
+  exit 0
+}
+
+case "$MODE" in
+  keyed) keyed_main ;;
+  enroll) enroll_main ;;
+  unenroll) unenroll_main ;;
+  repin) repin_main ;;
+esac
+
+
+if [ "$MODE" = plane ]; then
+  plane_mode
+fi
+
+# ==== the web servers' half: the signed binary snapshot ===============================================
+
+ART=snapshot.bin
+SIG=snapshot.bin.sig
+TARGET="$DIR/$ART"
+NEW="$TARGET.new.$$"
+# Every exit path removes the partial download. Without this a failed verify leaves a .new file
+# that the next run's `mv` could pick up if somebody edited the order of these lines later.
+trap 'rm -f "$NEW" "$NEW.sig"' EXIT
+# ...and a signal must END the run. A trap list naming INT and TERM next to EXIT only cleans up and
+# then lets the script carry on, past the files it has just deleted.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# The artifact and its signature are fetched in ONE curl invocation, so both ride one connection
+# and come from one node. The public name fronts two nodes that each build the feed for themselves,
+# and for one generation their bytes can differ while each is correctly signed by itself. Fetched
+# on two connections, the pair mismatches about one time in six (measured, 12 runs: 2 mismatches),
+# and the message below then accuses a healthy feed of tampering. One connection: 12 of 12.
+# --compressed is worth the flag: the binary snapshot is ~550 KB and gzips to a fortieth of that,
+# and a feed every host on the internet may fetch hourly should not cost more than it needs to.
+# Cache-Control: no-cache, because snapshot.bin is served public, max-age=300, and a caching proxy on
+# the path would otherwise hand this host a file up to five minutes older than the feed's. The URL is
+# the file's name, so the request header is the fix, never a cache-busting query.
+# WHISPER_EDGE_RESOLVE=host:port:addr pins the fetch to one address, as it does for --plane.
+fetch_pair() {
+  rm -f "$NEW" "$NEW.sig"
+  if [ -n "${WHISPER_EDGE_RESOLVE:-}" ]; then set -- --resolve "$WHISPER_EDGE_RESOLVE"; else set --; fi
+  # -q: no ~/.curlrc; --proto: the base's own scheme and no other, redirects included
+  curl -q -fsS --proto "=${BASE%%://*}" --proto-redir "=${BASE%%://*}" --compressed --max-time 120 -H 'Cache-Control: no-cache' "$@" \
+    -o "$NEW" "$BASE/$ART" -o "$NEW.sig" "$BASE/$SIG"
+}
+verify_pair() {
+  openssl pkeyutl -verify -pubin -inkey "$KEY" -rawin -in "$NEW" -sigfile "$NEW.sig" >/dev/null 2>&1
+}
+
+# The signature is checked against a key fetched ONCE at install time and pinned on disk. A
+# refresh that re-fetched the key would verify the feed against whatever the feed served, which
+# is not a verification at all - it is a round trip.
+[ -r "$KEY" ] || die "no signing key at $KEY - run install.sh, which fetches it once"
+command -v openssl >/dev/null 2>&1 || die "openssl is required to verify the signature"
+
+if _why=$(resolve_mismatch); then die "$_why"; fi
+fetch_pair || die "could not fetch $BASE/$ART and its signature - the installed $ART is untouched"
+[ -s "$NEW" ] || die "$BASE/$ART came back empty - the installed $ART is untouched"
+
+if ! verify_pair; then
+  # One connection makes a mixed pair rare, not impossible: a node can be between publishing the
+  # snapshot and publishing its signature. One more fetch of the pair, on a fresh connection,
+  # separates that from a real problem; the alarm after it has earned its wording.
+  say "signature did not match on the first pair; fetching both once more"
+  sleep "$(shuf -i 2-10 -n 1 2>/dev/null || echo 5)"
+  fetch_pair || die "could not re-fetch $BASE/$ART and its signature - the installed $ART is untouched"
+  [ -s "$NEW" ] || die "$BASE/$ART came back empty - the installed $ART is untouched"
+  verify_pair || die "SIGNATURE DID NOT VERIFY for $ART, twice, on two separate connections - refusing to
+  install it. The previously installed snapshot is untouched and your server keeps enforcing it. If
+  this persists, the key on disk ($KEY) may be from a rotation you have not picked up: re-fetch it
+  from $BASE and compare."
+fi
+say "signature verified ($(wc -c <"$NEW") bytes)"
+
+# Unchanged is the common case on a short timer, and it is worth saying so rather than rewriting
+# the file: a no-op mv still changes the mtime, which makes every module think the policy moved.
+if [ -f "$TARGET" ] && cmp -s "$NEW" "$TARGET"; then
+  say "$ART unchanged, already current ($(file_facts "$TARGET"))"
+  exit 0
+fi
+# Different bytes with the SAME generation is the two-node case again: each node builds the feed for
+# itself, so one generation can have two correct, signed contents, and the public name hands out
+# either. The module refuses a generation it already has, so installing the other node's bytes would
+# rewrite the file for a swap that never happens, every hour, on every host the name flips for. The
+# generation is a little-endian u64 at byte 16 of the header, read in file order (u64_at), never in the
+# host's (od -t u8 reads a big-endian host's file backwards).
+if [ -f "$TARGET" ]; then
+  new_gen=$(u64_at "$NEW" 16); cur_gen=$(u64_at "$TARGET" 16)
+  if [ -n "$new_gen" ] && [ -n "$cur_gen" ] && [ "$new_gen" -le "$cur_gen" ] 2>/dev/null; then
+    say "$ART unchanged in substance: generation $new_gen is not newer than the installed $cur_gen, already current (installed: $(file_facts "$TARGET"))"
+    exit 0
+  fi
+fi
+
+# Same directory, so this is a rename and not a copy: atomic for any reader.
+mv -f "$NEW" "$TARGET"
+chmod 0644 "$TARGET"
+say "installed $ART ($(file_facts "$TARGET")) - the modules pick it up on their own timer, no reload"

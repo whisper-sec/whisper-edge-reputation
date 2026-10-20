@@ -1,0 +1,445 @@
+{
+  "bench": {
+    "compiler": "gcc 13.3.0",
+    "data": "synthetic",
+    "flags": "-std=c11 -O2 -Wall -Wextra -Werror",
+    "layouts": [
+      {
+        "depth": 0,
+        "fileBytes": 4692,
+        "layout": "f1 unindexed",
+        "maxProbes": 9,
+        "ranges": 500,
+        "widestWindow": 500
+      },
+      {
+        "depth": 0,
+        "fileBytes": 266840,
+        "layout": "f1 radix-16",
+        "maxProbes": 2,
+        "ranges": 500,
+        "widestWindow": 2
+      },
+      {
+        "depth": 0,
+        "fileBytes": 26691,
+        "layout": "f2 radix-12",
+        "maxProbes": 2,
+        "ranges": 500,
+        "widestWindow": 3
+      },
+      {
+        "depth": 0,
+        "fileBytes": 272451,
+        "layout": "f2 radix-16",
+        "maxProbes": 2,
+        "ranges": 500,
+        "widestWindow": 2
+      },
+      {
+        "depth": 0,
+        "fileBytes": 1058883,
+        "layout": "f2 radix-18",
+        "maxProbes": 1,
+        "ranges": 500,
+        "widestWindow": 1
+      },
+      {
+        "depth": 1,
+        "fileBytes": 10307,
+        "layout": "f2 rank-64",
+        "maxProbes": 6,
+        "ranges": 500,
+        "widestWindow": 63
+      },
+      {
+        "depth": 0,
+        "fileBytes": 36192,
+        "layout": "f1 unindexed",
+        "maxProbes": 12,
+        "ranges": 4000,
+        "widestWindow": 4000
+      },
+      {
+        "depth": 0,
+        "fileBytes": 298340,
+        "layout": "f1 radix-16",
+        "maxProbes": 2,
+        "ranges": 4000,
+        "widestWindow": 3
+      },
+      {
+        "depth": 0,
+        "fileBytes": 96643,
+        "layout": "f2 radix-12",
+        "maxProbes": 3,
+        "ranges": 4000,
+        "widestWindow": 7
+      },
+      {
+        "depth": 0,
+        "fileBytes": 342403,
+        "layout": "f2 radix-16",
+        "maxProbes": 2,
+        "ranges": 4000,
+        "widestWindow": 3
+      },
+      {
+        "depth": 0,
+        "fileBytes": 1128835,
+        "layout": "f2 radix-18",
+        "maxProbes": 2,
+        "ranges": 4000,
+        "widestWindow": 2
+      },
+      {
+        "depth": 2,
+        "fileBytes": 81347,
+        "layout": "f2 rank-64",
+        "maxProbes": 6,
+        "ranges": 4000,
+        "widestWindow": 63
+      },
+      {
+        "depth": 0,
+        "fileBytes": 288192,
+        "layout": "f1 unindexed",
+        "maxProbes": 15,
+        "ranges": 32000,
+        "widestWindow": 32000
+      },
+      {
+        "depth": 0,
+        "fileBytes": 550340,
+        "layout": "f1 radix-16",
+        "maxProbes": 3,
+        "ranges": 32000,
+        "widestWindow": 6
+      },
+      {
+        "depth": 0,
+        "fileBytes": 656643,
+        "layout": "f2 radix-12",
+        "maxProbes": 5,
+        "ranges": 32000,
+        "widestWindow": 26
+      },
+      {
+        "depth": 0,
+        "fileBytes": 902403,
+        "layout": "f2 radix-16",
+        "maxProbes": 3,
+        "ranges": 32000,
+        "widestWindow": 6
+      },
+      {
+        "depth": 0,
+        "fileBytes": 1688835,
+        "layout": "f2 radix-18",
+        "maxProbes": 3,
+        "ranges": 32000,
+        "widestWindow": 4
+      },
+      {
+        "depth": 3,
+        "fileBytes": 659843,
+        "layout": "f2 rank-64",
+        "maxProbes": 6,
+        "ranges": 32000,
+        "widestWindow": 63
+      },
+      {
+        "depth": 0,
+        "fileBytes": 1080192,
+        "layout": "f1 unindexed",
+        "maxProbes": 17,
+        "ranges": 120000,
+        "widestWindow": 120000
+      },
+      {
+        "depth": 0,
+        "fileBytes": 1342340,
+        "layout": "f1 radix-16",
+        "maxProbes": 4,
+        "ranges": 120000,
+        "widestWindow": 12
+      },
+      {
+        "depth": 0,
+        "fileBytes": 2416643,
+        "layout": "f2 radix-12",
+        "maxProbes": 7,
+        "ranges": 120000,
+        "widestWindow": 79
+      },
+      {
+        "depth": 0,
+        "fileBytes": 2662403,
+        "layout": "f2 radix-16",
+        "maxProbes": 4,
+        "ranges": 120000,
+        "widestWindow": 12
+      },
+      {
+        "depth": 0,
+        "fileBytes": 3448835,
+        "layout": "f2 radix-18",
+        "maxProbes": 3,
+        "ranges": 120000,
+        "widestWindow": 5
+      },
+      {
+        "depth": 3,
+        "fileBytes": 2419843,
+        "layout": "f2 rank-64",
+        "maxProbes": 6,
+        "ranges": 120000,
+        "widestWindow": 63
+      },
+      {
+        "depth": 0,
+        "fileBytes": 13500192,
+        "layout": "f1 unindexed",
+        "maxProbes": 21,
+        "ranges": 1500000,
+        "widestWindow": 1500000
+      },
+      {
+        "depth": 0,
+        "fileBytes": 13762340,
+        "layout": "f1 radix-16",
+        "maxProbes": 6,
+        "ranges": 1500000,
+        "widestWindow": 60
+      },
+      {
+        "depth": 0,
+        "fileBytes": 30016643,
+        "layout": "f2 radix-12",
+        "maxProbes": 10,
+        "ranges": 1500000,
+        "widestWindow": 764
+      },
+      {
+        "depth": 0,
+        "fileBytes": 30262403,
+        "layout": "f2 radix-16",
+        "maxProbes": 6,
+        "ranges": 1500000,
+        "widestWindow": 60
+      },
+      {
+        "depth": 0,
+        "fileBytes": 31048835,
+        "layout": "f2 radix-18",
+        "maxProbes": 5,
+        "ranges": 1500000,
+        "widestWindow": 21
+      },
+      {
+        "depth": 4,
+        "fileBytes": 30334275,
+        "layout": "f2 rank-64",
+        "maxProbes": 6,
+        "ranges": 1500000,
+        "widestWindow": 63
+      }
+    ],
+    "machine": "aarch64",
+    "meanNsInformation": [
+      {
+        "layout": "f1 unindexed",
+        "ns": 40.2,
+        "ranges": 500
+      },
+      {
+        "layout": "f1 radix-16",
+        "ns": 3.6,
+        "ranges": 500
+      },
+      {
+        "layout": "f2 radix-12",
+        "ns": 5.4,
+        "ranges": 500
+      },
+      {
+        "layout": "f2 radix-16",
+        "ns": 3.7,
+        "ranges": 500
+      },
+      {
+        "layout": "f2 radix-18",
+        "ns": 3.9,
+        "ranges": 500
+      },
+      {
+        "layout": "f2 rank-64",
+        "ns": 37.5,
+        "ranges": 500
+      },
+      {
+        "layout": "f1 unindexed",
+        "ns": 91.4,
+        "ranges": 4000
+      },
+      {
+        "layout": "f1 radix-16",
+        "ns": 4.8,
+        "ranges": 4000
+      },
+      {
+        "layout": "f2 radix-12",
+        "ns": 16.1,
+        "ranges": 4000
+      },
+      {
+        "layout": "f2 radix-16",
+        "ns": 5.9,
+        "ranges": 4000
+      },
+      {
+        "layout": "f2 radix-18",
+        "ns": 4.8,
+        "ranges": 4000
+      },
+      {
+        "layout": "f2 rank-64",
+        "ns": 58.7,
+        "ranges": 4000
+      },
+      {
+        "layout": "f1 unindexed",
+        "ns": 90.2,
+        "ranges": 32000
+      },
+      {
+        "layout": "f1 radix-16",
+        "ns": 17.7,
+        "ranges": 32000
+      },
+      {
+        "layout": "f2 radix-12",
+        "ns": 42.9,
+        "ranges": 32000
+      },
+      {
+        "layout": "f2 radix-16",
+        "ns": 17.7,
+        "ranges": 32000
+      },
+      {
+        "layout": "f2 radix-18",
+        "ns": 10.4,
+        "ranges": 32000
+      },
+      {
+        "layout": "f2 rank-64",
+        "ns": 90.7,
+        "ranges": 32000
+      },
+      {
+        "layout": "f1 unindexed",
+        "ns": 112.2,
+        "ranges": 120000
+      },
+      {
+        "layout": "f1 radix-16",
+        "ns": 31.1,
+        "ranges": 120000
+      },
+      {
+        "layout": "f2 radix-12",
+        "ns": 48.5,
+        "ranges": 120000
+      },
+      {
+        "layout": "f2 radix-16",
+        "ns": 30.3,
+        "ranges": 120000
+      },
+      {
+        "layout": "f2 radix-18",
+        "ns": 19.5,
+        "ranges": 120000
+      },
+      {
+        "layout": "f2 rank-64",
+        "ns": 87.1,
+        "ranges": 120000
+      },
+      {
+        "layout": "f1 unindexed",
+        "ns": 196.2,
+        "ranges": 1500000
+      },
+      {
+        "layout": "f1 radix-16",
+        "ns": 73.2,
+        "ranges": 1500000
+      },
+      {
+        "layout": "f2 radix-12",
+        "ns": 95.0,
+        "ranges": 1500000
+      },
+      {
+        "layout": "f2 radix-16",
+        "ns": 112.7,
+        "ranges": 1500000
+      },
+      {
+        "layout": "f2 radix-18",
+        "ns": 41.9,
+        "ranges": 1500000
+      },
+      {
+        "layout": "f2 rank-64",
+        "ns": 176.2,
+        "ranges": 1500000
+      }
+    ],
+    "measuredFor": {
+      "development": true,
+      "release": "0.223.3"
+    }
+  },
+  "feedBuild": {
+    "builtAt": "2026-10-14T15:00:00Z",
+    "generation": 1791990002,
+    "planes": [
+      {
+        "cadenceSeconds": 3600,
+        "format": 1,
+        "name": "reputation",
+        "v4Addresses": 1149952,
+        "v4Ranges": 1027,
+        "v6Ranges": 36
+      }
+    ],
+    "tier": "keyless",
+    "withheld": [
+      {
+        "name": "tor",
+        "reasons": [
+          "LOW_RECALL",
+          "IPV6_NOT_STATED"
+        ]
+      }
+    ],
+    "zones": [
+      {
+        "name": "rpz.whisper.online",
+        "serial": 1791990002
+      }
+    ]
+  },
+  "fragment": "whisper-edge-page-numbers",
+  "policy": {
+    "distinctMessages": 42,
+    "reachableCells": 55,
+    "referencePhrases": 12,
+    "refusalRows": 50,
+    "tablePhrases": 44
+  },
+  "version": 1
+}

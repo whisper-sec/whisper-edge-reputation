@@ -1,0 +1,2 @@
+set http/server:a @u undetermined
+policy http/server:a deny if tor_exit in @u

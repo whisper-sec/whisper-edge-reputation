@@ -1,0 +1,1 @@
+{"columns":["op","ok","status","result","error","retry_after","elapsed_ms"],"rows":[{"op":"edge","ok":false,"status":429,"result":null,"error":{"code":"RATE_LIMITED","message":"per-principal control rate exceeded; retry shortly","retryable":true},"retry_after":3,"elapsed_ms":0}],"statistics":{"rowCount":1,"executionTimeMs":0}}

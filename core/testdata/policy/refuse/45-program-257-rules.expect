@@ -1,0 +1,8 @@
+layer	program
+kind	policy
+context	http/server:a
+rule	257
+line	1
+col	1
+token	deny
+message	over 256 rules in a context

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026, viaGraph B.V.
+[Unit]
+Description=Refresh the Whisper edge tenant plane every 15 minutes
+Documentation=https://whisper.online/edge/
+
+[Timer]
+# What a key buys in time is the poll: every 15 minutes with up to 5 minutes of jitter, against the
+# keyless timer's hour. An edit is on the edge's disk typically in about 8 minutes, at most about 47.
+# Most polls are a 304 on the manifest's ETag.
+OnCalendar=*:0/15
+RandomizedDelaySec=300
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

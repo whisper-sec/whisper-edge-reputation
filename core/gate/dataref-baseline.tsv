@@ -1,0 +1,7 @@
+# dataref-baseline.tsv - data references (Dr + Dw) and instructions per rule on the straight-line
+# family evaluator-dr-64/-128, exact fractions; cachegrind-gate.sh holds the references EXACTLY.
+# arch	compiler	refs_per_rule	instructions_per_rule
+x86_64	gcc	28	163
+x86_64	clang	27	152
+aarch64	gcc	29	130
+aarch64	clang	29	153

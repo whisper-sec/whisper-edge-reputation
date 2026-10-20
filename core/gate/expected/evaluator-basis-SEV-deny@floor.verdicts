@@ -1,0 +1,16 @@
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-
+verdict step=3 action=deny program=floor rule=2 reason=- log_floor=- log_ctx=-

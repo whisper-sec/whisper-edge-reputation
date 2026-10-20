@@ -1,0 +1,8 @@
+layer	alphabet
+kind	policy
+context	http/server:a
+rule	1
+line	1
+col	25
+token	\xD0
+message	byte 0xD0 is not allowed

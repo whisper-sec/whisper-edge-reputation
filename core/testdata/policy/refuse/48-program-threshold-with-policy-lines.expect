@@ -1,0 +1,8 @@
+layer	program
+kind	threshold
+context	http/server:a
+rule	1
+line	1
+col	1
+token	high
+message	deny if listed >= high

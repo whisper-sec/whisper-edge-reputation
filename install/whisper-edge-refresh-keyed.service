@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026, viaGraph B.V.
+[Unit]
+Description=Refresh the Whisper edge tenant plane with this box's feed key
+Documentation=https://whisper.online/edge/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/whisper-edge-refresh --quiet --keyed-set
+# The state directory is the only part of /etc/whisper-edge this unit may write. Configuration
+# management pruning it, or a restore from before the keyed tier, must not silence the unit, so it is
+# recreated outside the sandbox (the +) before every run. A ReadWritePaths entry that does not exist
+# fails every process of the unit with 226/NAMESPACE, this ExecStartPre included (measured on systemd
+# 255), so the state path below carries the "-" that lets the namespace be set up without it; the main
+# process, set up after this one has run, then finds it present and writable.
+ExecStartPre=+/usr/bin/install -d -o root -g root -m 0755 /etc/whisper-edge/state
+# The keyless unit's sandbox, with three differences, each for a reason:
+ProtectSystem=strict
+ProtectHome=yes
+# Each run makes its own 0700 mktemp -d for the header file that carries the key. There is no
+# RuntimeDirectory: systemd removes one when any unit declaring it stops, which would take another
+# run's header file with it.
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# 1. One capability. A tenant.bin installed immutable by a root run (the installer, or a run by hand)
+#    must be removable by this timer when its key is revoked, or a revoked allowlist stays armed.
+CapabilityBoundingSet=CAP_LINUX_IMMUTABLE
+AmbientCapabilities=CAP_LINUX_IMMUTABLE
+# 2. The plane directory and the state directory, and nothing else under /etc: the key and the policy
+#    program beside it stay read-only to a network-facing timer.
+ReadWritePaths=/var/lib/whisper-edge -/etc/whisper-edge/state
+# 3. The run's own budget is 1,300 s (every request starts only while the budget covers its 120 s); the
+#    unit allows 120 s more, so the budget, never this timeout, ends a slow run.
+TimeoutStartSec=1420
+
+[Install]
+WantedBy=multi-user.target

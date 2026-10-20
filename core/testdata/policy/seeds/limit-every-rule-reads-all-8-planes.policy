@@ -1,0 +1,8 @@
+policy http/server:a log if listed >= low or tor_exit or rpki_unreachable or anycast or proxy or c2 or registry_rir == ripe or tenant_deny
+policy http/server:a log if listed >= low or tor_exit or rpki_unreachable or anycast or proxy or c2 or registry_rir == ripe or tenant_deny
+policy http/server:a log if listed >= low or tor_exit or rpki_unreachable or anycast or proxy or c2 or registry_rir == ripe or tenant_deny
+policy http/server:a log if listed >= low or tor_exit or rpki_unreachable or anycast or proxy or c2 or registry_rir == ripe or tenant_deny
+policy http/server:a log if listed >= low or tor_exit or rpki_unreachable or anycast or proxy or c2 or registry_rir == ripe or tenant_deny
+policy http/server:a log if listed >= low or tor_exit or rpki_unreachable or anycast or proxy or c2 or registry_rir == ripe or tenant_deny
+policy http/server:a log if listed >= low or tor_exit or rpki_unreachable or anycast or proxy or c2 or registry_rir == ripe or tenant_deny
+policy http/server:a log if listed >= low or tor_exit or rpki_unreachable or anycast or proxy or c2 or registry_rir == ripe or tenant_deny

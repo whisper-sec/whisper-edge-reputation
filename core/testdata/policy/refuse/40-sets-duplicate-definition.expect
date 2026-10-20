@@ -1,0 +1,8 @@
+layer	sets
+kind	set
+context	http/server:a
+rule	2
+line	1
+col	1
+token	@x
+message	a duplicate definition in one scope

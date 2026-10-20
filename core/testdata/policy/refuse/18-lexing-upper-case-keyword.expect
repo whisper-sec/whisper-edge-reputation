@@ -1,0 +1,8 @@
+layer	lexing
+kind	policy
+context	http/server:a
+rule	1
+line	1
+col	1
+token	DENY
+message	an upper-case keyword or literal

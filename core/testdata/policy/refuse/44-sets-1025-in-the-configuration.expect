@@ -1,0 +1,8 @@
+layer	sets
+kind	set
+context	http
+rule	1025
+line	1
+col	1
+token	@s1025
+message	more than 1,024 sets in the configuration

@@ -1,0 +1,61 @@
+program records-every-enum-field-0-255 seeds
+dir mode http deny
+dir mode http/server:a deny
+dir policy http/server:a log if rpki == undetermined
+dir policy http/server:a log if rir == undetermined
+dir policy http/server:a log if asn_rep == undetermined
+dir policy http/server:a log if rpki_reason == undetermined
+dir policy http/server:a log if registry_rir == undetermined
+dir policy http/server:a log if rpki in { valid invalid not-found }
+dir policy http/server:a log if rir in { ripe arin }
+run http/server:a
+case rov
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 1800000000001
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor routing asn=64496 country=528 rov=1 rir=5 flags=0 asn_rep=1
+sweep floor routing rov 0 255
+end
+case rir
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 1800000000001
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor routing asn=64496 country=528 rov=1 rir=5 flags=0 asn_rep=1
+sweep floor routing rir 0 255
+end
+case asn_rep
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 1800000000001
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor routing asn=64496 country=528 rov=1 rir=5 flags=0 asn_rep=1
+sweep floor routing asn_rep 0 255
+end
+case reason
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 1800000000001
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor rpki-unreachable flags=1 source=0 reason=0
+sweep floor rpki-unreachable reason 0 255
+end
+case registry-rir
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 1800000000001
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor registry asn=64496 country=528 rov=0 rir=5 flags=0 asn_rep=0
+sweep floor registry rir 0 255
+end

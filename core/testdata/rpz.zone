@@ -1,0 +1,20 @@
+; Whisper edge reputation, as a Response Policy Zone.
+; Every entry has a citable listing behind it. /edge/snapshot.json says what this
+; build contained and how many prefixes each safety guard refused.
+;
+; This file IS the way to get the policy today. Transferring the zone from us needs a
+; TSIG key, and while the per-zone scoping is built there is no way to request one yet.
+; Fetch this file; your freshness is the SOA refresh below rather than NOTIFY.
+$TTL 300
+rpz.whisper.online.	IN	SOA	ns1.whisper.online. hostmaster.whisper.online. ( 42 900 300 86400 300 )
+rpz.whisper.online.	IN	NS	ns1.whisper.online.
+rpz.whisper.online.	IN	NS	ns2.whisper.online.
+24.0.2.0.192.rpz-ip.rpz.whisper.online.	300	IN	CNAME	.
+25.128.100.51.198.rpz-ip.rpz.whisper.online.	300	IN	CNAME	.
+128.6.5.4.3.2.1.db8.2001.rpz-ip.rpz.whisper.online.	300	IN	CNAME	.
+128.2.ef01.abcd.0.1234.11.db8.2001.rpz-ip.rpz.whisper.online.	300	IN	CNAME	.
+112.0.4.3.2.1.8a0.db8.2001.rpz-ip.rpz.whisper.online.	300	IN	CNAME	.
+48.zz.beef.db8.2001.rpz-ip.rpz.whisper.online.	300	IN	CNAME	.
+96.0.0.ef.abcd.zz.db8.2001.rpz-ip.rpz.whisper.online.	300	IN	CNAME	.
+80.0.0.0.1.zz.2001.rpz-ip.rpz.whisper.online.	300	IN	CNAME	.
+24.0.2.0.192.rpz-nsip.rpz.whisper.online.	300	IN	CNAME	.

@@ -1,0 +1,5 @@
+mode http log
+floor http deny if listed >= high
+floor http log if tor_exit is unknown
+mode http/server:a off
+policy http/server:a deny if c2

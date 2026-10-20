@@ -1,0 +1,6 @@
+policy http/server:a log if country == nl or country == Nl or country == NL
+policy http/server:a log if country in { EU AP ZZ XK }
+policy http/server:a log if country == IN
+policy http/server:a log if country in { in is no as do }
+policy http/server:a log if registry_country != undetermined and country == undetermined
+policy http/server:a log if registry_country in { us gb }

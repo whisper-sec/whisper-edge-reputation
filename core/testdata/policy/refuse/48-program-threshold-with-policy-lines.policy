@@ -1,0 +1,2 @@
+policy http/server:a deny if c2
+threshold http/server:a high

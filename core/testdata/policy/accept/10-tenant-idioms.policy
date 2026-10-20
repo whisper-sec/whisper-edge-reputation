@@ -1,0 +1,4 @@
+policy http/server:a allow if tenant_allow
+policy http/server:a deny if tenant_deny
+policy http/server:a log if tenant_deny is unknown
+policy http/server:a deny if not tenant_allow

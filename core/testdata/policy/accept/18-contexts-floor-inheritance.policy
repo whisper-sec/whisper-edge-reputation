@@ -1,0 +1,8 @@
+set http @embargo KP SY CU
+floor http deny if listed >= critical
+floor http log if country in @embargo
+set http/server:a @partners AS64496 AS64497
+policy http/server:a deny if country in @embargo and rpki != valid
+policy http/server:a/location:api deny if asn in @partners
+mode http/server:b log
+threshold http/server:c high

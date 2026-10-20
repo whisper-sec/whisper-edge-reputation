@@ -1,0 +1,12 @@
+generation 1791655200
+valid_until_ms 4000000000000
+built_at_ms 1791655200000
+tier 0
+feed 0 ""
+feed 1 a\x20b\x0Ac
+feed 2 \x5Cx41
+feed 3 A
+feed 4 \x22\x22
+4 192.0.2.0 192.0.2.0 1 1
+4 192.0.2.2 192.0.2.2 1 2
+4 192.0.2.4 192.0.2.4 1 3

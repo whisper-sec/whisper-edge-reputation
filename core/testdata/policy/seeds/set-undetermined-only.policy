@@ -1,0 +1,2 @@
+set http/server:a @s undetermined
+policy http/server:a deny if asn in @s

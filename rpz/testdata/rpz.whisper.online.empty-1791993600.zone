@@ -1,0 +1,8 @@
+; v=wedge-rpz1
+; origin=rpz.whisper.online
+; state=empty
+; generation=1791993600
+$TTL 300
+rpz.whisper.online.	IN	SOA	ns1.whisper.online. hostmaster.whisper.online. ( 1791993600 900 300 86400 300 )
+rpz.whisper.online.	IN	NS	ns1.whisper.online.
+rpz.whisper.online.	IN	NS	ns2.whisper.online.

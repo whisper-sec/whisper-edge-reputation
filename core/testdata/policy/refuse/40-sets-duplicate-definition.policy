@@ -1,0 +1,3 @@
+set http/server:a @x KP
+set http/server:a @x SY
+policy http/server:a deny if country in @x

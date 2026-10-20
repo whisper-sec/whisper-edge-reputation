@@ -1,0 +1,8 @@
+layer	typing
+kind	policy
+context	http/server:a
+rule	1
+line	1
+col	17
+token	NL
+message	rpki takes valid, invalid, not-found, unrouted or undetermined

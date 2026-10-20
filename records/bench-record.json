@@ -1,0 +1,4481 @@
+{
+  "compiler": "gcc 13.3.0",
+  "data": {
+    "kind": "synthetic",
+    "planeGeneration": 1,
+    "seed": "0x9e3779b97f4a7c15"
+  },
+  "flags": "-std=c11 -O2 -Wall -Wextra -Werror",
+  "layout": [
+    {
+      "depth": 0,
+      "fileBytes": 4692,
+      "layout": "f1 unindexed",
+      "maxProbes": 9,
+      "meanNsInformation": 40.2,
+      "ranges": 500,
+      "widestWindow": 500
+    },
+    {
+      "depth": 0,
+      "fileBytes": 266840,
+      "layout": "f1 radix-16",
+      "maxProbes": 2,
+      "meanNsInformation": 3.6,
+      "ranges": 500,
+      "widestWindow": 2
+    },
+    {
+      "depth": 0,
+      "fileBytes": 26691,
+      "layout": "f2 radix-12",
+      "maxProbes": 2,
+      "meanNsInformation": 5.4,
+      "ranges": 500,
+      "widestWindow": 3
+    },
+    {
+      "depth": 0,
+      "fileBytes": 272451,
+      "layout": "f2 radix-16",
+      "maxProbes": 2,
+      "meanNsInformation": 3.7,
+      "ranges": 500,
+      "widestWindow": 2
+    },
+    {
+      "depth": 0,
+      "fileBytes": 1058883,
+      "layout": "f2 radix-18",
+      "maxProbes": 1,
+      "meanNsInformation": 3.9,
+      "ranges": 500,
+      "widestWindow": 1
+    },
+    {
+      "depth": 1,
+      "fileBytes": 10307,
+      "layout": "f2 rank-64",
+      "maxProbes": 6,
+      "meanNsInformation": 37.5,
+      "ranges": 500,
+      "widestWindow": 63
+    },
+    {
+      "depth": 0,
+      "fileBytes": 36192,
+      "layout": "f1 unindexed",
+      "maxProbes": 12,
+      "meanNsInformation": 91.4,
+      "ranges": 4000,
+      "widestWindow": 4000
+    },
+    {
+      "depth": 0,
+      "fileBytes": 298340,
+      "layout": "f1 radix-16",
+      "maxProbes": 2,
+      "meanNsInformation": 4.8,
+      "ranges": 4000,
+      "widestWindow": 3
+    },
+    {
+      "depth": 0,
+      "fileBytes": 96643,
+      "layout": "f2 radix-12",
+      "maxProbes": 3,
+      "meanNsInformation": 16.1,
+      "ranges": 4000,
+      "widestWindow": 7
+    },
+    {
+      "depth": 0,
+      "fileBytes": 342403,
+      "layout": "f2 radix-16",
+      "maxProbes": 2,
+      "meanNsInformation": 5.9,
+      "ranges": 4000,
+      "widestWindow": 3
+    },
+    {
+      "depth": 0,
+      "fileBytes": 1128835,
+      "layout": "f2 radix-18",
+      "maxProbes": 2,
+      "meanNsInformation": 4.8,
+      "ranges": 4000,
+      "widestWindow": 2
+    },
+    {
+      "depth": 2,
+      "fileBytes": 81347,
+      "layout": "f2 rank-64",
+      "maxProbes": 6,
+      "meanNsInformation": 58.7,
+      "ranges": 4000,
+      "widestWindow": 63
+    },
+    {
+      "depth": 0,
+      "fileBytes": 288192,
+      "layout": "f1 unindexed",
+      "maxProbes": 15,
+      "meanNsInformation": 90.2,
+      "ranges": 32000,
+      "widestWindow": 32000
+    },
+    {
+      "depth": 0,
+      "fileBytes": 550340,
+      "layout": "f1 radix-16",
+      "maxProbes": 3,
+      "meanNsInformation": 17.7,
+      "ranges": 32000,
+      "widestWindow": 6
+    },
+    {
+      "depth": 0,
+      "fileBytes": 656643,
+      "layout": "f2 radix-12",
+      "maxProbes": 5,
+      "meanNsInformation": 42.9,
+      "ranges": 32000,
+      "widestWindow": 26
+    },
+    {
+      "depth": 0,
+      "fileBytes": 902403,
+      "layout": "f2 radix-16",
+      "maxProbes": 3,
+      "meanNsInformation": 17.7,
+      "ranges": 32000,
+      "widestWindow": 6
+    },
+    {
+      "depth": 0,
+      "fileBytes": 1688835,
+      "layout": "f2 radix-18",
+      "maxProbes": 3,
+      "meanNsInformation": 10.4,
+      "ranges": 32000,
+      "widestWindow": 4
+    },
+    {
+      "depth": 3,
+      "fileBytes": 659843,
+      "layout": "f2 rank-64",
+      "maxProbes": 6,
+      "meanNsInformation": 90.7,
+      "ranges": 32000,
+      "widestWindow": 63
+    },
+    {
+      "depth": 0,
+      "fileBytes": 1080192,
+      "layout": "f1 unindexed",
+      "maxProbes": 17,
+      "meanNsInformation": 112.2,
+      "ranges": 120000,
+      "widestWindow": 120000
+    },
+    {
+      "depth": 0,
+      "fileBytes": 1342340,
+      "layout": "f1 radix-16",
+      "maxProbes": 4,
+      "meanNsInformation": 31.1,
+      "ranges": 120000,
+      "widestWindow": 12
+    },
+    {
+      "depth": 0,
+      "fileBytes": 2416643,
+      "layout": "f2 radix-12",
+      "maxProbes": 7,
+      "meanNsInformation": 48.5,
+      "ranges": 120000,
+      "widestWindow": 79
+    },
+    {
+      "depth": 0,
+      "fileBytes": 2662403,
+      "layout": "f2 radix-16",
+      "maxProbes": 4,
+      "meanNsInformation": 30.3,
+      "ranges": 120000,
+      "widestWindow": 12
+    },
+    {
+      "depth": 0,
+      "fileBytes": 3448835,
+      "layout": "f2 radix-18",
+      "maxProbes": 3,
+      "meanNsInformation": 19.5,
+      "ranges": 120000,
+      "widestWindow": 5
+    },
+    {
+      "depth": 3,
+      "fileBytes": 2419843,
+      "layout": "f2 rank-64",
+      "maxProbes": 6,
+      "meanNsInformation": 87.1,
+      "ranges": 120000,
+      "widestWindow": 63
+    },
+    {
+      "depth": 0,
+      "fileBytes": 13500192,
+      "layout": "f1 unindexed",
+      "maxProbes": 21,
+      "meanNsInformation": 196.2,
+      "ranges": 1500000,
+      "widestWindow": 1500000
+    },
+    {
+      "depth": 0,
+      "fileBytes": 13762340,
+      "layout": "f1 radix-16",
+      "maxProbes": 6,
+      "meanNsInformation": 73.2,
+      "ranges": 1500000,
+      "widestWindow": 60
+    },
+    {
+      "depth": 0,
+      "fileBytes": 30016643,
+      "layout": "f2 radix-12",
+      "maxProbes": 10,
+      "meanNsInformation": 95.0,
+      "ranges": 1500000,
+      "widestWindow": 764
+    },
+    {
+      "depth": 0,
+      "fileBytes": 30262403,
+      "layout": "f2 radix-16",
+      "maxProbes": 6,
+      "meanNsInformation": 112.7,
+      "ranges": 1500000,
+      "widestWindow": 60
+    },
+    {
+      "depth": 0,
+      "fileBytes": 31048835,
+      "layout": "f2 radix-18",
+      "maxProbes": 5,
+      "meanNsInformation": 41.9,
+      "ranges": 1500000,
+      "widestWindow": 21
+    },
+    {
+      "depth": 4,
+      "fileBytes": 30334275,
+      "layout": "f2 rank-64",
+      "maxProbes": 6,
+      "meanNsInformation": 176.2,
+      "ranges": 1500000,
+      "widestWindow": 63
+    }
+  ],
+  "machine": "aarch64",
+  "measuredFor": {
+    "development": true,
+    "release": "0.223.3"
+  },
+  "policy": {
+    "rules": [
+      {
+        "instructions": 2,
+        "operations": 1,
+        "planeMask": 1,
+        "program": "default",
+        "rule": 1,
+        "text": "deny if listed >= critical"
+      },
+      {
+        "instructions": 2,
+        "operations": 1,
+        "planeMask": 1,
+        "program": "default",
+        "rule": 2,
+        "text": "deny if listed >= high"
+      },
+      {
+        "instructions": 2,
+        "operations": 1,
+        "planeMask": 4,
+        "program": "default",
+        "rule": 3,
+        "text": "log if rpki_unreachable"
+      },
+      {
+        "instructions": 2,
+        "operations": 1,
+        "planeMask": 2,
+        "program": "default",
+        "rule": 4,
+        "text": "log if tor_exit"
+      },
+      {
+        "instructions": 2,
+        "operations": 1,
+        "planeMask": 1,
+        "program": "design-example",
+        "rule": 1,
+        "text": "deny if listed >= critical"
+      },
+      {
+        "instructions": 2,
+        "operations": 1,
+        "planeMask": 1,
+        "program": "design-example",
+        "rule": 2,
+        "text": "deny if listed >= high"
+      },
+      {
+        "instructions": 2,
+        "operations": 1,
+        "planeMask": 4,
+        "program": "design-example",
+        "rule": 3,
+        "text": "log if rpki_unreachable"
+      },
+      {
+        "instructions": 2,
+        "operations": 1,
+        "planeMask": 2,
+        "program": "design-example",
+        "rule": 4,
+        "text": "log if tor_exit"
+      },
+      {
+        "instructions": 2,
+        "operations": 1,
+        "planeMask": 8,
+        "program": "design-example",
+        "rule": 5,
+        "text": "allow if asn in @partners"
+      },
+      {
+        "instructions": 6,
+        "operations": 3,
+        "planeMask": 8,
+        "program": "design-example",
+        "rule": 6,
+        "text": "deny if country in @embargo and rpki != valid"
+      },
+      {
+        "instructions": 5,
+        "operations": 3,
+        "planeMask": 16,
+        "program": "design-example",
+        "rule": 7,
+        "text": "log if proxy or vpn"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 1,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 2,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 3,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 4,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 5,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 6,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 7,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 8,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 9,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 10,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 11,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 12,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 13,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 14,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 15,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 16,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 17,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 18,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 19,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 20,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 21,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 22,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 23,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 24,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 25,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 26,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 27,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 28,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 29,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 30,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 31,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 32,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 33,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 34,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 35,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 36,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 37,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 38,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 39,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 40,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 41,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 42,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 43,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 44,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 45,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 46,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 47,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 48,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 49,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 50,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 51,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 52,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 53,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 54,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 55,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 56,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 57,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 58,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 59,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 60,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 61,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 62,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 63,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 64,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 65,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 66,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 67,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 68,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 69,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 70,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 71,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 72,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 73,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 74,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 75,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 76,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 77,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 78,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 79,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 80,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 81,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 82,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 83,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 84,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 85,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 86,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 87,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 88,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 89,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 90,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 91,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 92,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 93,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 94,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 95,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 96,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 97,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 98,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 99,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 100,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 101,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 102,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 103,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 104,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 105,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 106,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 107,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 108,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 109,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 110,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 111,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 112,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 113,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 114,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 115,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 116,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 117,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 118,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 119,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 120,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 121,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 122,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 123,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 124,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 125,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 126,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 127,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 128,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 129,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 130,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 131,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 132,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 133,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 134,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 135,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 136,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 137,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 138,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 139,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 140,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 141,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 142,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 143,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 144,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 145,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 146,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 147,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 148,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 149,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 150,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 151,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 152,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 153,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 154,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 155,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 156,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 157,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 158,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 159,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 160,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 161,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 162,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 163,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 164,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 165,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 166,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 167,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 168,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 169,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 170,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 171,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 172,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 173,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 174,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 175,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 176,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 177,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 178,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 179,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 180,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 181,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 182,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 183,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 184,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 185,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 186,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 187,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 188,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 189,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 190,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 191,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 192,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 193,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 194,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 195,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 196,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 197,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 198,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 199,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 200,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 201,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 202,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 203,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 204,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 205,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 206,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 207,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 208,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 209,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 210,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 211,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 212,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 213,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 214,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 215,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 216,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 217,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 218,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 219,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 220,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 221,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 222,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 223,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 224,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 225,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 226,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 227,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 228,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 229,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 230,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 231,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 232,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 233,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 234,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 235,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 236,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 237,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 238,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 239,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 240,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 241,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 242,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 243,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 244,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 245,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 246,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 247,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 248,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 249,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 250,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 251,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 252,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 253,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 254,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 255,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst-floor",
+        "rule": 256,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 1,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 2,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 3,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 4,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 5,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 6,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 7,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 8,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 9,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 10,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 11,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 12,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 13,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 14,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 15,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 16,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 17,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 18,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 19,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 20,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 21,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 22,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 23,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 24,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 25,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 26,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 27,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 28,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 29,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 30,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 31,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 32,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 33,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 34,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 35,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 36,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 37,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 38,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 39,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 40,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 41,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 42,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 43,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 44,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 45,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 46,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 47,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 48,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 49,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 50,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 51,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 52,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 53,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 54,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 55,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 56,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 57,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 58,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 59,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 60,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 61,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 62,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 63,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 64,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 65,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 66,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 67,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 68,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 69,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 70,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 71,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 72,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 73,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 74,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 75,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 76,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 77,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 78,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 79,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 80,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 81,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 82,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 83,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 84,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 85,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 86,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 87,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 88,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 89,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 90,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 91,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 92,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 93,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 94,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 95,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 96,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 97,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 98,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 99,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 100,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 101,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 102,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 103,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 104,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 105,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 106,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 107,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 108,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 109,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 110,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 111,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 112,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 113,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 114,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 115,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 116,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 117,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 118,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 119,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 120,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 121,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 122,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 123,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 124,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 125,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 126,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 127,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 26,
+        "operations": 17,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 128,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 129,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 130,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 131,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 132,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 133,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 134,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 135,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 136,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 137,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 138,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 139,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 140,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 141,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 142,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 143,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 144,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 145,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 146,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 147,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 148,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 149,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 150,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 151,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 152,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 153,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 154,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 155,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 156,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 157,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 158,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 159,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 160,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 161,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 162,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 163,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 164,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 165,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 166,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 167,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 168,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 169,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 170,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 171,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 172,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 173,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 174,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 175,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 176,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 177,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 178,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 179,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 180,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 181,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 182,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 183,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 184,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 185,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 186,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 187,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 188,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 189,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 190,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 191,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 192,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 193,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 194,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 195,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 196,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 197,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 198,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 199,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 200,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 201,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 202,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 203,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 204,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 205,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 206,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 207,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 208,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 209,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 210,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 211,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 212,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 213,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 214,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 215,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 216,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 217,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 218,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 219,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 220,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 221,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 222,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 223,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 224,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 225,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 226,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 227,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 228,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 229,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 230,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 231,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 232,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 233,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 234,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 235,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 236,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 237,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 238,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 239,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 240,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 241,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 242,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 243,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 244,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 245,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 246,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 247,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 248,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 249,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 250,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 251,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 252,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 253,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 254,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 255,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      },
+      {
+        "instructions": 23,
+        "operations": 15,
+        "planeMask": 8,
+        "program": "worst",
+        "rule": 256,
+        "text": "deny if asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f or asn in @f"
+      }
+    ],
+    "status": "live",
+    "worstLookups": {
+      "distinctKeys": 3,
+      "equalKeys": 2
+    }
+  },
+  "record": "whisper-edge-bench",
+  "version": 1
+}

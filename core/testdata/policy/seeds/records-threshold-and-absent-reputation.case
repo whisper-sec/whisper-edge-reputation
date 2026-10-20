@@ -1,0 +1,70 @@
+program thr-all-present seeds
+dir mode http/server:c deny
+dir threshold http/server:c high
+run http/server:c
+case thr-all-present.listed-critical
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 0
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor reputation sev=4
+end
+program thr-absent-reputation seeds
+dir mode http/server:c deny
+dir threshold http/server:c high
+run http/server:c
+absent reputation
+case thr-absent-reputation.listed-critical
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 0
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor reputation sev=4
+end
+program thr-absent-routing seeds
+dir mode http/server:c deny
+dir threshold http/server:c high
+run http/server:c
+absent routing
+case thr-absent-routing.listed-critical
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 0
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor reputation sev=4
+end
+program thr-legacy-absent-reputation seeds
+dir mode http/server:c deny
+dir threshold http/server:c high
+run http/server:c
+absent reputation
+legacy
+case thr-legacy-absent-reputation.listed-critical
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 0
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor reputation sev=4
+end
+program written-absent-reputation seeds
+dir mode http/server:c deny
+dir policy http/server:c deny if listed >= high
+run http/server:c
+absent reputation
+case written-absent-reputation.listed-critical
+conf floor 3 0
+conf ctx 3 0
+tenant fresh 1800000000000 0
+addr floor 198.51.100.7
+addr server 198.51.100.7
+flags 0 0
+rec floor reputation sev=4
+end

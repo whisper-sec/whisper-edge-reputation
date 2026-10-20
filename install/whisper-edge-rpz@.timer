@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026, viaGraph B.V.
+[Unit]
+Description=Keep the Whisper edge policy zone %i fresh, on the zone's own SOA timers
+Documentation=https://whisper.online/edge/
+
+[Timer]
+# Every five minutes, which is the zone's SOA RETRY. The script decides whether a fetch is due from
+# the installed zone's own REFRESH and RETRY, so most of these runs ask the network for nothing; the
+# ones that do ask cost a 304 when the feed has not moved.
+OnBootSec=2min
+OnUnitActiveSec=5min
+# A minute of jitter on top, so installations started in the same second drift apart rather than
+# asking in step for ever.
+RandomizedDelaySec=60
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

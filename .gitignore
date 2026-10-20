@@ -1,0 +1,21 @@
+# Build outputs. Each module is compiled from source by the operator against THEIR server, so a
+# committed binary would be both useless to them (wrong nginx version, wrong flags, wrong arch)
+# and a liability to us: a .so in a public repo is an artifact nobody can reproduce from the tree
+# and nobody signed. The three build.sh scripts produce these; the gates consume them.
+*.so
+*.lo
+*.la
+*.slo
+*.o
+.libs/
+# The LSIAPI header is fetched from a pinned release rather than vendored, because OpenLiteSpeed is
+# GPLv3 and this subtree is MIT. `make litespeed-sdk` puts it here.
+litespeed/sdk/
+# Gate scratch space and the compiled test drivers. `make -C core check` and the race driver are
+# built on demand; test_core and race_core are 1,900 and 474 lines of source each, and the binary
+# is of no use to anybody who did not just compile it.
+.testtmp/
+core/test_core
+core/race_core
+core/whisper-edge-summary
+core/whisper-edge-lookup

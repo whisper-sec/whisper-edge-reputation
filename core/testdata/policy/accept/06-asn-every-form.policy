@@ -1,0 +1,1 @@
+policy http/server:a log if asn == as64496 or asn == AS64497 or asn == As64498 or asn == 64499 or asn == 0 or asn == as0 or asn == 4294967294 or asn == undetermined

@@ -1,0 +1,10 @@
+mode http/server:a deny
+policy http/server:a deny  if listed >= critical
+policy http/server:a deny  if listed >= high
+policy http/server:a log   if rpki_unreachable
+policy http/server:a log   if tor_exit
+policy http/server:a allow if asn in @partners
+policy http/server:a deny  if country in @embargo and rpki != valid
+policy http/server:a log   if proxy or vpn
+set http/server:a @embargo   KP SY CU
+set http/server:a @partners  AS64496 AS64497

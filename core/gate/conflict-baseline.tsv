@@ -1,0 +1,36 @@
+# conflict-baseline.tsv - each module row's 8-way D1 misses a request at its best of four placements
+# and at placement 0, the production link (cachegrind-gate.sh's conflict row); each is refused above
+# itself plus exactly three misses a request, and more than three below itself.
+# arch	compiler	slot	best_8way_misses	prod_8way_misses
+x86_64	gcc	module-default	5.560	5.560
+x86_64	gcc	module-default-tenant	6.246	6.246
+x86_64	gcc	module-export	22.187	22.508
+x86_64	gcc	module-export-prestage	21.121	21.139
+x86_64	gcc	module-export-all	20.617	24.398
+x86_64	gcc	module-var-prerewrite	12.517	12.566
+x86_64	gcc	module-var-prerewrite@1	12.801	12.840
+x86_64	gcc	module-worst	5.252	5.252
+x86_64	clang	module-default	5.555	5.555
+x86_64	clang	module-default-tenant	6.242	6.242
+x86_64	clang	module-export	21.765	21.811
+x86_64	clang	module-export-prestage	19.202	19.202
+x86_64	clang	module-export-all	21.102	25.507
+x86_64	clang	module-var-prerewrite	12.451	12.451
+x86_64	clang	module-var-prerewrite@1	12.775	12.775
+x86_64	clang	module-worst	5.252	5.252
+aarch64	gcc	module-default	5.552	5.552
+aarch64	gcc	module-default-tenant	6.237	6.237
+aarch64	gcc	module-export	26.002	27.130
+aarch64	gcc	module-export-prestage	24.133	25.134
+aarch64	gcc	module-export-all	34.976	48.709
+aarch64	gcc	module-var-prerewrite	19.716	19.716
+aarch64	gcc	module-var-prerewrite@1	14.720	14.720
+aarch64	gcc	module-worst	5.252	5.252
+aarch64	clang	module-default	5.550	5.550
+aarch64	clang	module-default-tenant	6.237	6.237
+aarch64	clang	module-export	22.660	22.660
+aarch64	clang	module-export-prestage	19.249	19.251
+aarch64	clang	module-export-all	25.976	32.350
+aarch64	clang	module-var-prerewrite	16.080	16.080
+aarch64	clang	module-var-prerewrite@1	14.691	14.691
+aarch64	clang	module-worst	5.252	5.252
