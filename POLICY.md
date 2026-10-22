@@ -1,4 +1,113 @@
-# The edge policy language
+# The rule language
+
+**Write firewall rules about who is asking, not just their IP address.**
+
+```
+allow if asn in @partners
+deny  if listed >= high
+deny  if rpki == invalid
+log   if tor_exit or vpn
+```
+
+Every rule is `action if condition`. The first rule that matches decides; if none matches, the request is allowed.
+
+## Rules in five minutes
+
+### The three actions
+
+| action | what happens |
+|---|---|
+| `allow` | let it through, and stop checking |
+| `deny` | answer 403, and log why |
+| `log` | let it through, and log what you saw |
+
+### What you can ask about an address
+
+| ask | means | example |
+|---|---|---|
+| `listed` | rated on a cited public blocklist: `none`, `low`, `medium`, `high`, `critical` | `deny if listed >= high` |
+| `inferred` | flagged by our graph without a public listing behind it | `log if inferred` |
+| `rpki` | is the route it came from valid: `valid`, `invalid`, `not-found`, `unrouted` | `deny if rpki == invalid` |
+| `rpki_unreachable` | no valid route reaches it at all | `deny if rpki_unreachable` |
+| `asn` | the network it is announced from | `allow if asn in @partners` |
+| `asn_rep` | that network's reputation: `reputable` to `highly_suspicious` | `log if asn_rep == highly_suspicious` |
+| `country` | where it is routed from | `deny if country in @blocked` |
+| `tor_exit`, `proxy`, `vpn` | anonymising services | `log if tor_exit or proxy or vpn` |
+| `c2`, `phishing`, `bruteforce`, `scanner`, `spam`, `state_actor` | known attack infrastructure | `deny if c2 or phishing` |
+| `anycast`, `moas` | served from many places, or announced by more than one network | `log if moas` |
+| `rir`, `registry_country`, `registry_rir` | who registered the address, and where | `log if registry_country in @watch` |
+| `tenant_allow`, `tenant_deny` | your own lists, delivered to every server you run | `allow if tenant_allow` |
+
+Combine them with `and`, `or`, `not` and brackets. Name a group once with a set: `@partners AS64496 AS64497`, `@blocked KP SY CU`.
+
+`listed`, `inferred`, `tor_exit` and `rpki_unreachable` need no key. The rest come with a free key; see [DATA.md](DATA.md).
+
+### Recipes
+
+Every one of these is checked by the real compiler.
+
+**Let your partners in, whatever else is true:**
+```nginx
+whisper_edge_set    "@partners AS64496 AS64497";
+whisper_edge_policy "allow if asn in @partners";      # first, because the first match decides
+```
+
+**Block what is publicly listed, and route hijacks:**
+```nginx
+whisper_edge_policy "deny if listed >= high";
+whisper_edge_policy "deny if rpki == invalid";
+```
+
+**Keep attack infrastructure out:**
+```nginx
+whisper_edge_policy "deny if c2 or phishing or bruteforce";
+```
+
+**Watch anonymisers without blocking them:**
+```nginx
+whisper_edge_policy "log if tor_exit or proxy or vpn";
+```
+
+**Be stricter on your login page than on the rest of the site:**
+```nginx
+location /login {
+    whisper_edge_policy "deny if country in @blocked";
+    whisper_edge_policy "log  if listed >= medium";
+}
+```
+
+**Use your own lists, on every server at once:**
+```nginx
+whisper_edge_policy "allow if tenant_allow";
+whisper_edge_policy "deny  if tenant_deny";
+```
+
+### It stops you from hurting yourself
+
+Mistakes are caught when your server loads its configuration, never while it serves. For example, this rule would block everyone the moment the routing data was missing, so it is refused, with the reason and the fix:
+
+```
+refused policy http/server:a/location:/api rule 1, line 1, column 17: near "is": rule 1: "is unknown"
+here lets rule 1 deny exactly when the routing plane is missing or stale; that is a fail-closed rule.
+Use it in a log rule, or in an allow rule that no later deny depends on.
+```
+
+And whatever you write, some things are never blocked: DNS root and TLD servers, public resolvers, certificate authorities and ACME, NTP, and registry infrastructure ([the list](hold-harmless.txt)).
+
+### Try a rule before you use it
+
+```sh
+whisper-edge-lookup --policy my-rules.conf 192.0.2.10
+```
+
+shows which rule would fire for that address, and why.
+
+---
+
+# The specification
+
+The rest of this document is the formal specification: the grammar, the compiled program, the evaluator and how both implementations are held to one reading. You do not need it to write rules.
+
 
 This document specifies the policy language the edge modules run: its grammar, the meaning of every
 literal, the refusals and their exact wording, the compiled program's bytes, the evaluator's order and

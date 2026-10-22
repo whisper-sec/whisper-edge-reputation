@@ -1,191 +1,95 @@
-# Whisper edge reputation
+<p align="center">
+  <img src="docs/banner.svg" alt="Whisper edge: rules for your web server that know who is asking. Listed, misrouted and malicious networks stop at the fence; everyone else walks through." width="100%">
+</p>
 
-Block the networks that reputable third parties have listed, with the listing shown. Every entry has a
-citable listing behind it, such as a Spamhaus SBL id or a DROP entry you can look up yourself. It is
-free, keyless and needs no account. It runs as a module in nginx, Apache httpd and OpenLiteSpeed, and
-as a Response Policy Zone for BIND and Unbound.
+<p align="center">
+  <b>Firewall rules for your web server that know who owns, routes and has flagged every address on the internet.</b><br>
+  For nginx, Apache, OpenLiteSpeed, BIND and Unbound. Free, MIT, and nothing leaves your server.
+</p>
 
-## Quick start
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-7c3aed.svg" alt="MIT"></a>
+  <a href="https://whisper.online/edge/"><img src="https://img.shields.io/badge/data-live%2C%20signed%2C%20hourly-5b21b6.svg" alt="Data: live, signed, hourly"></a>
+</p>
 
-The installer configures modules that are already built, so build the one for your server first
-([details](REFERENCE.md#building-the-modules)):
+## Say what you mean
 
-```
-git clone https://github.com/whisper-sec/whisper-edge-reputation
-cd whisper-edge-reputation
-./nginx/build.sh && sudo ./nginx/build.sh --install    # or apache/build.sh, litespeed/build.sh
-sudo ./install/install.sh
-```
+Most firewalls only know an IP address. Whisper edge knows what is behind it, so your rules can say what you actually mean:
 
-What the installer does:
+```nginx
+whisper_edge_policy "allow if asn in @partners";      # your partners always get in
+whisper_edge_policy "deny  if listed >= high";        # on a cited public blocklist
+whisper_edge_policy "deny  if rpki == invalid";       # announced by a network that does not hold it
+whisper_edge_policy "deny  if c2 or phishing";        # known attack infrastructure
+whisper_edge_policy "log   if tor_exit or vpn";       # see it, do not block it
 
-- finds the servers on the host, the module each one has and the user each one runs as;
-- fetches the signing key, refuses it unless its hash is the one pinned in the script, and verifies
-  every plane the default policy reads before installing it, with a refresh timer for each;
-- writes the default policy into each server's own configuration;
-- runs that server's own configuration test, and reloads only when the test passes. If your
-  configuration already fails its test, nothing is written;
-- reads the module's own status after the reload and says whether the policy is running;
-- ends with an `undo` block: one line per server to paste, which takes it all back.
-
-`sudo ./install/install.sh --help` lists every option. The full walk-through, with a real run, is in
-[REFERENCE.md](REFERENCE.md#start-here-one-command).
-
-### Without the installer
-
-The module on its own blocks nothing until you tell it to. Its default mode is `log`, which writes what
-it would have done and lets the request through. For nginx:
-
-```
-load_module modules/ngx_http_whisper_edge_module.so;              # main level
-
-http {
-    whisper_edge_snapshot /var/lib/whisper-edge/snapshot.bin;
-    whisper_edge_mode log;                                        # deny, once you have read the log
+location /login {
+    whisper_edge_policy "deny if country in @blocked and not asn in @partners";
 }
 ```
 
-`whisper-edge-refresh` fetches and verifies `snapshot.bin`; run it from a timer to keep the file
-fresh ([how](REFERENCE.md#getting-the-snapshot-and-keeping-it-fresh)). Worked configurations are in
-[`nginx/example.conf`](nginx/example.conf), [`apache/example.conf`](apache/example.conf) and
-[`litespeed/example.conf`](litespeed/example.conf).
+The first rule that matches decides. Rules work per site, per path or per directory, and they are checked when your server loads its config, with the line, the column and a fix if something is wrong. Twenty-five facts about every address: who owns it, where it is routed from, whether that route is valid, its reputation, whether it is a Tor exit, a proxy or attack infrastructure, and your own lists. [The rule language](POLICY.md)
 
-## How it works
+## Every block comes with a receipt
+
+Ask about any address, on your own machine. Real output from today's data:
 
 ```
-https://whisper.online/edge/      a signed manifest and one file per data plane
-        |
-        |  whisper-edge-refresh, on a timer: fetch, verify the signature, rename into place
-        v
-/var/lib/whisper-edge/*.bin
-        |
-        |  the module's own thread re-reads each plane, checks it in full, swaps it in
-        v
-each request: look up the client address, run the policy, then allow, log or deny
+$ whisper-edge-lookup 2.26.75.1 | grep '^decision'
+decision deny enforce=yes step=sugar rule=1 text="deny if listed >= high"
 ```
 
-- The policy is compiled once, when the server reads its configuration. On nginx and Apache a bad
-  policy is a configuration error, reported with the rule, the line, the column and a fix.
-- At request time the server talks to nothing. It reads files it has already verified, and the lookup
-  makes no system call, takes no lock and allocates nothing.
-- It fails open. A missing plane allows everything, a corrupt one is refused and the last good one
-  keeps serving, and one past its own validity window stops enforcing.
+Every block your server makes writes the rule and the evidence behind it to your own error log. Nothing is a black box, and if we ever get an address wrong you can see exactly why.
 
-The planes are described in [DATA.md](DATA.md), the policy language in [POLICY.md](POLICY.md), and the
-feed itself in [ARCHITECTURE.md](ARCHITECTURE.md).
+## Install
 
-## What it blocks, and what it never blocks
+```sh
+git clone https://github.com/whisper-sec/whisper-edge-reputation && cd whisper-edge-reputation
+./nginx/build.sh && sudo ./nginx/build.sh --install     # or ./apache/build.sh, ./litespeed/build.sh
+sudo ./install/install.sh
+```
 
-| | what happens |
-|---|---|
-| a cited listing: Spamhaus DROP, or another listing at high or above | denied by the default policy on nginx and Apache |
-| a Tor exit | logged, let through |
-| an address no valid route covers | logged, let through |
-| a verdict inferred from graph structure, with no citable listing | ignored unless you opt in |
-| OpenLiteSpeed, any of the above | logged until you run the `--arm-deny` line the report prints |
+The installer finds your servers, checks the signed data, adds a sensible default policy, runs your server's own config test and reloads only if it passes. It ends by printing the lines that undo everything. Add `--dry-run` to see what it would change first. [Full guide](REFERENCE.md#start-here-one-command)
 
-On nginx and Apache the installer's policy answers 403 to a source on a cited listing, and to nothing else.
+## Safe by design
 
-Some things are never blocked, whatever our data says, because blocking them breaks far more than one
-site:
+- **It never breaks the internet around you.** DNS root and TLD servers, public resolvers, certificate authorities and ACME, NTP, RPKI and registry infrastructure are never blocked, whatever any rule says. [The list](hold-harmless.txt)
+- **It fails open.** If the data is missing or out of date, your site keeps serving.
+- **It only blocks what it can back up.** Each build publishes what it refused to block and why: [`snapshot.json`](https://whisper.online/edge/snapshot.json).
+- **It costs nothing per request.** Decisions are a lookup in local memory. Your server talks to nobody while it serves.
 
-- the DNS root servers, and the TLD and registry nameservers;
-- the major public resolvers, and NTP;
-- CA, ACME, OCSP and CRL endpoints, and RPKI repositories;
-- RIR and IANA service infrastructure;
-- reserved, documentation and special-purpose space.
+## How it compares
 
-The full list is [`hold-harmless.txt`](hold-harmless.txt), each entry with the date and the method it
-was measured by. The reasoning is in [REFERENCE.md](REFERENCE.md#what-it-will-never-block), and the
-known limits are in [Honest limits](REFERENCE.md#honest-limits).
+| | Whisper edge | IP list in your firewall | fail2ban | CrowdSec | Cloudflare and other proxies |
+|---|---|---|---|---|---|
+| Rules about owner, routing and reputation | ✅ | no | no | partly | ✅ |
+| Works before the first attack | ✅ | ✅ | reacts to your logs | ✅ | ✅ |
+| Says why it blocked | ✅ the rule and the evidence | no | the matching log lines | the scenario or list name | the rule that fired |
+| Per site and per path rules | ✅ | no | per jail | partly | ✅ |
+| Your traffic stays on your server | ✅ | ✅ | ✅ | ✅ | no, it flows through them |
+| Sends nothing about your traffic out | ✅ | ✅ | ✅ | shares attack signals by default | no |
+| Also covers SSH and other services | no | ✅ | ✅ | ✅ | with Tunnel or Spectrum |
 
-## Per server
+It works well alongside fail2ban or CrowdSec. It is not a DDoS shield: for floods, use an upstream provider.
 
-**nginx.** nginx has no stable module ABI, so `nginx/build.sh` builds against the same source version
-and the same configure flags as your running binary, and reads both off it. Control is per `location`,
-and the verdict is `$whisper_edge_verdict` for your access log.
-[Build](REFERENCE.md#nginx).
+## Where it runs
 
-**Apache httpd.** `apache/build.sh` uses `apxs`, which already knows your build's paths and flags.
-Control is per `<Location>` or `<Directory>`. If `mod_cache` is loaded, set `CacheQuickHandler off`, or a
-cached page can reach a listed client before any check runs; the configuration test warns about it.
-[Build](REFERENCE.md#apache-httpd).
+**nginx**, **Apache httpd** and **OpenLiteSpeed** as a native module. For a **DNS resolver** (BIND, Unbound), the same data ships as a signed policy zone that keeps the people behind your resolver away from listed networks: see [`rpz/`](rpz/README.md).
 
-**OpenLiteSpeed and LiteSpeed.** A real LSIAPI module, not an Apache module. Control is per virtual
-host. There is no configuration test, so the installer starts it in `log` and you arm `deny` yourself.
-[Build](REFERENCE.md#openlitespeed--litespeed).
+## Questions
 
-All three take the same directives ([table](REFERENCE.md#the-directives-for-reference)) and share one
-core in C. A side-by-side of what each server gives you is in
-[REFERENCE.md](REFERENCE.md#the-three-servers-and-exactly-what-each-one-gives-you).
+**Is it really free?** Yes. Blocking listed networks needs no key and no account. A free key adds routing, threat and anonymiser data, and your own allow and deny lists on every server you run: [whisper.security](https://whisper.security).
 
-## For a resolver
+**Does it phone home?** No. It downloads public, signed files every hour. Every decision is made on your server.
 
-The same policy ships as a Response Policy Zone, which protects every device behind the resolver.
-`rpz.whisper.online` is the reputation zone; `rpz-rpki-unreachable.whisper.online` covers answers no
-valid route covers and loads log-only. The installer fetches each zone, verifies its signature, checks
-it with `named-checkzone`, installs it under named's own directory and keeps it current with a timer.
-It writes nothing in named's configuration: it prints the block for you to add. Unbound fetches the
-zone itself.
+**I blocked someone by mistake.** Run `whisper-edge-lookup <address>` to see why, then tell us at `abuse@whisper.security`.
 
-Two things to know first: a zone blocks a whole name, not one address, and BIND does not rewrite
-answers for clients that ask for DNSSEC unless you set `break-dnssec`. The zone files and the paste are
-in [`rpz/README.md`](rpz/README.md); BIND, Unbound and the other resolvers are in
-[REFERENCE.md](REFERENCE.md#for-a-resolver-as-a-response-policy-zone).
+**How do I remove it?** Paste the undo lines the installer printed.
 
-On a serverless runtime that cannot load a module, use [`whisper-edge`](https://github.com/whisper-sec/whisper-edge)
-(`npm i whisper-edge`) in your handler instead.
+## Learn more
 
-## FAQ
+[The rule language](POLICY.md) · [Full guide](REFERENCE.md) · [The data](DATA.md) · [How it works](ARCHITECTURE.md) · [Security](SECURITY.md)
 
-**Does it phone home?** No. At request time the module reads local files and talks to nothing. The only
-network traffic is the refresh downloading the published files from `whisper.online/edge/`, which
-sends no key unless you enrol one, and `whisper-edge-summary` counts your blocks on the host with nothing leaving it.
-[Architecture](ARCHITECTURE.md#the-shape).
+---
 
-**What happens if the feed is down?** It fails open. The planes already on disk keep serving until
-their own validity window ends, then the module stops enforcing and allows everything. No code path
-denies a request on missing or bad data. [Details](REFERENCE.md#it-fails-open-always).
-
-**I am behind a proxy or a CDN.** If your server already trusts a proxy on the same box (nginx
-`realip`, Apache `mod_remoteip`), your policy judges the client it names. To have the floor, the rules every context runs first, judge
-that client too, name the proxy with `whisper_edge_trusted_proxy` and `whisper_edge_trusted_header`.
-Behind a caching proxy or a CDN, the module judges only the requests that reach it.
-[Details](REFERENCE.md#behind-a-proxy-on-the-same-box).
-
-**What does it cost per request?** A verdict is a lookup in a memory-mapped file: no system call, no
-lock, no allocation, checked by disassembling the compiled lookup rather than asserted. The worst case
-for any address is published with every build in `/edge/snapshot.json`.
-[Details](REFERENCE.md#start-here-one-command).
-
-**How do I undo it?** Paste the lines from the `undo` block the installer printed: one per server, and
-one for the shared parts. Each server is left serving its previous configuration.
-[Details](REFERENCE.md#start-here-one-command).
-
-**Can I see why an address was blocked?** Yes. Every deny and every would-deny writes a line to your
-error log with the rule and the listing behind it, such as the Spamhaus SBL id. Or ask the reader
-directly: `whisper-edge-lookup /var/lib/whisper-edge/snapshot.bin {your-address}`. If we got
-your network wrong, write to `abuse@whisper.security`. [SECURITY.md](SECURITY.md).
-
-**What is the licence?** The code is MIT ([LICENSE](LICENSE), and why: [LICENSE.md](LICENSE.md)). The
-data is free to use with no account and no key; if you redistribute it, say where and when you
-fetched it.
-
-**What does a key add?** Your own allow and deny lists, delivered to every edge you run as a tenant
-plane, and a faster poll. The module is the same binary with or without a key. If the Whisper CLI is
-logged in on the machine, the installer enrols it by itself.
-[Details](REFERENCE.md#with-a-key-your-own-tenant-plane).
-
-## Documentation
-
-- [REFERENCE.md](REFERENCE.md): the full manual. Installing, every server, the resolver, the
-  directives and tools, and how we check our work.
-- [POLICY.md](POLICY.md): the policy language, every refusal and every limit.
-- [DATA.md](DATA.md): every data plane, its source, its cadence and why a plane is withheld.
-- [ARCHITECTURE.md](ARCHITECTURE.md): how the feed is built, signed and served.
-- [SECURITY.md](SECURITY.md): false positives, and reporting a vulnerability.
-- [core/FORMAT.md](core/FORMAT.md): the byte-exact plane format.
-- [rpz/README.md](rpz/README.md): the policy zones.
-- [`nginx/example.conf`](nginx/example.conf), [`apache/example.conf`](apache/example.conf),
-  [`litespeed/example.conf`](litespeed/example.conf): worked configurations.
-- [LICENSE](LICENSE) and [LICENSE.md](LICENSE.md).
+<sub>MIT licensed and free forever. Built by <a href="https://whisper.security">Whisper Security</a>, who map how the internet's networks, names and certificates connect, in one graph of about 47 billion objects.</sub>
