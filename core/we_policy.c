@@ -1433,7 +1433,7 @@ static int32_t parse_unary(ps_t *s, uint32_t depth)
     if (t->type == TK_ATTR) {
         return parse_atom(s);
     }
-    fail_tok(s->c, "parsing", "an unknown attribute or word", s->d, t, "the attributes are listed in the README",
+    fail_tok(s->c, "parsing", "an unknown attribute or word", s->d, t, "the attributes are listed in POLICY.md",
              "an unknown attribute or word");
     return -1;
 }

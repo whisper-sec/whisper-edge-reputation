@@ -1248,15 +1248,15 @@ build.
 
 ### 3.8 The hold-harmless table
 
-`hold-harmless.txt` holds 263 entries (IPv4 145, IPv6 118), 248 of them distinct (IPv4 139, IPv6
-109), and 190 ranges once merged (IPv4 110, IPv6 80), mostly prefixes. A linear scan would be the
+`hold-harmless.txt` holds 265 entries (IPv4 145, IPv6 120), 250 of them distinct (IPv4 139, IPv6
+111), and 192 ranges once merged (IPv4 110, IPv6 82), mostly prefixes. A linear scan would be the
 largest term in the default policy's cost, so `gen-hold-harmless.py` merges the entries at generation
 into sorted, non-overlapping `[start, end]` ranges per family (`we_hold_harmless.h`, regenerated with
 `make hold-harmless`, never by hand), and the compiler lays each family out as `FORMAT.md` §4.2's rank
 structure with the **stride equal to one node's capacity** (16 keys at 32 bits, 4 at 128 bits): the
 descent reads one 64-byte node per level, the window is one line, the end check one line, so the lookup
 costs **d + 2 lines** where d is the smallest integer with `(B+1)^d ≥ m`. For today's file that is **3
-lines for IPv4** (110 merged ranges, m = 7, d = 1) and **4 for IPv6** (80 merged ranges, m = 20, d =
+lines for IPv4** (110 merged ranges, m = 7, d = 1) and **4 for IPv6** (82 merged ranges, m = 21, d =
 2), pinned by row HH1 against the generated header. The lookup is the force-inlined `we_find4` /
 `we_find6` unchanged: they honour any power-of-two span and shift from the descriptor; only the
 **loader** refuses a rank parameter other than 6 and 5, and the loader never sees this table
@@ -1976,7 +1976,7 @@ the two implementations read each one the same way. Each is normative.
        ASN set of `undetermined` alone is an EQ32), each table rounded up to 64, then the payloads (a
        country bitmap as 128, an S+ tree as 64 per node) and, in a FLOOR program, the hold-harmless
        arrays (section 3.8): a 64-byte header, per family the merged starts and ends rounded up to 64
-       each and the S-tree's nodes, from the same hold-harmless.txt this file reads (3,968 bytes today).
+       each and the S-tree's nodes, from the same hold-harmless.txt this file reads (4,096 bytes today).
        The hold-harmless arrays count because a floor carries them in its block: a floor of 141 rules
        fits 256 KiB without them and not with them, and testdata/policy/adversarial/h1, h2 and h3 hold
        that boundary.

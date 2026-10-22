@@ -532,7 +532,7 @@ blocked this?" is in your own logs rather than in a support ticket:
 The access-log line is from `litespeed/litespeed-gate.sh`, running the module inside a real
 OpenLiteSpeed, which is why the peer is the loopback and the judged address (`floor=`) is the gate's
 client behind its trusted proxy. That client is a real address because it has to be: on OpenLiteSpeed
-the floor judges the client itself, every IPv4 documentation, benchmarking and private range is in
+the floor judges the client itself, every documentation, benchmarking and private range is in
 the hold-harmless set ([`hold-harmless.txt`](hold-harmless.txt)), and a hold-harmless client is exempt
 before any rule runs, so the gate's listed client must be global unicast space. 153.153.153.153 is in
 someone else's network and on no Spamhaus list; it is `high` only because the gate's own fixture
@@ -762,7 +762,7 @@ not in it, whatever our data says:
   and a reputation feed exempting its own customers' traffic is not a feed. Our agents are subject to
   it like anybody's.
 
-The full list is [`hold-harmless.txt`](hold-harmless.txt), 248 distinct prefixes, each with the date and method
+The full list is [`hold-harmless.txt`](hold-harmless.txt), 250 distinct prefixes, each with the date and method
 it was measured - including the registry entries where writing the file from memory got four of
 thirteen wrong, which is why every line now cites how it was checked.
 
@@ -871,7 +871,7 @@ everything. A corrupt one is refused at load and the previous one keeps serving.
 own validity window - the bound travels inside the file, so we cannot be left enforcing month-old data
 by a config value somebody forgot - stops enforcing and allows everything.
 
-That is checked rather than asserted: `make -C core check` runs 67,989,865 cases, including single-bit
+That is checked rather than asserted: `make -C core check` runs 67,989,881 cases, including single-bit
 corruptions across a valid snapshot's body - every one refused - and a set of hostile snapshots built
 byte by byte with valid digests, because a mutation of a good file cannot express a hostile offset and
 that is exactly where the bugs were. Most of the count is one comparison per lookup: the lookup's

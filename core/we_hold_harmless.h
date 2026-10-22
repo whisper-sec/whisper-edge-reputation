@@ -10,14 +10,14 @@
 
 #include <stdint.h>
 
-/* 263 entries in the source (IPv4 145, IPv6 118), 248 distinct (IPv4 139, IPv6 109). */
-#define WE_HH_SOURCE_ENTRIES 263u
-#define WE_HH_SOURCE_DISTINCT 248u
+/* 265 entries in the source (IPv4 145, IPv6 120), 250 distinct (IPv4 139, IPv6 111). */
+#define WE_HH_SOURCE_ENTRIES 265u
+#define WE_HH_SOURCE_DISTINCT 250u
 /* merged ranges, and the rank structure's windows (stride 16 at 32 bits, 4 at 128) and depth */
 #define WE_HH_V4_COUNT 110u
-#define WE_HH_V6_COUNT 80u
+#define WE_HH_V6_COUNT 82u
 #define WE_HH_V4_WINDOWS 7u
-#define WE_HH_V6_WINDOWS 20u
+#define WE_HH_V6_WINDOWS 21u
 #define WE_HH_V4_DEPTH 1u
 #define WE_HH_V6_DEPTH 2u
 /* the lines a lookup at the maximum outcome class reads: depth + window + end */
@@ -139,13 +139,14 @@ static const uint32_t we_hh_v4[110][2] = {
 };
 
 /* [start_hi, start_lo, end_hi, end_lo]: the 128-bit bounds as two 64-bit halves */
-static const uint64_t we_hh_v6[80][4] = {
+static const uint64_t we_hh_v6[82][4] = {
     { 0x0000000000000000ull, 0x0000000000000000ull, 0x0000000000000000ull, 0x0000000000000001ull },  /* :: - ::1 */
     { 0x0000000000000000ull, 0x0000ffff00000000ull, 0x0000000000000000ull, 0x0000ffffffffffffull },  /* ::ffff:0:0 - ::ffff:ffff:ffff */
     { 0x0064ff9b00000000ull, 0x0000000000000000ull, 0x0064ff9b00000000ull, 0x00000000ffffffffull },  /* 64:ff9b:: - 64:ff9b::ffff:ffff */
     { 0x0064ff9b00010000ull, 0x0000000000000000ull, 0x0064ff9b0001ffffull, 0xffffffffffffffffull },  /* 64:ff9b:1:: - 64:ff9b:1:ffff:ffff:ffff:ffff:ffff */
     { 0x0100000000000000ull, 0x0000000000000000ull, 0x0100000000000000ull, 0xffffffffffffffffull },  /* 100:: - 100::ffff:ffff:ffff:ffff */
     { 0x2001000000000000ull, 0x0000000000000000ull, 0x20010000ffffffffull, 0xffffffffffffffffull },  /* 2001:: - 2001:0:ffff:ffff:ffff:ffff:ffff:ffff */
+    { 0x2001000200000000ull, 0x0000000000000000ull, 0x200100020000ffffull, 0xffffffffffffffffull },  /* 2001:2:: - 2001:2:0:ffff:ffff:ffff:ffff:ffff */
     { 0x2001002000000000ull, 0x0000000000000000ull, 0x2001002fffffffffull, 0xffffffffffffffffull },  /* 2001:20:: - 2001:2f:ffff:ffff:ffff:ffff:ffff:ffff */
     { 0x2001024000000000ull, 0x0000000000000000ull, 0x200102400000ffffull, 0xffffffffffffffffull },  /* 2001:240:: - 2001:240:0:ffff:ffff:ffff:ffff:ffff */
     { 0x2001050000010000ull, 0x0000000000000000ull, 0x200105000002ffffull, 0xffffffffffffffffull },  /* 2001:500:1:: - 2001:500:2:ffff:ffff:ffff:ffff:ffff */
@@ -217,6 +218,7 @@ static const uint64_t we_hh_v6[80][4] = {
     { 0x2a05f48014000ab7ull, 0x00000000fe45010cull, 0x2a05f48014000ab7ull, 0x00000000fe45010cull },  /* 2a05:f480:1400:ab7::fe45:10c - 2a05:f480:1400:ab7::fe45:10c */
     { 0x2a0698c131050000ull, 0x0000000000000000ull, 0x2a0698c13106ffffull, 0xffffffffffffffffull },  /* 2a06:98c1:3105:: - 2a06:98c1:3106:ffff:ffff:ffff:ffff:ffff */
     { 0x2a1050c000000000ull, 0x000000000ad100ffull, 0x2a1050c000000000ull, 0x000000000ad100ffull },  /* 2a10:50c0::ad1:ff - 2a10:50c0::ad1:ff */
+    { 0x3fff000000000000ull, 0x0000000000000000ull, 0x3fff0fffffffffffull, 0xffffffffffffffffull },  /* 3fff:: - 3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff */
     { 0xfc00000000000000ull, 0x0000000000000000ull, 0xfdffffffffffffffull, 0xffffffffffffffffull },  /* fc00:: - fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff */
     { 0xfe80000000000000ull, 0x0000000000000000ull, 0xfebfffffffffffffull, 0xffffffffffffffffull },  /* fe80:: - febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff */
     { 0xff00000000000000ull, 0x0000000000000000ull, 0xffffffffffffffffull, 0xffffffffffffffffull },  /* ff00:: - ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff */

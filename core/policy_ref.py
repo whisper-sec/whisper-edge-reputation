@@ -259,7 +259,7 @@ are settled here and read the same way by the C compiler.
        ASN set of `undetermined` alone is an EQ32), each table rounded up to 64, then the payloads (a
        country bitmap as 128, an S+ tree as 64 per node) and, in a FLOOR program, the hold-harmless
        arrays (section 3.8): a 64-byte header, per family the merged starts and ends rounded up to 64
-       each and the S-tree's nodes, from the same hold-harmless.txt this file reads (3,968 bytes today).
+       each and the S-tree's nodes, from the same hold-harmless.txt this file reads (4,096 bytes today).
        The hold-harmless arrays count because a floor carries them in its block: a floor of 141 rules
        fits 256 KiB without them and not with them, and testdata/policy/adversarial/h1, h2 and h3 hold
        that boundary.
@@ -941,7 +941,7 @@ class Parser(object):
         if t.kind == 'attr':
             return self.atom()
         raise refuse_tok('parsing', 'an unknown attribute or word', 'an unknown attribute or word', t,
-                         'the attributes are listed in the README')
+                         'the attributes are listed in POLICY.md')
 
     def atom(self):
         t = self.take()

@@ -8,10 +8,10 @@ Each header is committed, so a build needs no Python, and `make check-lookup` re
 diffs it against the committed copy, so a header nobody regenerated fails the build instead of drifting.
 Every input is a file of this tree, because this tree is what ships.
 
-    gen-lookup-headers.py cite <hold-harmless.txt> [--published <README.md>]
+    gen-lookup-headers.py cite <hold-harmless.txt> [--published <REFERENCE.md>]
                                                           we_hold_harmless_cite.h; with --published, the
                                                           list's distinct-prefix count must equal the one
-                                                          the README states, or nothing is generated
+                                                          the manual (REFERENCE.md) states, or nothing is generated
     gen-lookup-headers.py default-policy <default.conf>  we_default_policy.h
     gen-lookup-headers.py guard <file>...                 we_lookup_guard.h
 
@@ -69,7 +69,7 @@ def merge(ranges):
 
 
 def published_distinct(readme):
-    """The distinct-prefix count the README publishes for the list, or None when it states none."""
+    """The distinct-prefix count the manual (REFERENCE.md) publishes for the list, or None when it states none."""
     m = re.search(r"([0-9,]+) distinct prefixes", open(readme, encoding="utf-8").read())
     return int(m.group(1).replace(",", "")) if m else None
 
@@ -101,7 +101,7 @@ def cite(path, readme=None):
     print("typedef struct {\n    uint8_t     family;\n    uint8_t     start[16];\n    uint8_t     end[16];"
           "\n    const char *entry;\n    const char *method;\n    const char *note;\n} we_hh_cite_t;\n")
     print("typedef struct {\n    uint8_t family;\n    uint8_t start[16];\n    uint8_t end[16];\n} we_hh_range_t;\n")
-    print("/* %d entries, %d distinct prefixes (the count the README publishes, asserted at generation). */"
+    print("/* %d entries, %d distinct prefixes (the count REFERENCE.md publishes, asserted at generation). */"
           % (len(entries), distinct))
     print("#define WE_HH_CITE_COUNT %du" % len(entries))
     print("#define WE_HH_CITE_DISTINCT %du" % distinct)

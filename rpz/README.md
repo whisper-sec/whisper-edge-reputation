@@ -49,8 +49,8 @@ any policy zones of your own (first match wins). On RHEL the directory is `/var/
   openssl pkeyutl -verify -pubin -inkey edge.pub -rawin -in signed -sigfile zone.sig
   ```
 - **BIND** is the path we test end to end: signature, timer and expiry.
-- **Unbound** can fetch the reputation zone by URL itself; the README's resolver notes give the
-  configuration and what was measured. It checks neither the signature nor `validUntil`.
+- **Unbound** can fetch the reputation zone by URL itself; the resolver notes in
+  [REFERENCE.md](../REFERENCE.md) give the configuration and what was measured. It checks neither the signature nor `validUntil`.
 - **PowerDNS Recursor** slaves a policy zone by transfer, and we do not hand out transfer keys yet.
 - **Knot Resolver 5.x** applies only QNAME triggers, and every record here is an IP trigger, so it gets
   no policy from these zones.

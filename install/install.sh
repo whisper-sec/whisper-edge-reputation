@@ -2777,8 +2777,9 @@ if [ -n "$ZDIR" ]; then
   done
   paste "" "  # BIND: load each fetched zone as a local master and reference it as a policy zone, in this" \
     "  # order, below any policy zones of your own (first match wins). The files are under named's own" \
-    "  # directory on purpose; see the note in the README on AppArmor. A zone loads under its own name" \
-    "  # only: the refresh refuses a file named loads as anything else." \
+    "  # directory on purpose; see the AppArmor note in REFERENCE.md, also served at" \
+    "  # https://whisper.online/edge/REFERENCE.md. A zone loads under its own name only: the refresh" \
+    "  # refuses a file named loads as anything else." \
     "  zone \"rpz.whisper.online\" {" \
     "      type master;" \
     "      file \"$(zone_file rpz.whisper.online)\";" \
@@ -2796,8 +2797,9 @@ if [ -n "$ZDIR" ]; then
     "  # Then, once: named-checkconf && rndc reload" \
     "  # Until a zone's plane first publishes, its file is absent: named logs that it did not load and" \
     "  # resolves without it, and the other zone still applies. Its timer installs it when it appears." \
-    "  # Read the resolver notes in the README first: a DNSSEC-validating stub gets the unrewritten" \
-    "  # answer for a signed name, which is a real limit and not a bug in this zone."
+    "  # Read the resolver notes in REFERENCE.md first (https://whisper.online/edge/REFERENCE.md): a" \
+    "  # DNSSEC-validating stub gets the unrewritten answer for a signed name, which is a real limit and" \
+    "  # not a bug in this zone."
 fi
 
 # ---- a feed key, when the Whisper CLI is logged in here -----------------------------------------------

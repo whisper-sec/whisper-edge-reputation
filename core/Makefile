@@ -177,7 +177,7 @@ check-lookup: whisper-edge-lookup
 	python3 gen-lookup-headers.py default-policy testdata/policy/default.conf > $(LOOKUP_DIR)/default.h; \
 	chk "B1: we_lookup_guard.h is the regenerated guard (make gen-lookup-guard)" "cmp -s we_lookup_guard.h $(LOOKUP_DIR)/guard.h"; \
 	chk "H2: we_hold_harmless_cite.h is regenerated from ../hold-harmless.txt (make lookup-headers)" "cmp -s we_hold_harmless_cite.h $(LOOKUP_DIR)/cite.h"; \
-	chk "H2: the README publishes a distinct-prefix count for the list" "[ -z '$(HH_PUBLISHED)' ] || grep -qE '[0-9]+ distinct prefixes' ../REFERENCE.md"; \
+	chk "H2: REFERENCE.md publishes a distinct-prefix count for the list" "[ -z '$(HH_PUBLISHED)' ] || grep -qE '[0-9]+ distinct prefixes' ../REFERENCE.md"; \
 	printf 'The full list holds 1 distinct prefixes.\n' > $(LOOKUP_DIR)/b1/readme-wrong.md; \
 	chk "H2 control: a published count the list does not hold stops the generator" "! python3 gen-lookup-headers.py cite ../hold-harmless.txt --published $(LOOKUP_DIR)/b1/readme-wrong.md"; \
 	chk "P3: we_default_policy.h is testdata/policy/default.conf (make lookup-headers)" "cmp -s we_default_policy.h $(LOOKUP_DIR)/default.h"; \

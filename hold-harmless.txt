@@ -421,6 +421,8 @@ ff00::/8                 rfc4291               multicast
 198.18.0.0/15            rfc2544               benchmarking
 192.88.99.0/24           rfc7526               former 6to4 relay anycast
 2001:db8::/32            rfc3849               documentation
+3fff::/20                rfc9637               documentation
+2001:2::/48              rfc5180               benchmarking (RFC 5180 as corrected by erratum 1752)
 ::/128                   rfc4291               the unspecified address
 ::ffff:0:0/96            rfc4291               IPv4-mapped
 2002::/16                rfc7526               6to4
