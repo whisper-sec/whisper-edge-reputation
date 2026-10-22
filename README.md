@@ -92,4 +92,4 @@ It works well alongside fail2ban or CrowdSec. It is not a DDoS shield: for flood
 
 ---
 
-<sub>MIT licensed and free forever. Built by <a href="https://whisper.security">Whisper Security</a>, who map how the internet's networks, names and certificates connect, in one graph of about 47 billion objects.</sub>
+<sub>MIT licensed and free forever. Built by [Whisper Security](https://whisper.security), who map how the internet's networks, names and certificates connect, in one graph of about 47 billion objects.</sub>
