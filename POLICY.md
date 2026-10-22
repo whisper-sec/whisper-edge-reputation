@@ -87,9 +87,7 @@ whisper_edge_policy "deny  if tenant_deny";
 Mistakes are caught when your server loads its configuration, never while it serves. For example, this rule would block everyone the moment the routing data was missing, so it is refused, with the reason and the fix:
 
 ```
-refused policy http/server:a/location:/api rule 1, line 1, column 17: near "is": rule 1: "is unknown"
-here lets rule 1 deny exactly when the routing plane is missing or stale; that is a fail-closed rule.
-Use it in a log rule, or in an allow rule that no later deny depends on.
+whisper-edge-lookup: the policy (file) is refused: rule 1, line 1, column 17: near "is": rule 1: "is unknown" here lets rule 1 deny exactly when the routing plane is missing or stale; that is a fail-closed rule. Use it in a log rule, or in an allow rule that no later deny depends on.
 ```
 
 And whatever you write, some things are never blocked: DNS root and TLD servers, public resolvers, certificate authorities and ACME, NTP, and registry infrastructure ([the list](hold-harmless.txt)).
