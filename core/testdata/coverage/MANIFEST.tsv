@@ -1,0 +1,39 @@
+# file	baseline	code	message	rule
+c1-v4-2.bin	tor-v4only	WE_ERR_FORMAT	a coverage byte outside stated and not-covered	1
+c1-v6-2.bin	tor-v4only	WE_ERR_FORMAT	a coverage byte outside stated and not-covered	1
+c1-v6-255.bin	tor-v4only	WE_ERR_FORMAT	a coverage byte outside stated and not-covered	1
+c3-both.bin	tor-v4only	WE_ERR_FORMAT	a plane that covers no family	3
+c4-tor-v4.bin	tor-v4empty	WE_ERR_FORMAT	plane tor may not leave IPv4 not covered	4
+c4-routing-v6.bin	routing-v6empty	WE_ERR_FORMAT	plane routing may not leave IPv6 not covered	4
+c4-tenant-v6.bin	tenant-v6empty	WE_ERR_FORMAT	the tenant plane covers both families	4
+c5-count.bin	tor-v4only	WE_ERR_FORMAT	a not-covered family carries data	5
+c5-index-off.bin	tor-v4only	WE_ERR_FORMAT	a not-covered family carries data	5
+c5-start-off.bin	tor-v4only	WE_ERR_FORMAT	a not-covered family carries data	5
+c5-end-off.bin	tor-v4only	WE_ERR_FORMAT	a not-covered family carries data	5
+c5-sev-off.bin	tor-v4only	WE_ERR_FORMAT	a not-covered family carries data	5
+c5-meta-off.bin	tor-v4only	WE_ERR_FORMAT	a not-covered family carries data	5
+c5-indexed-flag.bin	tor-v4only	WE_ERR_FORMAT	a not-covered family carries data	5
+c5-kind.bin	tor-v4only	WE_ERR_FORMAT	a not-covered family carries data	5
+c5-param.bin	tor-v4only	WE_ERR_FORMAT	a not-covered family carries data	5
+c5-record-off.bin	tor-v4only	WE_ERR_FORMAT	a not-covered family carries data	5
+c5-sample-off.bin	tor-v4only	WE_ERR_FORMAT	a not-covered family carries data	5
+c5-sample-count.bin	tor-v4only	WE_ERR_FORMAT	a not-covered family carries data	5
+c5-depth.bin	tor-v4only	WE_ERR_FORMAT	a not-covered family carries data	5
+stride.bin	tor-v4only	WE_ERR_FORMAT	a record stride is not the schema's	stride
+reserved-178.bin	tor-v4only	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+reserved-179.bin	tor-v4only	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+reserved-180.bin	tor-v4only	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+reserved-181.bin	tor-v4only	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+reserved-182.bin	tor-v4only	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+reserved-183.bin	tor-v4only	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+reserved-184.bin	tor-v4only	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+reserved-185.bin	tor-v4only	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+reserved-186.bin	tor-v4only	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+reserved-187.bin	tor-v4only	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+reserved-188.bin	tor-v4only	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+reserved-189.bin	tor-v4only	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+reserved-190.bin	tor-v4only	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+reserved-191.bin	tor-v4only	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+f1-schema-176.bin	reputation-schema	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+f1-schema-177.bin	reputation-schema	WE_ERR_FORMAT	a reserved byte of the schema tail is not zero	reserved
+f1-preschema-176.bin	reputation-preschema	WE_ERR_FORMAT	the tail of a pre-schema format-1 file is reserved and must be zero	pre-schema

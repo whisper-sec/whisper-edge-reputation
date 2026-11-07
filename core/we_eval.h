@@ -66,6 +66,9 @@ void we_trace_op(uint32_t op, uint64_t t, uint64_t f);
 #ifdef WE_TEST_PLANTED_STORE
 extern volatile int we_test_planted;        /* the harness's: nonzero in H3's child alone */
 #endif
+#ifdef WE_TEST_COVERAGE_SECOND_LOAD
+extern we_handle_t *we_test_coverage_handle; /* race_core's: the handle the C10 mutant re-reads */
+#endif
 
 /*
  * THE EVALUATION-SITE RECORD. Every inlined copy of we_decide() leaves one 4-byte PC-relative record in
@@ -132,11 +135,18 @@ WE_HOT_INLINE const we_binding_t *we_prog_bindings(const we_program_t *p)
 /*
  * The state a plane would fill to, without the lookup: what ISUNK reads on a plane nothing has filled.
  * Only the unknown-or-not distinction is used: NULL and stale read unknown, fresh does not, and
- * generation 0 is REVOKED (definite) on the tenant plane and UNKNOWN on every other (D-ae).
+ * generation 0 is REVOKED (definite) on the tenant plane and UNKNOWN on every other (D-ae). A family
+ * the plane does not cover (FORMAT.md section 2) reads unknown too, on every plane but the tenant one.
+ *
+ * The coverage term alone is gated on the plane, never the whole condition: a stale tenant plane must
+ * still peek UNKNOWN, because `tenant_allow is unknown` on an unfilled slot reads exactly this, and the
+ * fill's whole-condition gate here would make it FRESH_NR (the mutant WE_TEST_COVERAGE_PEEK_TENANT_GATED).
+ * `fam` is the slot's canonical family, 4 or 6.
  */
-WE_HOT_INLINE uint32_t we_eval_peek(const we_map_t *m, uint64_t now_ms, uint32_t p)
+WE_HOT_INLINE uint32_t we_eval_peek(const we_map_t *m, uint64_t now_ms, uint32_t p, uint32_t fam)
 {
     uint64_t vu, gen;
+    uint32_t stale, unc;
 
     if (m == NULL) {
         return WE_ST_UNKNOWN;
@@ -146,7 +156,15 @@ WE_HOT_INLINE uint32_t we_eval_peek(const we_map_t *m, uint64_t now_ms, uint32_t
     if (gen == 0u) {
         return (p & 7u) == WE_TENANT_IX ? WE_ST_REVOKED : WE_ST_UNKNOWN;
     }
-    return (vu != 0u && now_ms > vu) ? WE_ST_UNKNOWN : WE_ST_FRESH_NR;
+    stale = vu != 0u && now_ms > vu;
+    /* fam is the slot's canonical family, 4 or 6 by we_addr_canon(), so the shift is in range unmasked,
+     * as the fill's is */
+    unc = ((uint32_t)(WE_TRACE_EVAL(&m->uncovered, 1), m->uncovered) >> fam) & 1u;
+#ifdef WE_TEST_COVERAGE_PEEK_TENANT_GATED
+    return ((stale | unc) && (p & 7u) != WE_TENANT_IX) ? WE_ST_UNKNOWN : WE_ST_FRESH_NR;
+#else
+    return (stale | (unc & ((p & 7u) != WE_TENANT_IX))) ? WE_ST_UNKNOWN : WE_ST_FRESH_NR;
+#endif
 }
 
 /*
@@ -195,14 +213,36 @@ WE_HOT_INLINE void we_eval_fill(const we_map_t *m, we_memo_slot_t *s, uint32_t p
         uint64_t vu = (WE_TRACE_EVAL(&m->valid_until_ms, 8), m->valid_until_ms);
         uint64_t gen = (WE_TRACE_EVAL(&m->generation, 8), m->generation);
         uint32_t stale = vu != 0u && now_ms > vu;
+        /*
+         * The family the plane does not cover (FORMAT.md section 2), a term of its own: `stale` keeps
+         * meaning stale, so the tenant arm below (lapsed, STALE_HIT) reads exactly what it read before
+         * whatever this byte holds. The byte is on the line `generation` is on.
+         */
+#if defined(WE_TEST_COVERAGE_IGNORED)
+        uint32_t unc = 0u;
+#elif defined(WE_TEST_COVERAGE_SECOND_LOAD)
+        /* the mutant (row C10): the coverage read through a second load of the handle's published map,
+         * so a swap between the request view's load and the fill pairs one generation's records with
+         * another's coverage */
+        const we_map_t *m2_ = we_test_coverage_handle != NULL ? we_current(we_test_coverage_handle) : m;
+        uint32_t unc = ((uint32_t)(m2_ != NULL ? m2_->uncovered : 0u) >> s->family) & 1u;
+#else
+        /* s->family is 4 or 6 by we_addr_canon(), so the shift is in range unmasked, as the peek's is. The
+         * bit is tested in place, not shifted down to 0 or 1: only its truth is read, and gcc 15 under
+         * -march=x86-64-v3 kept a byte of the shifted form on the stack, which the hot-path gate refuses */
+        uint32_t unc = (uint32_t)(WE_TRACE_EVAL(&m->uncovered, 1), m->uncovered) & (1u << s->family);
+#endif
 
         e->generation = gen;
         if (gen == 0u) {
             s->state[p & 7u] = (uint8_t)((p & 7u) == WE_TENANT_IX ? WE_ST_REVOKED : WE_ST_UNKNOWN);
             return;
         }
-        if (stale && (p & 7u) != WE_TENANT_IX) {
-            return;                                /* a stale non-tenant plane: UNKNOWN, no lookup */
+#ifdef WE_TEST_COVERAGE_INTO_STALE
+        stale |= unc;                              /* the mutant: the family folded into staleness */
+#endif
+        if ((stale | unc) && (p & 7u) != WE_TENANT_IX) {
+            return;                                /* stale or not covered: UNKNOWN, no lookup */
         }
         /* staleness is confirmed first, so the subtraction cannot wrap */
         e->lapsed = (uint8_t)(stale && now_ms - vu > WE_TENANT_GRACE_MS);
@@ -470,6 +510,16 @@ WE_HOT_INLINE int we_eval_run(const we_program_t *p, uint32_t mode, uint32_t all
             const we_instr_t *I;
 
             __asm__ __volatile__("" ::: "memory");     /* nothing invariant is held across instructions */
+#if defined(__clang__) && defined(__AVX2__)
+            /*
+             * T and F in general registers, every instruction. clang 20 and later with AVX2
+             * (-march=x86-64-v3) SLP-pack the two stacks into one xmm register and load its lane masks
+             * from a constant pool, the evaluator's only reads of .rodata. The asm emits nothing; every
+             * other compiler and target already keeps both in registers and compiles to the same bytes
+             * without it, which is why it is fenced to this one case.
+             */
+            __asm__ __volatile__("" : "+r"(T), "+r"(F));
+#endif
             I = (WE_TRACE_EVAL(WE_RINS + pc, 8), WE_RINS + pc);
             uint32_t op = I->op;
             uint32_t pl = I->plane & 7u;
@@ -497,7 +547,11 @@ WE_HOT_INLINE int we_eval_run(const we_program_t *p, uint32_t mode, uint32_t all
                 }
 #endif
                 st = WE_RS->state[pl];
-                st = st != WE_ST_NONE ? st : we_eval_peek(WE_RCTX->view[pl].m, WE_RNOW, pl);
+#ifdef WE_TEST_COVERAGE_PEEK_IGNORED
+                st = st != WE_ST_NONE ? st : we_eval_peek(WE_RCTX->view[pl].m, WE_RNOW, pl, 0u);
+#else
+                st = st != WE_ST_NONE ? st : we_eval_peek(WE_RCTX->view[pl].m, WE_RNOW, pl, WE_RS->family);
+#endif
                 blk = WE_RS->e[pl].block + (I->off & 15u);
                 unk = (uint32_t)(uint8_t)(st - WE_ST_STALE_HIT) <= 2u;   /* stale (tenant) or unknown */
                 known = unk ^ 1u;
@@ -736,7 +790,11 @@ WE_HOT_INLINE int we_eval_run(const we_program_t *p, uint32_t mode, uint32_t all
                     for (q = 0u; q < 8u; q++) {
                         uint32_t sq = WE_RS->state[q];
 
-                        sq = sq != WE_ST_NONE ? sq : we_eval_peek(WE_RCTX->view[q].m, WE_RNOW, q);
+#ifdef WE_TEST_COVERAGE_MARK_IGNORED
+                        sq = sq != WE_ST_NONE ? sq : we_eval_peek(WE_RCTX->view[q].m, WE_RNOW, q, 0u);
+#else
+                        sq = sq != WE_ST_NONE ? sq : we_eval_peek(WE_RCTX->view[q].m, WE_RNOW, q, WE_RS->family);
+#endif
                         unk |= (uint32_t)((uint32_t)(uint8_t)(sq - WE_ST_STALE_HIT) <= 2u) << q;
                     }
                     unk &= *(const volatile uint8_t *)&R->dep_mask;

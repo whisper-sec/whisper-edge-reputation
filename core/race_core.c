@@ -65,6 +65,20 @@
 
 #include "whisper_edge.h"
 #include "we_sha256.h"
+#include "we_policy.h"
+#include "we_eval.h"
+#include "we_writer.h"
+
+#ifdef WE_TRACE
+/* the C10 mutant's build is the evaluator's traced one (we_policy.h admits a mutant only there): no-op hooks */
+void we_trace_read(const void *p, size_t len) { (void)p; (void)len; }
+void we_trace_eval(const void *p, size_t len) { (void)p; (void)len; }
+void we_trace_k3(uint64_t t, uint64_t f) { (void)t; (void)f; }
+void we_trace_op(uint32_t op, uint64_t t, uint64_t f) { (void)op; (void)t; (void)f; }
+#endif
+#ifdef WE_TEST_COVERAGE_SECOND_LOAD
+we_handle_t *we_test_coverage_handle;       /* the handle the mutant's fill reads its second map through */
+#endif
 
 #define RACE_THREADS   8
 #define RACE_SNAPSHOTS 64
@@ -443,6 +457,138 @@ static void mixed_race(void)
            mixed_lookups, mixed_handle.loads_ok);
 }
 
+/*
+ * C10: a swap across a coverage flip, in the dangerous direction, DECISIVE AND DETERMINISTIC. A request's
+ * view is taken from generation A (tor, IPv6 not covered); then generation B (IPv6 stated, the probe
+ * address listed) is published on the handle; then the request is evaluated on the view it holds. The
+ * coverage and the records come from one immutable map read through one pointer load, so the answer is
+ * A's: tor_exit UNKNOWN for the IPv6 probe, never FALSE. The mutant WE_TEST_COVERAGE_SECOND_LOAD reads the
+ * coverage through a second load of the handle (B's: stated) and the records through the view (A's: none),
+ * and reads FALSE on every run. The concurrent form of this is stress and is not counted here.
+ */
+static int c10_write(const char *path, uint64_t gen, int v6_listed)
+{
+    static __uint128_t s4[1] = { 0x0b000001u }, e4[1] = { 0x0b000001u }, s6[1], e6[1];
+    static uint8_t r4[16], r6[32];
+    ww_plane_t p;
+
+    memset(&p, 0, sizeof p);
+    memset(r4, 0, sizeof r4);
+    memset(r6, 0, sizeof r6);
+    r4[4] = 1u;                              /* tor_exit */
+    r6[16] = 1u;
+    s6[0] = e6[0] = ((__uint128_t)0x20010db8u << 96) | 1u;      /* 2001:db8::1 */
+    p.format = WE_FORMAT_2;
+    p.schema = 1;
+    p.plane = WE_PLANE_TOR;
+    p.generation = gen;
+    p.v4.n = 1u;
+    p.v4.start = s4;
+    p.v4.end = e4;
+    p.v4.rec = r4;
+    if (v6_listed) {
+        p.v6.n = 1u;
+        p.v6.start = s6;
+        p.v6.end = e6;
+        p.v6.rec = r6;
+    } else {
+        p.v6_coverage = WE_COV_NOT_COVERED;
+    }
+    return ww_write(path, &p);
+}
+
+static void coverage_swap(void)
+{
+    char path[1100];
+    static const char *const rules[2] = { "deny if not tor_exit", "log if tor_exit" };
+    we_policy_directive_t d[2];
+    we_policy_source_t src;
+    we_policy_env_t env = WE_POLICY_ENV_ALL;
+    we_policy_build_t *b = NULL;
+    we_policy_error_t e;
+    const we_program_t *prog;
+    we_handle_t h;
+    const we_map_t *view_a;
+    we_eval_ctx_t *ec = aligned_alloc(64, (sizeof *ec + 63u) & ~(size_t)63u);
+    we_ctx_conf_t conf = { WE_MODE_DENY, 0u };
+    we_request_t req;
+    we_verdict_t v;
+    uint8_t a16[16] = { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+    we_load_detail_t det;
+    int k;
+
+    printf("C10. a swap across a coverage flip, deterministic: the view's generation decides\n");
+    memset(&h, 0, sizeof h);
+    memset(&e, 0, sizeof e);
+    for (k = 0; k < 2; k++) {
+        d[k].kind = WE_DIR_POLICY;
+        d[k].context = "http/server:a";
+        d[k].arg = (const uint8_t *)rules[k];
+        d[k].len = strlen(rules[k]);
+    }
+    src.d = d;
+    src.n = 2u;
+    src.context = NULL;
+    src.floor = 0;
+    if (ec == NULL || we_policy_build(&src, &env, NULL, &b, &e, NULL) != WE_POLICY_OK
+            || (prog = we_policy_program(b, "http/server:a")) == NULL) {
+        printf("  FAIL [C10] the program does not compile: %s\n", e.what);
+        failures++;
+        free(ec);
+        return;
+    }
+    snprintf(path, sizeof path, "%s/c10-tor.bin", dir);
+    if (c10_write(path, 10u, 0) != 0 || we_handle_publish_plane(&h, path, 1u, &det) != WE_OK) {
+        printf("  FAIL [C10] generation A (IPv6 not covered) does not arm: %s\n", det.what != NULL ? det.what : "-");
+        failures++;
+        free(ec);
+        we_policy_build_free(b);
+        return;
+    }
+    view_a = we_current(&h);                 /* the request's one load of the published map */
+    if (c10_write(path, 20u, 1) != 0 || we_handle_publish_plane(&h, path, 2u, &det) != WE_OK) {
+        printf("  FAIL [C10] generation B (IPv6 stated, the probe listed) does not arm: %s\n",
+               det.what != NULL ? det.what : "-");
+        failures++;
+    } else {
+#ifdef WE_TEST_COVERAGE_SECOND_LOAD
+        we_test_coverage_handle = &h;
+#endif
+        memset(&req, 0, sizeof req);
+        we_addr_canon(a16, 6, &req.floor);
+        req.server = req.floor;
+        req.walk = WE_WALK_OK;
+        for (k = 0; k < 2; k++) {
+            memset(ec, 0, sizeof *ec);
+            ec->view[WE_PLANE_TOR - 1u].m = k == 0 ? view_a : we_current(&h);
+            we_decide(NULL, &conf, prog, &conf, NULL, &req, ec, 3u, &v);
+            if (k == 0 && !(v.action == WE_ACT_ALLOW && v.rule == 0u && v.log_fired[1][0] == 0u)) {
+                printf("  FAIL [C10] the view from A read a definite tor_exit for 2001:db8::1 after B was published "
+                       "(action %u rule %u log %02x): coverage and records from two generations\n",
+                       (unsigned)v.action, (unsigned)v.rule, (unsigned)v.log_fired[1][0]);
+                failures++;
+            }
+            if (k == 1 && !(v.action == WE_ACT_ALLOW && v.log_fired[1][0] == 0x02u)) {
+                printf("  FAIL [C10] the control: the view from B does not read the listed exit TRUE (action %u "
+                       "log %02x)\n", (unsigned)v.action, (unsigned)v.log_fired[1][0]);
+                failures++;
+            }
+        }
+#ifdef WE_TEST_COVERAGE_SECOND_LOAD
+        we_test_coverage_handle = NULL;
+#endif
+        if (failures == 0) {
+            printf("  ok: the view taken before the swap reads UNKNOWN, the one after it TRUE, never FALSE\n");
+        }
+    }
+    we_handle_retire(&h, (uint64_t)10u * WE_DEFAULT_GRACE_MS);
+    we_map_close(h.current);
+    free(h.current);
+    unlink(path);
+    free(ec);
+    we_policy_build_free(b);
+}
+
 int main(int argc, char **argv)
 {
     const char *fixture = "testdata/interop.snap";
@@ -453,6 +599,11 @@ int main(int argc, char **argv)
     if (argc > 2) { fixture = argv[2]; }
 
     printf("race_core: the lifecycle concurrency the header promises\n");
+    coverage_swap();
+#ifdef WE_TEST_COVERAGE_SECOND_LOAD
+    printf("race_core: the C10 mutant build runs C10 alone: %d failure(s)\n", failures);
+    return failures != 0 ? 1 : 0;
+#endif
     for (i = 0; i < RACE_SNAPSHOTS; i++) {
         if (make_snapshot(fixture, snap_path(i), (uint64_t) (i + 1)) != 0) {
             printf("  FAIL: cannot build %s from %s\n", snap_path(i), fixture);

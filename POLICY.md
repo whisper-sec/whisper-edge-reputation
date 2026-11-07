@@ -276,7 +276,40 @@ The enum domains, in domain order (index 0 is `undetermined`):
 ### 1.4 What the literals mean, the definite values
 
 UNKNOWN is a plane or transport state only (a plane that is stale, refused, loading, or armed at
-generation 0 off the tenant plane, §2.7); absence from a fresh plane is definite.
+generation 0 off the tenant plane, §2.7, or a family the plane does not cover); absence from a fresh
+plane in a stated family is definite.
+
+**The fifth case: a family the plane does not cover.** A format-2 plane states, per address family,
+whether its source speaks for that family at all (`FORMAT.md` §2). When it does not, every attribute of
+the plane reads UNKNOWN for a client whose canonical address is in that family, exactly as if the plane
+were stale, and `is unknown` on it is TRUE; for the other family the plane is fresh and absence is
+definite. Today one plane may do this: `tor`, for IPv6, because its source names IPv4 exits only and
+no measured source states IPv6 ones. So `tor_exit` is TRUE or FALSE for an IPv4 client and UNKNOWN for
+every IPv6 client. Four things follow, and a policy author should know them:
+
+- **The client chooses the family.** Any Tor user can exit over IPv6 with one `torrc` setting, through
+  any IPv6-capable exit. On a dual-stack site `deny if tor_exit` therefore blocks Tor over IPv4 only,
+  permanently and not for the length of an outage. **The recipe:** treat Tor blocking as IPv4-only until
+  the plane states IPv6; a site that must block Tor publishes only an A record for the name it protects.
+- **`is unknown` is permanent for that family.** `log if tor_exit is unknown` logs every IPv6 request,
+  and `allow if tor_exit is unknown` allows every IPv6 request.
+- **A capture is permanent for that family.** `allow if tor_exit or asn in @partners` reads `U or F =
+  U` for every IPv6 request that is not a partner's and captures it, disarming every deny and log below
+  it. Write the partner exemption as an allow of its own: `allow if asn in @partners`, then the Tor rule.
+- **Mapped and translated addresses.** `::ffff:a.b.c.d` is canonicalised to IPv4 first, so it takes
+  the IPv4 answer. An IPv4 Tor exit reaching an IPv6-only origin through SIIT-DC (RFC 7755) or the
+  RFC 6052 well-known prefix `64:ff9b::/96` arrives as IPv6 and reads UNKNOWN; before per-family
+  coverage it read a wrong FALSE, and under a capturing allow it is captured. Whether `64:ff9b::/96`
+  should be canonicalised is an open question, not a behaviour.
+
+The shipped default policy changes no verdict (`log if tor_exit` reads U on IPv6 and does not fire, as
+it does not fire on FALSE), but the arm-time line names it disarmed for IPv6 (§2.5), because hiding it
+would hide the evasion the client selects.
+
+A module built before per-family coverage refuses a one-family `tor.bin` with "a reserved byte of the
+schema tail is not zero" and reads Tor as UNKNOWN in both families: safe, and noisy. That message on
+`tor.bin` means **this module predates per-family coverage; upgrade the module. Tor reads unknown until
+then.**
 
 - At a record, an enum field at its sentinel is the definite value `undetermined`. `x ==
   undetermined` is TRUE there; every other `==`, `in` and ordered comparison is FALSE; `!=` is
@@ -449,7 +482,16 @@ compares, `msg` the sentence). The codes, with the line the differential compare
   unarmed), and `allow if not tenant_deny`, which reads U for as long as the plane is stale;
 - `adds-nothing`: a step-4 `allow` whose condition is a positive occurrence of `tenant_allow` (the one
   bounded occurrence, §3.2), printed as `rule N adds nothing the tenant pre-stage does not already
-  allow` (D-s).
+  allow` (D-s);
+- `uncovered-family`: an `allow` that reads a plane the reader's allowance table lets leave a family
+  not covered (§1.4's fifth case, today `tor` for IPv6) and that either captures under that plane's
+  outage with a `deny` or `log` below it, or reaches T only through its `is unknown`, detail
+  `<plane>,ipv<family>`: `rule 1 allow captures every IPv6 request: tor does not cover IPv6, so the
+  capture is permanent for that family and disarms every deny and log below it; move the terms that do
+  not read tor into an allow of their own`. It is computed from the compiled-in table, not from the
+  installed file, so it prints on a fresh install before `tor.bin` arrives. It is a warning like every
+  other report: a configuration's validity never depends on data that changes with each build, and a
+  refusal would fail an unrelated reload such as a certificate renewal.
 
 A missing plane is never a compile error.
 
@@ -693,6 +735,15 @@ stored per rule, so the rule record stays 16 bytes and a two-plane outage is cla
 planes together (`deny if tor_exit or c2` is narrowed under tor alone and inert under tor and threat).
 The module's tick also fires the line when the tenant plane crosses `valid_until_ms + 48 h` (GRACE to
 LAPSED), because the bounded occurrence changes value there without any plane state changing.
+
+**Per family.** A plane that arms with a family it does not cover (§1.4's fifth case) is out for every
+request of that family and in for the other, so the out-set differs by family: `out4` and `out6`. The
+module then writes one more line per affected program, from `we_program_family_line()`, classified under
+the plane being out: `plane tor does not cover IPv6: rule 1 allow captures; rule 2 disarmed`, and for the
+default policy `plane tor does not cover IPv6: rule 1 disarmed`. A rule whose value set under that
+out-set is exactly `{T}` (an `is unknown` the polarity allows) is named `fires on every IPv6 request`
+rather than narrowed, since the client picks the family and with it the rule: `plane tor does not cover
+IPv6: rule 1 fires on every IPv6 request`. The classifier itself is unchanged.
 
 **Allow short-circuit.** An `allow` at U ends evaluation and marks `allow-by-unknown`, naming the rule
 and `unknown_plane`, which is **the lowest-id UNKNOWN plane the rule referenced**, not the cause (an F
@@ -1189,6 +1240,7 @@ into FRESH or STALE per request.
 | REFUSED | NULL, nothing ever armed | U | T | once, with `we_strerror` and the record index |
 | LOADING | NULL, first verification in flight | U | T | none (the master verifies before fork) |
 | generation 0, not the tenant plane | a map armed at generation 0 | U | T | as REFUSED |
+| FRESH, the request's family not covered (not the tenant plane) | a map whose `uncovered` has the family's bit | U, no lookup | T | once, at the arm: `plane tor does not cover IPv6: ...` (§2.5) |
 | REVOKED (tenant plane) | the heap-allocated empty map with `revoked` set and generation 0, through `we_handle_publish_map()` | tenant bits F, pre-stage empty, `tenant-revoked` | F | once |
 | any, then a fresh file verifies | a new map | definite again | F | once: `plane P armed, generation G` |
 
@@ -1222,24 +1274,27 @@ index).
 ### 3.7 Hot-path constraints and the composed per-request bound
 
 By construction and by disassembly: no call (the record copy is fixed-width moves, the set search a
-fixed-iteration loop, §4.1), no atomic, no fence, no `switch`, no `.rodata` reference on the legs named below (every table the
+fixed-iteration loop, §4.1), no atomic, no fence, no `switch`, no `.rodata` reference (every table the
 evaluator reads is in the program block, a plane, or the caller's context), no local on the stack on
 the legs named below, a frame under `STACK_MAX_EVAL` 256 bytes, no allocation, no syscall.
 
-**Where "no local on the stack" holds, measured.** The hot-path gate runs gcc 13 and 14 and clang 18,
-19 and 20 on aarch64 and x86_64, at `-O`, `-O2`, `-Os` and `-O3`, with the base flags, the Ubuntu and
+**Where "no local on the stack" holds, measured.** The hot-path gate runs gcc 13, 14 and 15 and clang 18,
+19, 20 and 21 on aarch64 and x86_64, at `-O`, `-O2`, `-Os` and `-O3`, with the base flags, the Ubuntu and
 Fedora distribution module sets, and on x86_64 `-march=x86-64-v3`, `-mtune=znver3` and
-`-mtune=znver4`. That result on the Zen and x86-64-v3 legs depends on the rank searches' descent staying
+`-mtune=znver4`. On x86_64 the base set and the two Zen tunings name `-march=x86-64` themselves, because a
+compiler's default level is its host's: one CI runner's gcc built the unpinned base set as x86-64-v3, so
+a set name measured two targets. The gate reads each set's level back from the compiler's macros
+(`__BMI2__` under x86-64-v3 only) before it measures anything. That result on the Zen and x86-64-v3 legs depends on the rank searches' descent staying
 rolled: `whisper_edge.h` wraps its three loops in `WE_NO_UNROLL` (clang's `loop unroll(disable)`, empty
 for other compilers), because clang unrolled them under those tunings and the unrolled body
 spilled in `hpfloor`, `hpeval`, `hpeval_ops` and two fill rows. `WE_NO_UNROLL` is a header
 macro of the `WE_` namespace, not an API. Every evaluator row holds zero locals on every one of those legs except the
 frame-pointer ones on clang x86_64, which the gate holds exactly, per level, as these bytes of locals:
 
-| compiler and set | `hpeval` | `hpeval_ops` at `-O` | `hpeval_ops` at `-O2`, `-Os`, `-O3` |
-|---|---|---|---|
-| clang 18, Ubuntu x86_64 | 8 | 8 | 12 |
-| clang 19 and 20, Ubuntu or Fedora x86_64 | 8 | 16 | 4 |
+| compiler and set | `hpeval` | `hpeval_ops` at `-O` | `hpeval_ops` at `-O2` | `-Os` | `-O3` |
+|---|---|---|---|---|---|
+| clang 18, Ubuntu x86_64 | 8 | 16 | 4 | 12 | 4 |
+| clang 19, 20 and 21, Ubuntu or Fedora x86_64 | 8 | 8 | 4 | 4 | 4 |
 
 (clang 18 does not accept the Fedora set; every other row of every other leg is 0.) Both sets carry `-fno-omit-frame-pointer`, which
 takes `%rbp`, and the instruction loop then needs one register more than x86_64 has left. Bringing
@@ -1252,25 +1307,23 @@ legs keep a spill, which the gate holds exactly and every change to the function
 
 | compiler and set | `hpmod` |
 |---|---|
-| gcc 13, every x86_64 set | 8 at `-O` (the verdict pointer kept across the rule loop), 0 at `-O2`, `-Os`, `-O3` |
-| gcc 14, every x86_64 set | 8 at `-O` (the same verdict-pointer spill), 0 at `-O2`, `-Os`, `-O3` |
+| gcc 13, every x86_64 set but `-march=x86-64-v3` | 8 at `-O` (the verdict pointer kept across the rule loop), 0 at `-O2`, `-Os`, `-O3`, and 0 under `-march=x86-64-v3` |
+| gcc 14, every x86_64 set but `-march=x86-64-v3` | 8 at `-O` (the same verdict-pointer spill), 0 at `-O2`, `-Os`, `-O3`, and 0 under `-march=x86-64-v3` |
+| gcc 15, every x86_64 set but the Zen tunings | 8 at `-O` (the same verdict-pointer spill), 0 at `-O2`, `-Os`, `-O3`, and 0 under `-mtune=znver3` and `znver4` |
 | clang 18, Ubuntu x86_64 | 16 at every level (`-fno-omit-frame-pointer` takes `%rbp`) |
 | clang 19, Ubuntu and Fedora x86_64 | 16 at every level (the same) |
-| clang 20, Ubuntu and Fedora x86_64 | 16 at every level (the same); at `-march=x86-64-v3` 0, with 14 constant-pool relocations at `-O2`, `-Os` and `-O3` |
+| clang 20, Ubuntu and Fedora x86_64 | 16 at every level (the same); at `-march=x86-64-v3` 0 |
+| clang 21, Ubuntu and Fedora x86_64 | 16 at every level (the same); at `-march=x86-64-v3` 0 |
 
 nginx's own default is `-O`, so the gcc row is on a shipping path. `make check` holds this table, the
 header's opening comment and the gate's expected-locals table to each other (`locals-claims.sh`).
 
-**Where "no `.rodata` reference" holds, measured.** On every leg the gate runs but one. With clang 20
-and `-march=x86-64-v3`, at `-O2`, `-Os` and `-O3` (not `-O`), the SLP vectoriser packs the K3 pair
-(T, F, two 64-bit bit stacks, §3.3) into one xmm register in `hpeval` and `hpeval_ops`, and the lane
-masks it needs come from a constant pool: `R_X86_64_PC32` relocations to `.rodata` and its `.LCPI`
-entries, 14 in `hpeval` and 7 in `hpeval_ops`, which the gate holds exactly. The constants are read-only, are not evaluator tables, and
-change no result; a loop pragma cannot reach them because no loop is vectorised, and keeping the pair
-out of vector registers by hand would contort the interpreter's hottest lines for one tuning, so the
-claim is this measured one instead. The candidate fix is a per-function target attribute on the two
-evaluator entry points that keeps the AVX2-level codegen out of them, measured before it is adopted. clang 18 and 19 at the same flags, and every other leg, reference
-no `.rodata`.
+**Where "no `.rodata` reference" holds, measured.** On every leg the gate runs, with no exception. One leg
+used to be one: with clang 20 and 21 and `-march=x86-64-v3`, at `-O2`, `-Os` and `-O3`, the SLP vectoriser
+packed the K3 pair (T, F, two 64-bit bit stacks, §3.3) into one xmm register and loaded its lane masks from
+a constant pool. No loop is vectorised there, so no loop pragma reaches it. The evaluator now keeps the
+pair in general registers with an empty `asm` on each instruction, compiled only under clang with AVX2;
+it emits no instruction, and every other compiler and target preprocesses to the source it had before.
 
 **Decision D9: no `locals-ok`, scratch into `*out` first.** Where a plane lookup would leave more
 values live than a toolchain has registers, the evaluator parks them in the verdict's scratch block,
@@ -1355,15 +1408,15 @@ build.
 
 ### 3.8 The hold-harmless table
 
-`hold-harmless.txt` holds 265 entries (IPv4 145, IPv6 120), 250 of them distinct (IPv4 139, IPv6
-111), and 192 ranges once merged (IPv4 110, IPv6 82), mostly prefixes. A linear scan would be the
+`hold-harmless.txt` holds 271 entries (IPv4 145, IPv6 126), 256 of them distinct (IPv4 139, IPv6
+117), and 194 ranges once merged (IPv4 110, IPv6 84), mostly prefixes. A linear scan would be the
 largest term in the default policy's cost, so `gen-hold-harmless.py` merges the entries at generation
 into sorted, non-overlapping `[start, end]` ranges per family (`we_hold_harmless.h`, regenerated with
 `make hold-harmless`, never by hand), and the compiler lays each family out as `FORMAT.md` §4.2's rank
 structure with the **stride equal to one node's capacity** (16 keys at 32 bits, 4 at 128 bits): the
 descent reads one 64-byte node per level, the window is one line, the end check one line, so the lookup
 costs **d + 2 lines** where d is the smallest integer with `(B+1)^d ≥ m`. For today's file that is **3
-lines for IPv4** (110 merged ranges, m = 7, d = 1) and **4 for IPv6** (82 merged ranges, m = 21, d =
+lines for IPv4** (110 merged ranges, m = 7, d = 1) and **4 for IPv6** (84 merged ranges, m = 21, d =
 2), pinned by row HH1 against the generated header. The lookup is the force-inlined `we_find4` /
 `we_find6` unchanged: they honour any power-of-two span and shift from the descriptor; only the
 **loader** refuses a rank parameter other than 6 and 5, and the loader never sees this table
@@ -1727,8 +1780,9 @@ Two ways to run each; `make check` always runs the first:
   environment: every `accept/` file must compile, verify, compile twice to identical bytes and survive
   the disassembler round trip; every `refuse/` file must be refused with every `.expect` field equal
   (row N1); the replay fails below a **seed-count floor**, so deleting a file cannot pass silently.
-  `fuzz_program --replay DIR --planes PLANES --mutations N` compiles every accept file and mutates it a
-  pinned number of times from the pinned seed, printing how many mutants verify refused and how many it
+  `fuzz_program --replay DIR --planes PLANES --mutations N` compiles every accept file, in name order,
+  and mutates it a pinned number of times from the pinned seed, so every host draws the same mutants,
+  printing how many mutants verify refused and how many it
   accepted and were evaluated;
 - **with a fuzzer**: `make fuzz` detects `clang -fsanitize=fuzzer,address,undefined`, runs for
   `WE_FUZZ_SECONDS` (default 60), and fails on any crash or sanitizer report; findings are minimised
@@ -1928,6 +1982,10 @@ Each format line is followed by an example from a real run.
     unbounded <plane>,...                      TRUE only through an ISUNK on that plane, or for the
                                                tenant plane a capture under LAPSED
       report ctx http/server:a 2 unbounded tenant
+    uncovered-family <plane>,ipv<4|6>          the plane may leave that family not covered (the reader's
+                                               allowance table) and the allow captures it, a deny or log
+                                               below, or reaches TRUE only through its ISUNK
+      report ctx http/server:a 1 uncovered-family tor,ipv6
     adds-nothing                               an allow on a positive tenant_allow (D-s)
       report ctx http/server:a 6 adds-nothing
   case <id>
@@ -2246,7 +2304,7 @@ section named by its id (`== N3: the limits at the boundary and one past ==`). R
 | X3 | corpus replay without a fuzzer | `make check` | the invariants of §5.3 hold over every corpus, seed and adversarial file; the seed floor is met; removing one file fails the floor |
 | X4 | `make fuzz`, `fuzz_program` | CI | no crash, no sanitizer report |
 | X5 | the invariant line `ISUNK(x) == (K3value(x) == U)` over every atom and state | `policy_diff.py`, `test_policy` | equal in both and TRUE on every case, the tenant plane's five states included |
-| H1 | the evaluator wrappers at four levels on five compilers, both architectures, every flag set of §3.7 | `hotpath-gate.sh` | no reloc, branch to a call, class, barrier, lock, fence, xchg; no locals except the measured clang x86_64 frame-pointer legs of §3.7 and `hpmod`'s two x86_64 legs there, and no `.rodata` except clang 20 x86-64-v3 (§3.7); frame under 256 |
+| H1 | the evaluator wrappers at four levels on every compiler of §3.7, both architectures, every flag set of §3.7 | `hotpath-gate.sh` | no reloc, branch to a call, class, barrier, lock, fence, xchg; no locals except the measured clang x86_64 frame-pointer legs of §3.7 and `hpmod`'s x86_64 legs there, and no `.rodata`; frame under 256 |
 | H2 | the evaluator controls under `gate/` | `hotpath-gate.sh` | each refused by its named check at every level where it builds |
 | H3 | `mprotect(PROT_READ)` on the block, the hold-harmless view and every plane | `test_policy`, differential, `WE_TEST_PLANTED_STORE` | every leg passes in the production build; the standing `WE_TEST_PLANTED_STORE` build faults, caught and reported on this row, every run |
 | HH1 | every hold-harmless lookup over every outcome class of the merged table, both families, at strides 16 and 4; a block with a wrong span | trace build, `test_policy` | traced probes and lines equal the model per lookup; the maxima equal the generated header's (3 lines IPv4, 4 lines IPv6 for today's file); the wrong span is refused by verifier step 20 |

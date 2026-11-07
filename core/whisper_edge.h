@@ -188,6 +188,15 @@ WE_HOT_INLINE uint64_t we_bswap64(uint64_t v)
 #define WE_KIND_RANK   2u
 
 /*
+ * Per-family coverage, FORMAT.md section 2: bytes 176 (IPv4) and 177 (IPv6) of a format-2 schema tail.
+ * STATED is what every format-2 file meant before the bytes existed: absence is a definite negative.
+ * NOT_COVERED says the plane's source makes no statement about the family, so every attribute of an
+ * address in it reads UNKNOWN. 2 is reserved for `open` and refused, as is everything above it.
+ */
+#define WE_COV_STATED      0u
+#define WE_COV_NOT_COVERED 1u
+
+/*
  * A static assertion that also works where C11 is not on: the module is compiled with flags we do not
  * choose, and a layout check that silently vanishes under -std=gnu99 is not a check.
  */
@@ -225,7 +234,9 @@ typedef struct {
     uint16_t country_table_version;  /* 172: YYYYMM mod 65536 of the ISO 3166-1 table the builder used */
     uint8_t  v4_depth;               /* 174: rank only, the S-tree depth the builder computed */
     uint8_t  v6_depth;               /* 175 */
-    uint8_t  reserved[16];           /* 176: zero */
+    uint8_t  v4_coverage;            /* 176: format 2, WE_COV_*; format 1, reserved and zero */
+    uint8_t  v6_coverage;            /* 177 */
+    uint8_t  reserved[14];           /* 178: zero */
 } we_schema_t;
 
 /*
@@ -305,7 +316,9 @@ WE_TAIL_AT(v6_sample_count, 168);
 WE_TAIL_AT(country_table_version, 172);
 WE_TAIL_AT(v4_depth, 174);
 WE_TAIL_AT(v6_depth, 175);
-WE_TAIL_AT(reserved, 176);
+WE_TAIL_AT(v4_coverage, 176);
+WE_TAIL_AT(v6_coverage, 177);
+WE_TAIL_AT(reserved, 178);
 #undef WE_TAIL_AT
 
 /*
@@ -497,6 +510,13 @@ typedef struct {
     uint64_t           generation;      /* 288; 0 only on the REVOKED map, see we_handle_publish_map */
     uint64_t           valid_until_ms;  /* 296 */
     const uint8_t     *country_known;   /* 304: 125-byte bitmap of the codes this reader knows */
+    /*
+     * 312, on the same line: the families the plane does not cover, each bit at the family's own
+     * number (bit 4 IPv4, bit 6 IPv6), so the fill's test is `(uncovered >> family) & 1` with no
+     * compare. 0 on every two-family plane, the format-1 view, the revoked map and a NULL map's
+     * stand-ins; tools read it through we_family_covered().
+     */
+    uint8_t            uncovered;
     uint8_t            digest[32];
     uint32_t           format;
     uint8_t            plane_id;  /* 0 for a pre-schema format-1 file */
@@ -535,6 +555,29 @@ typedef struct {
     const void        *base;      /* the owned buffer this view points into; free()d, not munmap'd */
     size_t             len;
 } we_map_t;
+
+WE_STATIC_ASSERT(offsetof(we_map_t, uncovered) == 312, "uncovered is at 312");
+WE_STATIC_ASSERT(offsetof(we_map_t, uncovered) / 64 == offsetof(we_map_t, generation) / 64,
+                 "uncovered shares the fill's descriptor line with generation");
+
+#define WE_UNCOVERED_V4 (1u << 4)
+#define WE_UNCOVERED_V6 (1u << 6)
+
+/*
+ * 1 when the armed plane states `family` (4 or 6), 0 when it does not cover it. A NULL map states
+ * nothing, 0. Cold: the request path reads the byte directly.
+ */
+static inline int we_family_covered(const we_map_t *m, int family)
+{
+    return m != NULL && (family == 4 || family == 6) && ((m->uncovered >> family) & 1u) == 0u;
+}
+
+/*
+ * The allowance table, FORMAT.md section 2 rule 4: 1 when this reader permits `plane` (WE_PLANE_*)
+ * to leave `family` (4 or 6) not covered, else 0. Compiled in; widening it is a reader release. The
+ * tenant plane is never allowed either family.
+ */
+int we_coverage_allowed(uint32_t plane, int family);
 
 /*
  * ---- The trace hook, FORMAT.md §7 ----

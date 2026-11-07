@@ -14,7 +14,9 @@ runs that server's own configuration test, and reloads only when the test passes
 the default policy answers 403 to a source on a cited listing, Spamhaus DROP or another listing at high
 or above, and to nothing else. Tor exits and unreachable routes are logged and let through. On
 OpenLiteSpeed, which has no configuration test, the policy starts in `log`: it writes what it would deny
-and denies once you run the `--arm-deny` line the report prints. The report's `undo` block takes it all
+and denies once you run the `--arm-deny` line the report prints. To watch first on every server, run it
+with `--log-only`: nginx and Apache get the same policy in `log`, a plain re-run keeps whichever mode
+each server is in, and `--arm-deny` turns them all to `deny`. The report's `undo` block takes it all
 back, one pasted line per server.
 
 Without the installer, the module on its own blocks nothing until you tell it to: its default mode is
@@ -157,6 +159,39 @@ the two commands that label it the way it labels its own. For a reputation file 
 Until those two commands run, a confined server cannot map the file, so the installer does not report
 the plane confirmed after that line.
 
+**A server whose unit sandboxes `/proc`.** The module names each worker by its boot id, pid
+namespace, pid and start time, and `whisper-edge-summary` uses the boot id to tell this boot's workers
+from files an earlier boot left. Ubuntu 26.04's `apache2.service` sets `ProcSubset=pid`, which hides
+`/proc/sys/kernel/random/boot_id` from every process in the unit. The installer asks the running server
+(`nsenter` into its mount namespace) and, when the file is hidden, writes the unit a drop-in that passes
+systemd's own boot id instead. On a stock Ubuntu 26.04 box:
+
+```
+   boot id: apache2.service's sandbox hides the kernel's (its running main process (pid 57259) cannot read /proc/sys/kernel/random/boot_id), so its drop-in sets Environment=WHISPER_EDGE_BOOT_ID=%b; it takes effect at the service's next full start, not at this reload, and until then whisper-edge-summary places Apache's workers by their pid and start time (boot-by=start-time)
+   wrote /etc/systemd/system/apache2.service.d/whisper-edge.conf (the boot id, 5 lines)
+```
+
+The module reads the kernel's file first, then `WHISPER_EDGE_BOOT_ID`, in either spelling (systemd
+writes it without dashes), and writes the kernel's spelling. A worker that has neither writes `boot
+unknown` and logs how to fix it. The summary still counts it, placed by its pid, start time and pid
+namespace, and by a status file written after that process started, so a file left by an earlier boot
+is still never read as live. Until the restart that gives the workers the variable:
+
+```
+process pid 1402 tick 0 boot-by=start-time
+process pid 1403 tick 0 boot-by=start-time
+live 2, gone 2, foreign 0 (another boot or pid namespace: listed by count, never checked)
+boot placed by start time 2: the writer could not read its boot id, so each was matched to a live process by pid, start time and pid namespace, and its file was written after that process started (boot-by=start-time); to name it exactly, set Environment=WHISPER_EDGE_BOOT_ID=%b in the server's unit and restart the server
+```
+
+and after it, with the boot named exactly, no line says how a worker was placed:
+
+```
+process pid 1518 tick 0
+process pid 1519 tick 0
+live 2, gone 2, foreign 0 (another boot or pid namespace: listed by count, never checked)
+```
+
 The user is **resolved, not assumed** - the server's own configuration is asked first, the running
 process second, a candidate list last. It matters because the counters directory has to be writable
 by the server, and a directory granted to the wrong name fails silently: counting is not on the
@@ -196,7 +231,7 @@ to log, and how to schedule a refresh.
 | | nginx | Apache httpd | OpenLiteSpeed / LiteSpeed |
 |---|---|---|---|
 | default mode, the module alone | `log`, blocks nothing | `log`, blocks nothing | `log`, blocks nothing |
-| the installer's default policy | `deny` on a cited listing | `deny` on a cited listing | `log` until `--arm-deny` |
+| the installer's default policy | `deny` on a cited listing (`log` with `--log-only`) | `deny` on a cited listing (`log` with `--log-only`) | `log` until `--arm-deny` |
 | finest control | per `location` | per `<Location>` / `<Directory>` | **per virtual host** |
 | verdict exposed as | `$whisper_edge_verdict` | `%{WHISPER_EDGE_VERDICT}n` note | `%{WHISPER_EDGE_VERDICT}e` env |
 | client address | the floor: the TCP peer, or a trusted proxy's header entry; the context's rules: the peer `realip` rewrites | the floor: as nginx; the context's rules: `r->useragent_addr`, which `mod_remoteip` sets | the floor: as nginx; the context's rules: the address the server reports |
@@ -507,7 +542,8 @@ would rather you know the limit than discover it.
 What the installer writes, per server: on nginx and Apache the policy is in `deny` mode and denies, with a
 403, only a source on a cited listing at high or above; its Tor and unreachable-route rules are `log`
 rules, which record and let through. On OpenLiteSpeed the same policy runs in `log` until you run
-`--arm-deny`. The module on its own, with no policy written, defaults to `log` on all three.
+`--arm-deny`, and with `--log-only` nginx and Apache do too. The module on its own, with no policy
+written, defaults to `log` on all three.
 
 In `log`, a rule that would deny writes the verdict it *would* have acted on into your error log,
 exposes it for your access log, and blocks nothing.
@@ -762,7 +798,7 @@ not in it, whatever our data says:
   and a reputation feed exempting its own customers' traffic is not a feed. Our agents are subject to
   it like anybody's.
 
-The full list is [`hold-harmless.txt`](hold-harmless.txt), 250 distinct prefixes, each with the date and method
+The full list is [`hold-harmless.txt`](hold-harmless.txt), 256 distinct prefixes, each with the date and method
 it was measured - including the registry entries where writing the file from memory got four of
 thirteen wrong, which is why every line now cites how it was checked.
 
@@ -859,6 +895,12 @@ plane tor id=2 state=refused file=tor.bin manifest=unbound why=refused:trust ref
 attr tor_exit UNKNOWN plane=tor why=refused:trust
 ```
 
+A data directory that `install.sh` or `whisper-edge-refresh --plane` filled holds the manifest the refresh
+last verified, as `manifest.json`: each run places it, by a rename, only when it names the bytes of the
+plane in place, and leaves any other one alone. A plane installed there reads `manifest=bound
+bound-to=manifest.json`, so the tool can say where it came from; the fixture above, copied in by hand, has
+no manifest beside it, and says so.
+
 (This paragraph used to show a hand-written transcript labelled "Real output". It was not: the real
 tool prints a header that version omitted, pads the address column wider than it did, and cannot
 produce the `evidence: SBL{id} (DROP)` shape at all, because the reader emits the
@@ -871,7 +913,7 @@ everything. A corrupt one is refused at load and the previous one keeps serving.
 own validity window - the bound travels inside the file, so we cannot be left enforcing month-old data
 by a config value somebody forgot - stops enforcing and allows everything.
 
-That is checked rather than asserted: `make -C core check` runs 67,989,881 cases, including single-bit
+That is checked rather than asserted: `make -C core check` runs 69,162,535 cases, including single-bit
 corruptions across a valid snapshot's body - every one refused - and a set of hostile snapshots built
 byte by byte with valid digests, because a mutation of a good file cannot express a hostile offset and
 that is exactly where the bugs were. Most of the count is one comparison per lookup: the lookup's
@@ -909,7 +951,7 @@ value against a second evaluator, the verifier's refusals one mutation each, and
 - **The cost gate's band does not see every regression on the default policy.** Each evaluator slot's
   instructions per request, measured under cachegrind for each architecture and compiler, must stay
   within 10% of its committed figure in `core/gate/cachegrind-baseline.tsv`: for the default policy
-  that is 1058.01 on aarch64 and 1261.26 on x86_64, both under gcc 13.3. An evaluator that stopped
+  that is 1081.24 on aarch64 and 1296.32 on x86_64, both under gcc 13.3. An evaluator that stopped
   reusing a value it had already fetched adds one refill there, because the default policy reads each
   of its planes once, and stays inside the band by construction, so the gate records that figure and
   does not judge it. The regression is caught on `evaluator-memo`, a policy whose rules read one plane
@@ -1040,7 +1082,9 @@ the installer derives from the cadence the manifest signs. `whisper_edge_snapsho
 snapshot file, which carries the reputation plane alone. When your configuration already names a data
 source, the installer keeps it and says so in the report. An earlier installer's `whisper-edge-refresh.timer`,
 which fetched `snapshot.bin`, is disabled so two fetchers never race for the directory, and the shared undo
-line enables it again.
+line enables it again. A new build reaches every node that serves the feed within about 180 s (measured over three hourly
+builds on 2026-11-04, the slowest node at 180 s); the report's last line, `watch:`, gives it as `A` in each
+plane's `--cycle T,D,A,F`.
 
 **Write `useIpInProxyHeader 0` at the top level of `httpd_config.conf`, explicitly; the module trusts
 only an explicit 0.** LSIAPI hands a module one client address, the one the server reports. Any other
@@ -1165,28 +1209,28 @@ skipped by name and the gate reads INCOMPLETE, never CLEAR.
 
 A release's own run of it is taken on two fresh, disposable hosts, each with nginx, Apache httpd and
 OpenLiteSpeed installed and the three modules built from the tree, and the whole gate run there,
-the keyed and installer gates included. This release's, on 2026-10-20, ended as follows (each run's
-verdict lines, the rest of it elided). On Ubuntu
-24.04, with nginx 1.24.0, Apache httpd 2.4.58, OpenLiteSpeed 1.9.3 and BIND 9.18.39:
+the keyed and installer gates included. This release's, on 2026-11-06 and 2026-11-07, ended as
+follows (each run's verdict lines, the rest of it elided). On Ubuntu 24.04, with nginx 1.24.0,
+Apache httpd 2.4.58, OpenLiteSpeed 1.9.4 and BIND 9.18.39:
 
 ```
 === keyed gate: 360 ok, 0 failed ===
-=== installer gate: 238 ok, 0 failed ===
+=== installer gate: 254 ok, 0 failed ===
 INSTALLER GATE: INCOMPLETE - everything that ran passed, but part of the gate could not run here
-=== install gate: 76 ok, 0 failed ===
+=== install gate: 81 ok, 0 failed ===
 INSTALL GATE: INCOMPLETE - everything that ran passed, but part of the gate could not run here
 ```
 
 The two rows skipped there are the SELinux arms, by name (the undo record's, and the planes' labels
 under a confined server), because SELinux is not enabled on Ubuntu; that is all INCOMPLETE means in
 these two lines. On Rocky Linux 9 with SELinux Enforcing, with nginx 1.30.6, Apache httpd 2.4.62,
-OpenLiteSpeed 1.9.3 and BIND 9.16.23, where nothing is skipped and both SELinux arms run:
+OpenLiteSpeed 1.9.4 and BIND 9.16.23, where nothing is skipped and both SELinux arms run:
 
 ```
 === keyed gate: 360 ok, 0 failed ===
-=== installer gate: 242 ok, 0 failed ===
+=== installer gate: 258 ok, 0 failed ===
 INSTALLER GATE: CLEAR
-=== install gate: 77 ok, 0 failed ===
+=== install gate: 82 ok, 0 failed ===
 INSTALL GATE: CLEAR - the refresh verifies, replaces atomically, fails without touching anything, and keeps a real BIND's zone current
 ```
 
@@ -1398,7 +1442,8 @@ exit-code statements by a check, so a name here exists in the code and a name in
 | `--named-conf FILE` | the `named.conf` the resolver half reads (default: the one `named-checkconf` reads) |
 | `--no-timer` | schedule nothing |
 | `--dry-run` | fetch and verify, say what it would do, and write nothing anywhere (no root needed) |
-| `--arm-deny` | OpenLiteSpeed only: turn the installer's policy there from log to deny, after the module has confirmed it in log mode |
+| `--log-only` | write the same policy in `log` mode on every server, which denies nothing and logs what it would deny; a plain re-run keeps the mode each server is in |
+| `--arm-deny` | turn the installer's policy from `log` to `deny`: on nginx and Apache through their configuration test and a reload, on OpenLiteSpeed after the module has confirmed it in log mode |
 
 When the servers end differently, one code stands for the run, 5 over 1 over 3 over 0, and each
 server's own line in the report says how it ended.
@@ -1417,7 +1462,7 @@ An undo line refuses to run while another installer run holds the lock, and says
 | environment | what it changes |
 |---|---|
 | `WHISPER_EDGE_DIR`, `WHISPER_EDGE_BASE`, `WHISPER_EDGE_KEY_SHA256`, `WHISPER_EDGE_SERVER`, `WHISPER_EDGE_NAMED_CONF` | as the options |
-| `WHISPER_EDGE_NO_APPLY=1`, `WHISPER_EDGE_NO_TIMER=1`, `WHISPER_EDGE_DRY_RUN=1`, `WHISPER_EDGE_ARM_DENY=1` | as the options |
+| `WHISPER_EDGE_NO_APPLY=1`, `WHISPER_EDGE_NO_TIMER=1`, `WHISPER_EDGE_DRY_RUN=1`, `WHISPER_EDGE_LOG_ONLY=1`, `WHISPER_EDGE_ARM_DENY=1` | as the options |
 | `WHISPER_EDGE_ETC` | the configuration tree (default `/etc/whisper-edge`) |
 | `WHISPER_EDGE_SBIN` | where the tools are installed (default `/usr/local/sbin`) |
 | `WHISPER_EDGE_UNITDIR` | where the systemd units are written (default `/etc/systemd/system`) |

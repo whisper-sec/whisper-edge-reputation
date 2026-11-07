@@ -146,6 +146,10 @@ zone "$O" { type master; file "whisper-edge/rpz.zone"; };
 zone "$OK" { type master; file "whisper-edge/$OK.zone"; };
 EOF
 named-checkconf "$G/named-rec.conf" || { fail "the gate's own resolver config is valid" "named-checkconf refused it"; exit 1; }
+# The configuration the rows name when they test the fetch and the file, never the host's BIND: a host's own
+# named.conf is root:named 0640 on RHEL, so a non-root run that read it would fail closed (rc 4) there and
+# pass on Ubuntu, where /etc/bind is world-readable. With this one no named loads any file a row writes.
+printf 'options { directory "%s"; };\n' "$G" > "$G/named-bare.conf"
 
 # rndc, wrapped: every call is logged, so "no reload happened" is a count and not an absence of
 # evidence, and GATE_FAKE_UPTODATE makes `reload` answer the way BIND does when it keeps the old zone.
@@ -576,7 +580,7 @@ wz "$O" "$OLD" content 7200 24.0.2.0.192 > "$W/expired"
 mkdir -p "$W/v"; cp "$W/expired" "$W/v/rpz.zone"
 printf 'whisper_edge_rpz_last_attempt_ok 1\nwhisper_edge_rpz_last_ok_seconds %s\n' "$(date +%s)" > "$W/v/rpz.zone.prom"
 NORNDC="$W/no-such-rndc"
-vrun() { out=$(WHISPER_EDGE_RNDC="$NORNDC" "${GATE_REFRESH:-$REFRESH}" --dir "$KDIR" --zone "$O" --if-due --zone-file "$W/v/rpz.zone" --base "$DEAD" 2>&1) && rc=0 || rc=$?; }
+vrun() { out=$(WHISPER_EDGE_RNDC="$NORNDC" "${GATE_REFRESH:-$REFRESH}" --dir "$KDIR" --named-conf "$G/named-bare.conf" --zone "$O" --if-due --zone-file "$W/v/rpz.zone" --base "$DEAD" 2>&1) && rc=0 || rc=$?; }
 vrun
 wedge_ref() { wz "$1" "$2" empty; }
 wedge_ref "$O" "$SW" > "$W/want-empty"
@@ -618,7 +622,7 @@ cmp -s "$W/v/rpz.zone" "$W/want-empty" \
 # Self-swept, then the fleet's own empty file at that serial arrives: it is current, not a refusal.
 wedge_ref "$O" "$SW" > "$W/v/rpz.zone"
 wedge_ref "$O" "$SW" > "$W/z"; pub "$W/A" "$W/z" "$O"
-vfetch() { out=$(WHISPER_EDGE_RNDC="$NORNDC" "${GATE_REFRESH:-$REFRESH}" --dir "$KDIR" --zone "$O" --zone-file "$W/v/rpz.zone" --base "$STUB" 2>&1) && rc=0 || rc=$?; }
+vfetch() { out=$(WHISPER_EDGE_RNDC="$NORNDC" "${GATE_REFRESH:-$REFRESH}" --dir "$KDIR" --named-conf "$G/named-bare.conf" --zone "$O" --zone-file "$W/v/rpz.zone" --base "$STUB" 2>&1) && rc=0 || rc=$?; }
 vfetch
 { [ "$rc" = 0 ] && cmp -s "$W/v/rpz.zone" "$W/want-empty" && says "$out" "not modified"; } \
   && pass "self-swept to the empty zone, then the fleet's file at serial $SW: the feed answers 304 to the file's own sha256" \
@@ -665,7 +669,7 @@ grep -q '^; state=content' "$W/v/rpz.zone" \
 wz "$O" $((SL - 7200 + 5)) content "$DAY" 24.0.2.0.192 > "$W/v/rpz.zone"
 cp "$W/v/rpz.zone" "$W/valid.keep"
 wz "$O" $((SL - DAY + 5)) content "$DAY" 24.0.2.0.192 > "$W/z"; pub "$W/A" "$W/z" "$O"
-qfetch() { out=$(WHISPER_EDGE_RNDC="$NORNDC" "${GATE_REFRESH:-$REFRESH}" --quiet --dir "$KDIR" --zone "$O" --zone-file "$W/v/rpz.zone" --base "$STUB" 2>&1 >/dev/null) && rc=0 || rc=$?; }
+qfetch() { out=$(WHISPER_EDGE_RNDC="$NORNDC" "${GATE_REFRESH:-$REFRESH}" --quiet --dir "$KDIR" --named-conf "$G/named-bare.conf" --zone "$O" --zone-file "$W/v/rpz.zone" --base "$STUB" 2>&1 >/dev/null) && rc=0 || rc=$?; }
 stale=$(st stale_feed_total "$W/v/rpz.zone.prom")
 qfetch
 { cmp -s "$W/v/rpz.zone" "$W/valid.keep" && [ "$(st stale_feed_total "$W/v/rpz.zone.prom")" = $(( ${stale:-0} + 1 )) ] \
@@ -876,7 +880,7 @@ cp "$W/zf.keep" "$ZF"; cp "$W/prom.keep" "$PROM"; touch "$ZF"; run --base "$STUB
 
 # ---- 16b. a zone not published yet: exit 5, said once even under --quiet, then asked once a slot --------
 mkdir -p "$W/np"; rm -f "$W/A/edge/rpz/$OK.zone"
-nprun() { out=$(WHISPER_EDGE_RNDC="$NORNDC" "${GATE_REFRESH:-$REFRESH}" --if-due --quiet --dir "$KDIR" --zone "$OK" --zone-file "$W/np/" --base "$STUB" 2>&1) && rc=0 || rc=$?; }
+nprun() { out=$(WHISPER_EDGE_RNDC="$NORNDC" "${GATE_REFRESH:-$REFRESH}" --if-due --quiet --dir "$KDIR" --named-conf "$G/named-bare.conf" --zone "$OK" --zone-file "$W/np/" --base "$STUB" 2>&1) && rc=0 || rc=$?; }
 NPROM="$W/np/$OK.zone.prom"
 : > "$W/A.log"; nprun
 { [ "$rc" = 5 ] && [ ! -e "$W/np/$OK.zone" ] && says "$out" "zone $OK is not published yet (HTTP 404" \
@@ -903,20 +907,20 @@ grep -q "GET /edge/rpz/$OK.zone" "$W/A.log" && pass "the control: without the ba
 # After a 404 with nothing installed, a failed fetch (a timeout, a 503) ends the back-off: the next run
 # is RETRY's, not an hour on.
 rm -f "$W/np"/*; nprun
-out=$(WHISPER_EDGE_RNDC="$NORNDC" "$REFRESH" --quiet --dir "$KDIR" --zone "$OK" --zone-file "$W/np/" --base "$DEAD" 2>&1); set_st last_attempt_seconds $(( $(date +%s) - 301 )) "$NPROM"
+out=$(WHISPER_EDGE_RNDC="$NORNDC" "$REFRESH" --quiet --dir "$KDIR" --named-conf "$G/named-bare.conf" --zone "$OK" --zone-file "$W/np/" --base "$DEAD" 2>&1); set_st last_attempt_seconds $(( $(date +%s) - 301 )) "$NPROM"
 : > "$W/A.log"; nprun
 grep -q "GET /edge/rpz/$OK.zone" "$W/A.log" \
   && pass "a fetch failure after a 404 ends the back-off: the next run, RETRY's 300 s on, asks the feed" \
   || fail "a fetch failure ends the back-off" "log=$(cat "$W/A.log")"
 control keep-backoff '      st_last_attempt_ok=0; st_bump fetch_failures_total; st_not_published_since_seconds=""   # RETRY, not the back-off' '      st_last_attempt_ok=0; st_bump fetch_failures_total'; C=$CTL
 rm -f "$W/np"/*; GATE_REFRESH=$C nprun
-out=$(WHISPER_EDGE_RNDC="$NORNDC" "$C" --quiet --dir "$KDIR" --zone "$OK" --zone-file "$W/np/" --base "$DEAD" 2>&1); set_st last_attempt_seconds $(( $(date +%s) - 301 )) "$NPROM"
+out=$(WHISPER_EDGE_RNDC="$NORNDC" "$C" --quiet --dir "$KDIR" --named-conf "$G/named-bare.conf" --zone "$OK" --zone-file "$W/np/" --base "$DEAD" 2>&1); set_st last_attempt_seconds $(( $(date +%s) - 301 )) "$NPROM"
 : > "$W/A.log"; GATE_REFRESH=$C nprun
 [ ! -s "$W/A.log" ] && pass "the control: a failure that leaves the back-off set waits the hour" \
   || fail "the control: the kept back-off must ask nothing" "$(cat "$W/A.log")"
 # A 404 for a zone this box HAS installed: the feed stopped publishing it. A failure, every run, on stderr.
 wz "$OK" $((SL + 3000)) content "$DAY" 24.0.2.0.192 > "$W/np/$OK.zone"; rm -f "$NPROM"
-wdrun() { out=$(WHISPER_EDGE_RNDC="$NORNDC" "${GATE_REFRESH:-$REFRESH}" --quiet --dir "$KDIR" --zone "$OK" --zone-file "$W/np/" --base "$STUB" 2>&1 >/dev/null) && rc=0 || rc=$?; }
+wdrun() { out=$(WHISPER_EDGE_RNDC="$NORNDC" "${GATE_REFRESH:-$REFRESH}" --quiet --dir "$KDIR" --named-conf "$G/named-bare.conf" --zone "$OK" --zone-file "$W/np/" --base "$STUB" 2>&1 >/dev/null) && rc=0 || rc=$?; }
 wdrun; r1=$rc; o1=$out; wdrun
 { [ "$r1" = 1 ] && [ "$rc" = 1 ] && says "$o1" "the zone is no longer published" && says "$out" "the zone is no longer published" \
   && [ "$(st withdrawn_total "$NPROM")" = 2 ] && [ "$(st last_attempt_ok "$NPROM")" = 0 ] && [ -s "$W/np/$OK.zone" ]; } \
@@ -1033,32 +1037,46 @@ LOC="$W/locale"; mkdir -p "$LOC"
 if [ "$(locale -a 2>/dev/null | grep -ci '^tr_TR.iso88599$')" -gt 0 ]; then TRL=tr_TR.ISO-8859-9; LOCP=""
 elif command -v localedef >/dev/null 2>&1 && localedef -i tr_TR -f ISO-8859-9 "$LOC/tr_TR.ISO-8859-9" >/dev/null 2>&1; then TRL=tr_TR.ISO-8859-9; LOCP=$LOC
 else TRL=""; fi
-if [ -n "$TRL" ] && [ "$(printf 'I' | LOCPATH=${LOCP:-/usr/lib/locale} LC_ALL=$TRL tr '[:upper:]' '[:lower:]' | od -An -tx1 | tr -d ' ')" = fd ]; then
+# The hazard is a tr that folds by the locale, which GNU tr does. Ubuntu 26.04's tr is uutils, which folds
+# ASCII whatever the locale says, so on that host the GNU one (installed beside it as gnutr) is put first on
+# PATH for these two runs: the row asks whether the refresh survives the tr that DOES fold, not whether the
+# host happens to have one first on PATH.
+TRDIR="$W/foldtr"; mkdir -p "$TRDIR"; TRFOLD=""
+for t in tr gnutr; do
+  command -v "$t" >/dev/null 2>&1 || continue
+  [ -n "$TRL" ] && [ "$(printf 'I' | LOCPATH=${LOCP:-/usr/lib/locale} LC_ALL=$TRL "$t" '[:upper:]' '[:lower:]' | od -An -tx1 | tr -d ' ')" = fd ] || continue
+  TRFOLD=$(command -v "$t"); ln -sf "$TRFOLD" "$TRDIR/tr"; break
+done
+if [ -n "$TRL" ] && [ -n "$TRFOLD" ]; then
   feed $((TOP + 1)) 24.0.2.0.192
-  out=$(LOCPATH=${LOCP:-/usr/lib/locale} LC_ALL=$TRL WHISPER_EDGE_RNDC="$W/rndc" WHISPER_EDGE_RELOAD_WAIT=8 "$REFRESH" --dir "$KDIR" --named-conf "$G/named-rec.conf" --zone RPZ.WHISPER.ONLINE --base "$STUB" 2>&1) && rc=0 || rc=$?
+  out=$(PATH="$TRDIR:$PATH" LOCPATH=${LOCP:-/usr/lib/locale} LC_ALL=$TRL WHISPER_EDGE_RNDC="$W/rndc" WHISPER_EDGE_RELOAD_WAIT=8 "$REFRESH" --dir "$KDIR" --named-conf "$G/named-rec.conf" --zone RPZ.WHISPER.ONLINE --base "$STUB" 2>&1) && rc=0 || rc=$?
   sv=$(served)
   { [ "$rc" = 0 ] && [ "$sv" = $((TOP + 1)) ]; } \
     && pass "--zone RPZ.WHISPER.ONLINE under LC_ALL=$TRL (where I lowers to a dotless i) installs $O" \
     || fail "the origin folds in the C locale" "rc=$rc served=$sv (wanted $((TOP + 1)), and $(served) on a second read) $out"
   control ambient-fold "  _o=\$(printf '%s' \"\$1\" | LC_ALL=C tr '[:upper:]' '[:lower:]')" "  _o=\$(printf '%s' \"\$1\" | tr '[:upper:]' '[:lower:]')"; C=$CTL
-  out=$(LOCPATH=${LOCP:-/usr/lib/locale} LC_ALL=$TRL "$C" --dir "$KDIR" --zone RPZ.WHISPER.ONLINE --base "$STUB" 2>&1) && rc=0 || rc=$?
+  out=$(PATH="$TRDIR:$PATH" LOCPATH=${LOCP:-/usr/lib/locale} LC_ALL=$TRL "$C" --dir "$KDIR" --named-conf "$G/named-bare.conf" --zone RPZ.WHISPER.ONLINE --base "$STUB" 2>&1) && rc=0 || rc=$?
   [ "$rc" = 6 ] && pass "the control: folding in the ambient locale turns WHISPER into whısper and refuses it (exit 6)" \
     || fail "the control: the ambient fold must refuse it" "rc=$rc $out"
 else
-  fail "the Turkish-locale case could run" "no tr_TR.ISO-8859-9 locale and localedef could not build one"
+  if [ -z "$TRL" ]; then
+    fail "the Turkish-locale case could run" "no tr_TR.ISO-8859-9 locale and localedef could not build one"
+  else
+    fail "the Turkish-locale case could run" "$TRL is here, but no tr on this host (tr, gnutr) folds I to a dotless i under it"
+  fi
 fi
 TOP=$(served)
 # '/', '..' and an option word as the origin: refused before any fetch.
 for badz in "a/b" "rpz..whisper.online" "-o" "../rpz.whisper.online"; do
   : > "$W/A.log"
-  out=$("$REFRESH" --dir "$KDIR" --zone "$badz" --base "$STUB" 2>&1) && rc=0 || rc=$?
+  out=$("$REFRESH" --dir "$KDIR" --named-conf "$G/named-bare.conf" --zone "$badz" --base "$STUB" 2>&1) && rc=0 || rc=$?
   { [ "$rc" = 6 ] && [ ! -s "$W/A.log" ]; } && pass "--zone '$badz' exits 6 before any fetch" \
     || fail "--zone '$badz' is refused first" "rc=$rc log=$(cat "$W/A.log") $out"
 done
 control loose '    if ! ZONE=$(canon_origin "$ZONE_ARG"); then' '    ZONE=$ZONE_ARG; if false; then' \
                   'origin_listed() { case " $RPZ_ORIGINS " in *" $1 "*) return 0 ;; esac; return 1; }' 'origin_listed() { return 0; }'; C=$CTL
 : > "$W/A.log"
-out=$("$C" --dir "$KDIR" --zone "../rpz.whisper.online" --zone-file "$W/loose.zone" --base "$STUB" 2>&1)
+out=$("$C" --dir "$KDIR" --named-conf "$G/named-bare.conf" --zone "../rpz.whisper.online" --zone-file "$W/loose.zone" --base "$STUB" 2>&1)
 [ -s "$W/A.log" ] && pass "the control: the loose class (any token) sends '../rpz.whisper.online' to the network" \
   || fail "the control: a loose origin must reach the network" "$out"
 

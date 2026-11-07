@@ -24,6 +24,10 @@ set -euo pipefail
 # the configurations this gate writes define the http level, and the module refuses one that is open to
 # group or world; the planes it writes are read the same way
 umask 022
+# CRASHES ARE KEPT: a worker that dies on a signal leaves a core in the work directory's cores/ (the
+# configuration's working_directory), and stop() prints its backtrace. Raising the soft limit is all this
+# process may do; where the host's core_pattern pipes cores elsewhere the report says so instead.
+ulimit -c unlimited 2>/dev/null || ulimit -c "$(ulimit -H -c)" 2>/dev/null || true
 
 cd "$(dirname "$0")"
 # ROOT is the EDGE TREE's own root, one level up from this script, NOT two.
@@ -33,6 +37,7 @@ cd "$(dirname "$0")"
 # created beside the clone, and the build instruction this script prints named a module directory that
 # does not exist. One level up with no `edge/` prefix is correct in BOTH layouts, which is the point.
 ROOT=$(cd .. && pwd)
+. "$ROOT/curl-asis.sh"   # every request goes out as the row writes it, whatever curl release
 # THE GATE'S OWN PORT RANGE. The three module gates run on one box in the merge candidate's walk, so each
 # binds a range of its own: Apache's gate uses 8099 and 8599, LiteSpeed's 8120 and up, and this gate
 # 8300 and 8301 (the origin, and the caching front the wire rows put before it). PORT=<n> moves the
@@ -211,7 +216,7 @@ fi
 if ! rm -rf "$W" 2>/dev/null; then
     sudo -n rm -rf "$W" 2>/dev/null || { echo "NGINX GATE: FAILED - cannot remove the previous work directory $W (root-owned leftovers and no sudo)"; exit 1; }
 fi
-mkdir -p "$W/logs" "$W/html/enforced" "$W/html/default" "$W/html/g3a" "$W/html/g3b" "$W/html/g3p/c" "$W/t"
+mkdir -p "$W/logs" "$W/cores" "$W/html/enforced" "$W/html/default" "$W/html/g3a" "$W/html/g3b" "$W/html/g3p/c" "$W/t"
 chmod 0755 "$W"
 W=$(cd "$W" && pwd)
 [ "$W" = "$W_WANT" ] || echo "work directory: $W_WANT's chain is not trusted, using $W"
@@ -240,6 +245,7 @@ load_module $MODULE;
 worker_processes 2;
 error_log $W/logs/error.log info;
 pid $W/logs/nginx.pid;
+working_directory $W/cores;
 ${MAIN_EXTRA:-}
 events { worker_connections 64; }
 http {
@@ -317,7 +323,53 @@ ctl_signal_deaths() { # the signal deaths in the error log since the control's s
     for p in $GATE_KILLED; do own="$own|worker process $p exited on signal 9( |$)"; done
     tail -c +"$((CTL_OFF + 1))" "$W/logs/error.log" 2>/dev/null | grep 'exited on signal' | grep -c -v -E "$own" || true
 }
+# EVERY ROW'S WORKER DEATHS, not the controls' alone. A worker that exits on a signal is a crash
+# wherever it happens, so stop() reads the error log the server wrote and, for every death not yet reported,
+# prints "worker <pid> died on signal N" with the backtrace from its core (gdb over this nginx and the
+# core in $W/cores). A release module's death fails the gate there and then, under its own name, never folded
+# into whatever the row was measuring; a control's is the controls' row's business (ctl_signal_deaths) and
+# is printed, not counted twice, and an exempt control's (its SIGBUS is its row's measurement) is not
+# printed at all. The gate's own kill -9 (GATE_KILLED) is not a crash.
+declare -A CRASH_SEEN=()   # keyed by the whole log line (its timestamp and pid), so a reused pid is still seen
+crash_bt() { # <pid>: the backtrace of the core that pid left, or why there is none
+    local c pat
+    # the gate runs under set -e and pipefail: ls fails on the names that are absent, and that is the usual case
+    c=$(ls -1t "$W/cores/core.$1" "$W/cores/core" "$W/cores"/core.*."$1" 2>/dev/null | sed -n 1p || true)
+    if [ -z "$c" ]; then
+        pat=$(cat /proc/sys/kernel/core_pattern 2>/dev/null || echo '?')
+        echo "        no core in $W/cores (core_pattern \"$pat\", ulimit -c $(ulimit -c))"
+    elif ! command -v gdb >/dev/null 2>&1; then
+        echo "        core $c kept; gdb is not installed, so no backtrace (gdb -batch -ex 'thread apply all bt' $(command -v nginx) $c)"
+    else
+        echo "        core $c:"
+        gdb -q -batch -ex 'thread apply all bt 30' "$(command -v nginx)" "$c" 2>&1 \
+            | grep -E '^(Thread|#[0-9]|Program terminated)' | head -60 | sed 's/^/          /' || true
+        mv "$c" "$c.seen.$1" 2>/dev/null || true   # read once; a later death leaves its own
+    fi
+}
+crash_report() { # print every new worker death in the server's error log; release deaths fail the gate
+    local line pid sig
+    [ -f "$W/logs/error.log" ] || return 0
+    while read -r line; do
+        pid=$(sed -n 's/.*worker process \([0-9]*\) exited on signal \([0-9]*\).*/\1/p' <<<"$line")
+        sig=$(sed -n 's/.*worker process \([0-9]*\) exited on signal \([0-9]*\).*/\2/p' <<<"$line")
+        [ -n "$pid" ] || continue
+        [ -z "${CRASH_SEEN[$line]:-}" ] || continue
+        CRASH_SEEN[$line]=1
+        case " $GATE_KILLED " in *" $pid "*) [ "$sig" = 9 ] && continue ;; esac
+        if [ -n "$CTL_RUN" ] && [ -n "$(ctl_exempt "$CTL_RUN")" ]; then
+            continue                             # an exempt control's death is its row's measurement (CTL_SIGNAL_EXEMPT)
+        elif [ -n "$CTL_RUN" ]; then
+            echo "  note  worker $pid died on signal $sig under the control module $CTL_RUN (the controls' row judges it)"
+        else
+            bad "worker $pid died on signal $sig (a crash in the release module, at $(date -u +%H:%M:%S); not a deferral, not a timeout)"
+        fi
+        crash_bt "$pid"
+    done < <(grep 'exited on signal' "$W/logs/error.log" 2>/dev/null || true)
+    return 0
+}
 start() {
+    crash_report                                 # a death the last server logged on its way out
     if ! nginx -c "$W/nginx.conf" -p "$W" 2>"$W/logs/start.err"; then
         echo "nginx did not start (is 127.0.0.1:$PORT free? PORT=<n> picks another port):" >&2
         cut -c1-300 "$W/logs/start.err" >&2
@@ -333,6 +385,7 @@ start() {
     return 0
 }
 stop()  {
+    crash_report
     if [ -n "$CTL_RUN" ]; then
         local d; d=$(ctl_signal_deaths)
         CTL_CHECKED=$((CTL_CHECKED + 1))
@@ -2199,6 +2252,7 @@ rb_conf() { # <module> <http text>
         mkconf 1s "whisper_edge_summary $PP/c-rb;" 'log_format rb "$request_uri $status $whisper_edge_generations";' "$2"
 }
 rb_workers() { pgrep -P "$1" -f '^nginx: worker process' 2>/dev/null | sort | tr '\n' ' '; }
+rb_gone() { local p; for p in $1; do kill -0 "$p" 2>/dev/null && return 1; done; return 0; }   # <pids>: none is alive
 rb_tor() { { cat "$PP"/c-rb/[0-9]*.status 2>/dev/null | grep -o '^plane tor [a-z]*' || true; } | sort | uniq -c | awk '{printf "%s x%s ", $4, $1}'; }
 # rb_walk <module>: a good server under steady requests, reloaded into one refused plane and then into the
 # conflict. Leaves RB_UP, RB_M1/RB_M2 (the master after each reload), RB_NEW (the first reload's new workers
@@ -2207,7 +2261,7 @@ rb_tor() { { cat "$PP"/c-rb/[0-9]*.status 2>/dev/null | grep -o '^plane tor [a-z
 rb_walk() {
     local m w0 w1 wall wall1 lp
     rm -rf "$PP/c-rb"; : > "$W/logs/error.log"; : > "$W/logs/rb.log"; rm -f "$W/rb.stop"
-    RB_P0=0; RB_P1=0; RB_UP=no; RB_M1=""; RB_M2=""; RB_NEW=""; RB_SAME2=""; RB_TOR=""; RB_N=0; RB_BAD200=""; RB_GENS=""; RB_TORTOK=""; RB_DEATHS=""
+    RB_W1=""; RB_W2=""; RB_LIFE=""; RB_P0=0; RB_P1=0; RB_UP=no; RB_M1=""; RB_M2=""; RB_NEW=""; RB_SAME2=""; RB_TOR=""; RB_N=0; RB_BAD200=""; RB_GENS=""; RB_TORTOK=""; RB_DEATHS=""
     rb_conf "$1" ""
     start && await '[ -f "$W/logs/nginx.pid" ] && [ "$(code /rb/index.html)" = 200 ]' 15 "the good server" || { stop; sleep 1; return; }
     RB_UP=yes; m=$(cat "$W/logs/nginx.pid"); w0=$(rb_workers "$m"); wall=$(workers)
@@ -2216,6 +2270,12 @@ rb_walk() {
     RB_P0=$(wc -l < "$W/logs/rb.log")
     rb_conf "$1" "$RB_BAD"; nginx -s reload -c "$W/nginx.conf" -p "$W" 2>/dev/null || true
     await '[ "$(rb_tor)" = "refused x2 " ]' 15 "the new workers' status" || true
+    # and the old generation gone. nginx starts the new workers, sleeps 100 ms, and only then sends the old
+    # ones their QUIT, so until they read it they still say "nginx: worker process", not "is shutting down".
+    # The new workers' status can land inside that window (it did on 26.04's nginx 1.28: six of 25 walks in a
+    # container took w1 with the old pair in it, which then exited and read "same workers no"), so the
+    # worker set the conflict's reload must keep is read only once every one of w0 has exited
+    await 'rb_gone "$w0"' 15 "the first reload's old workers' exit" || true
     RB_M1=$(kill -0 "$m" 2>/dev/null && echo yes || echo no); w1=$(rb_workers "$m"); RB_TOR=$(rb_tor)
     wall1=$(pgrep -P "$m" 2>/dev/null | tr '\n' ' ')   # the taken reload's children: new workers, cache manager, loader
     RB_NEW=$([ -n "$w1" ] && [ "$w1" != "$w0" ] && echo yes || echo no)
@@ -2224,7 +2284,10 @@ rb_walk() {
     rb_conf "$1" "$RB_PAIR"; nginx -s reload -c "$W/nginx.conf" -p "$W" 2>/dev/null || true
     sleep 3
     RB_M2=$(kill -0 "$m" 2>/dev/null && echo yes || echo no)
-    RB_SAME2=$([ -n "$w1" ] && [ "$(rb_workers "$m")" = "$w1" ] && echo yes || echo no)
+    RB_W1=$w1; RB_W2=$(rb_workers "$m" || true)   # empty, not a failure, when the master is gone (the init_module control)
+    RB_SAME2=$([ -n "$w1" ] && [ "$RB_W2" = "$w1" ] && echo yes || echo no)
+    # the master's own account of its children (signals, reloads, workers started and exited), kept for the row's evidence
+    RB_LIFE=$( { grep -E 'signal|reconfigur|start worker|exited|gracefully|cannot be bound' "$W/logs/error.log" || true; } | sed 's/^[0-9/]* //' | cut -c1-160 | tr '\n' '|')
     touch "$W/rb.stop"; wait "$lp" 2>/dev/null || true
     RB_N=$(wc -l < "$W/logs/rb.log")
     RB_BAD200=$(awk '$2 != 200' "$W/logs/rb.log" | wc -l)
@@ -2249,7 +2312,7 @@ rb_walk "$MODULE"
     || bad "refused plane (b): $RB_N requests ($RB_P0 before, $((RB_P1 - RB_P0)) between, $((RB_N - RB_P1)) after), $RB_BAD200 not 200, reputation $RB_GENS, tor $RB_TORTOK, $RB_DEATHS signal deaths"
 [ "$RB_M2" = yes ] && [ "$RB_SAME2" = yes ] && grep -qF "$RB_WHY_PAIR" "$W/logs/error.log" \
     && ok "refused binding (d): a reload into the conflict is rejected, the master's log naming both files, and the running master and workers keep serving" \
-    || bad "refused binding (d): after the conflict's reload: master $RB_M2, same workers $RB_SAME2, logged $(grep -c 'cannot be bound' "$W/logs/error.log" || true)"
+    || bad "refused binding (d): after the conflict's reload: master $RB_M2, same workers $RB_SAME2 (before: $RB_W1, after: $RB_W2), logged $(grep -c 'cannot be bound' "$W/logs/error.log" || true); the master's log: $RB_LIFE"
 # (c) a fresh start with one refused plane
 rb_start() { # <module>: leaves RB_SUP, RB_SCODE, RB_SREP, RB_STOR, RB_SDEATHS
     rm -rf "$PP/c-rb"; : > "$W/logs/error.log"; : > "$W/logs/rb.log"
@@ -3355,17 +3418,28 @@ rm -rf "$V5/counters"; : > "$W/logs/error.log"; : > "$W/logs/v5.log"
 start
 await '[ -f "$W/logs/nginx.pid" ] && [ "$(code /)" = 200 ]' 10 "the verdict server" || bad "verdict: the server did not come up: $(tail -2 "$W/logs/start.err" | tr '\n' '|' | cut -c1-200)"
 v5_gen() { cat "$V5"/counters/[0-9]*.status 2>/dev/null | grep -c "^plane reputation armed generation $1 " || true; }
+v5_mono() { python3 -c 'import time; print(int(time.monotonic() * 1000))'; }   # CLOCK_MONOTONIC, the retire list's clock
+v5_seen=()   # generation -> when both workers' status files first showed it armed
 g=20
 for pair in 1:low 2:medium 3:high 4:critical 68:critical,drop 5:critical 69:critical,drop; do
     sev=${pair%%:*}; want=${pair#*:}
     if [ "$g" != 20 ]; then
-        # one publish per 8 s: a displaced map holds a retire slot for the 30 s grace and there are four, so a
-        # fifth publish inside one grace is deferred until a slot frees (the thread says so once and arms
-        # nothing meanwhile); this row measures the renderer, not the retire list, and must not trip it
-        sleep 6
+        # This row measures the renderer, not the retire list, and must not trip it. Each publish displaces
+        # the armed map into one of four retire slots for the 30 s grace, and a publish that finds no slot
+        # free is deferred. A fixed cadence (it was 6 s a publish) only hoped the fifth publish came after
+        # the first slot's grace, and on a loaded runner it did not. So the release is explicit: a
+        # worker stamps a slot when it acknowledges a publish, in the same tick that then writes its status,
+        # so the moment both status files showed generation g-4 armed comes after both slots were stamped.
+        # Publishing g a grace and a second after that moment finds g-4's slot free on both workers, however
+        # the scheduler ran them. The first four have free slots and go at once.
+        if [ -n "${v5_seen[$((g - 4))]:-}" ]; then
+            v5_left=$(( ${v5_seen[$((g - 4))]} + 31000 - $(v5_mono) ))
+            [ "$v5_left" -le 0 ] || sleep "$(printf '%d.%03d' $((v5_left / 1000)) $((v5_left % 1000)))"
+        fi
         python3 ../core/make-test-snapshot.py "$V5/.snap.tmp" "$g" 0 "$sev" "$RANGE_START" "$RANGE_END"; chmod 0644 "$V5/.snap.tmp"; mv -f "$V5/.snap.tmp" "$V5/snapshot.bin"
     fi
     await '[ "$(v5_gen '"$g"')" = 2 ]' 20 "generation $g armed" || bad "verdict: generation $g (severity byte $sev) did not arm in both workers within 20 s (the thread logs nothing when it misses one: $(grep -c "generation $g verified" "$W/logs/error.log" || true) arming lines)"
+    [ "$g" = 20 ] || v5_seen[$g]=$(v5_mono)   # 20 is the bind's: it displaced nothing and holds no slot
     code "/?q=sev$sev" >/dev/null; sleep 0.3
     l=$(grep -m1 -F "/?q=sev$sev " "$W/logs/v5.log" || true)
     [ "$l" = "/?q=sev$sev verdict=$want listed=${want%%,*}" ] \
@@ -3376,9 +3450,19 @@ done
 code_as "/?q=none" "$UNLISTED" >/dev/null; sleep 0.3
 l=$(grep -m1 -F '/?q=none ' "$W/logs/v5.log" || true)
 [ "$l" = "/?q=none verdict=none listed=none" ] && ok "verdict: the unlisted address renders none" || bad "verdict: the unlisted address: \"$l\""
-[ "$(cat "$V5"/counters/[0-9]*.status | grep -c "^plane reputation armed .* deferred 0")" = 2 ] \
-    && ok "verdict: no publish was deferred by the retire list on the way (deferred 0 on both plane lines)" \
-    || bad "verdict: the retire list deferred a publish: $(cat "$V5"/counters/[0-9]*.status | grep -o "deferred [0-9]*" | tr "\n" " ")"
+# read from the serving workers' own files: a file whose writer is gone (a worker the master replaced) is a
+# third file with its own plane line, and the row once failed on "deferred 0" three times for that alone
+v5_live=""; v5_m=$(cat "$W/logs/nginx.pid" 2>/dev/null || :)
+for f in "$V5"/counters/[0-9]*.status; do
+    [ -f "$f" ] || continue
+    p=$(basename "$f"); p=${p%%-*}
+    [ -n "$v5_m" ] && [ "$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')" = "$v5_m" ] && v5_live="$v5_live $f"
+done
+# shellcheck disable=SC2086
+[ -n "$v5_live" ] && [ "$(cat $v5_live | grep -c "^plane reputation armed .* deferred 0")" = 2 ] \
+    && ! grep -q 'exited on signal' "$W/logs/error.log" \
+    && ok "verdict: no publish was deferred by the retire list on the way (deferred 0 on both serving workers' plane lines), and no worker died on a signal" \
+    || bad "verdict: $(if grep -q 'exited on signal' "$W/logs/error.log"; then echo 'a worker DIED ON A SIGNAL (a crash, not a deferral)'; elif [ "$(wc -w <<<"$v5_live")" != 2 ]; then echo 'the serving workers are not the two'; else echo 'the retire list deferred a publish'; fi): $(for f in "$V5"/counters/[0-9]*.status; do printf '%s %s; ' "$(basename "$f")" "$(grep -o 'deferred [0-9]*' "$f" | tr '\n' ' ')"; done) live:${v5_live:- none} master ${v5_m:-gone}; $(grep -E 'exited|signal' "$W/logs/error.log" | tail -3 | cut -c1-160 | tr '\n' '|')"
 stop; sleep 1
 
 echo "$(date -u +%H:%M:%S) == realip in a location alone: the decision runs after it and the context rule denies the listed client =="

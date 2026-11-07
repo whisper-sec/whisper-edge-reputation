@@ -3919,6 +3919,11 @@ static void emit_plane(line_t *l, plane_t *p)
         } else {
             L_null(l, "key-bits-v6", 'n');
         }
+        /* the family the plane says nothing about (FORMAT.md section 2), from the armed map; the key is
+         * written only when there is one, so a two-family plane's line is the line it always was */
+        if (!we_family_covered(m, 4) || !we_family_covered(m, 6)) {
+            L_key(l, "not-covered", 's', !we_family_covered(m, 4) ? "v4" : "v6");
+        }
     } else {
         L_null(l, "format", 'n');
         L_null(l, "generation", 'd');
@@ -4312,6 +4317,9 @@ static void emit_attrs(sb_t *o, const addr_t *a)
                 add_member(&w, "revoked");
             } else if (p->state == PS_STALE) {
                 add_member(&w, "stale");
+            } else if (p->armed && !we_family_covered(p->view, s->family)) {
+                /* the fifth unknown: the plane does not cover the address's family (FORMAT.md section 2) */
+                add_member(&w, s->family == 4u ? "not-covered:ipv4" : "not-covered:ipv6");
             } else {
                 plane_why(&w, p);
             }

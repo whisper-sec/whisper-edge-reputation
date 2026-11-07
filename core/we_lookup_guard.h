@@ -12,7 +12,7 @@
  * The shipped whisper-edge-lookup refuses every test mutant: a build defining WE_LOOKUP_TOOL and
  * any name below fails here unless it also defines WE_LOOKUP_MUTANT_BUILD, which only the gate's
  * mutant phase does. The Makefile refuses the same names on the command line; this is the second
- * wall, for a definition that arrives some other way. 177 names.
+ * wall, for a definition that arrives some other way. 188 names.
  */
 #if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_LOOKUP_TEST_ACME_AS_HOLD_HARMLESS)
 #error "WE_LOOKUP_TEST_ACME_AS_HOLD_HARMLESS is a test mutant; the shipped whisper-edge-lookup is never built with one"
@@ -434,8 +434,23 @@
 #if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_ALLOW_U_FALLTHROUGH)
 #error "WE_TEST_ALLOW_U_FALLTHROUGH is a test mutant; the shipped whisper-edge-lookup is never built with one"
 #endif
+#if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_ALLOW_V4_UNCOVERED)
+#error "WE_TEST_ALLOW_V4_UNCOVERED is a test mutant; the shipped whisper-edge-lookup is never built with one"
+#endif
 #if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_BOOL_NOT)
 #error "WE_TEST_BOOL_NOT is a test mutant; the shipped whisper-edge-lookup is never built with one"
+#endif
+#if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_BOOT_CACHE_PER_UNIT)
+#error "WE_TEST_BOOT_CACHE_PER_UNIT is a test mutant; the shipped whisper-edge-lookup is never built with one"
+#endif
+#if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_BOOT_ENV_FIRST)
+#error "WE_TEST_BOOT_ENV_FIRST is a test mutant; the shipped whisper-edge-lookup is never built with one"
+#endif
+#if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_BOOT_HIDDEN)
+#error "WE_TEST_BOOT_HIDDEN is a test mutant; the shipped whisper-edge-lookup is never built with one"
+#endif
+#if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_BUILD)
+#error "WE_TEST_BUILD is a test mutant; the shipped whisper-edge-lookup is never built with one"
 #endif
 #if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_CLASSIFY_ISUNK_U)
 #error "WE_TEST_CLASSIFY_ISUNK_U is a test mutant; the shipped whisper-edge-lookup is never built with one"
@@ -445,6 +460,24 @@
 #endif
 #if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_CORE_CONTROL)
 #error "WE_TEST_CORE_CONTROL is a test mutant; the shipped whisper-edge-lookup is never built with one"
+#endif
+#if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_COVERAGE_IGNORED)
+#error "WE_TEST_COVERAGE_IGNORED is a test mutant; the shipped whisper-edge-lookup is never built with one"
+#endif
+#if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_COVERAGE_INTO_STALE)
+#error "WE_TEST_COVERAGE_INTO_STALE is a test mutant; the shipped whisper-edge-lookup is never built with one"
+#endif
+#if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_COVERAGE_MARK_IGNORED)
+#error "WE_TEST_COVERAGE_MARK_IGNORED is a test mutant; the shipped whisper-edge-lookup is never built with one"
+#endif
+#if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_COVERAGE_PEEK_IGNORED)
+#error "WE_TEST_COVERAGE_PEEK_IGNORED is a test mutant; the shipped whisper-edge-lookup is never built with one"
+#endif
+#if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_COVERAGE_PEEK_TENANT_GATED)
+#error "WE_TEST_COVERAGE_PEEK_TENANT_GATED is a test mutant; the shipped whisper-edge-lookup is never built with one"
+#endif
+#if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_COVERAGE_SECOND_LOAD)
+#error "WE_TEST_COVERAGE_SECOND_LOAD is a test mutant; the shipped whisper-edge-lookup is never built with one"
 #endif
 #if defined(WE_LOOKUP_TOOL) && !defined(WE_LOOKUP_MUTANT_BUILD) && defined(WE_TEST_EXTRA_LOAD)
 #error "WE_TEST_EXTRA_LOAD is a test mutant; the shipped whisper-edge-lookup is never built with one"

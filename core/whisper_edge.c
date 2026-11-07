@@ -54,14 +54,78 @@
  */
 #define WE_V4_INDEX_ENTRIES 65537u
 
-/*
- * The one-bucket table the loader points a family of kind NONE at, so the lookup keeps two arms: the
- * window is [0, min(UINT32_MAX, n)) = the whole array. Static and const, never in a mapping, so the
- * trace build sees no mapped index read for an unindexed family.
- */
-static const uint32_t we_whole_window[2] = { 0u, 0xffffffffu };
-
 #include "we_country_table.h"
+
+/*
+ * THE ALLOWANCE TABLE, FORMAT.md section 2 rule 4: the (plane, family) cells this reader permits to be
+ * not covered. Exactly one today, tor IPv6, mirroring the builder's plane profiles (coverage-identity.sh
+ * holds the two equal). Every other cell is refused, so a builder bug or a hostile local writer cannot
+ * turn a whole family of `routing` into UNKNOWN with one byte; widening it is a reader release, and an
+ * older reader refusing a newly allowed cell is the safe must-understand outcome.
+ *
+ * WE_TEST_ALLOW_V4_UNCOVERED adds tor IPv4, so the IPv4 half of rule 5 (unreachable while no IPv4 cell
+ * is allowed) has rows of its own. It changes this table's data on purpose and exists only in the test
+ * build; the guard below and the gate's grep of every release compile line keep it out of production.
+ */
+#if defined(WE_TEST_ALLOW_V4_UNCOVERED) && !defined(WE_TEST_BUILD)
+#error "WE_TEST_ALLOW_V4_UNCOVERED widens the coverage allowance table and exists only in a test build"
+#endif
+static const uint8_t we_coverage_allowance[WE_PLANE_MAX + 1u] = {
+#ifdef WE_TEST_ALLOW_V4_UNCOVERED
+    [WE_PLANE_TOR] = (uint8_t)(WE_UNCOVERED_V4 | WE_UNCOVERED_V6),
+#else
+    [WE_PLANE_TOR] = (uint8_t)WE_UNCOVERED_V6,
+#endif
+};
+
+int we_coverage_allowed(uint32_t plane, int family)
+{
+    if (plane == 0u || plane > WE_PLANE_MAX || (family != 4 && family != 6)) {
+        return 0;
+    }
+    return (we_coverage_allowance[plane] >> family) & 1u;
+}
+
+/* rule 4's refusal, per plane and family; the loader's messages are static strings */
+static const char *const we_cov_refusal[2][WE_PLANE_MAX + 1u] = {
+    { NULL, "plane reputation may not leave IPv4 not covered", "plane tor may not leave IPv4 not covered",
+      "plane rpki-unreachable may not leave IPv4 not covered", "plane routing may not leave IPv4 not covered",
+      "plane anonymizer may not leave IPv4 not covered", "plane threat may not leave IPv4 not covered",
+      "plane registry may not leave IPv4 not covered", "the tenant plane covers both families" },
+    { NULL, "plane reputation may not leave IPv6 not covered", "plane tor may not leave IPv6 not covered",
+      "plane rpki-unreachable may not leave IPv6 not covered", "plane routing may not leave IPv6 not covered",
+      "plane anonymizer may not leave IPv6 not covered", "plane threat may not leave IPv6 not covered",
+      "plane registry may not leave IPv6 not covered", "the tenant plane covers both families" },
+};
+
+/*
+ * THE TWO TABLES A REQUEST READS THAT NO MAPPING HOLDS, at a fixed offset of a page of their own.
+ *
+ * whole_window is the one-bucket table the loader points a family of kind NONE at, so the lookup keeps
+ * two arms: the window is [0, min(UINT32_MAX, n)) = the whole array. country_known is the bitmap a
+ * routing record's country is normalised through on every fill (the map's country_known). Static and
+ * const, never in a mapping, so the trace build sees no mapped index read for either.
+ *
+ * Their place is this block's, not the link's. A table left to the link sits after whatever read-only
+ * data precedes it, every unrelated string and table of the build, so a message made longer anywhere
+ * moves the D1 set it lands in. The block is aligned to the set stride of a 32 KiB 8-way D1 (4,096 bytes,
+ * a page) and the two tables take its last three lines: a page-aligned object of n lines covers sets 0
+ * to n - 1, so the low sets of a page are the ones every mapped plane and index shares, and the high
+ * sets the ones they share least. The lines below them hold nothing.
+ */
+#define WE_SET_STRIDE 4096u
+typedef struct {
+    uint8_t  below[WE_SET_STRIDE - 192u];
+    uint32_t whole_window[2];
+    uint8_t  pad[56];
+    uint8_t  country_known[128];
+} we_core_hot_t;
+WE_STATIC_ASSERT(sizeof(we_core_hot_t) == WE_SET_STRIDE && offsetof(we_core_hot_t, whole_window) == WE_SET_STRIDE - 192u
+                 && offsetof(we_core_hot_t, country_known) == WE_SET_STRIDE - 128u, "the core's hot tables end their page");
+static _Alignas(WE_SET_STRIDE) const we_core_hot_t we_core_hot = {
+    .whole_window = { 0u, 0xffffffffu },
+    .country_known = WE_COUNTRY_KNOWN_BITS,
+};
 
 /* plane_id -> the installed file's stem, FORMAT.md §2. */
 static const char *const we_plane_names[WE_PLANE_MAX + 1u] = {
@@ -261,6 +325,42 @@ static int check_kind(lfam_t *f, uint32_t format, we_load_detail_t *d)
 }
 
 /*
+ * The per-family coverage of a format-2 tail, FORMAT.md section 2 rules 1, 3, 4 and 5, in that order.
+ * It runs after the stride and country-table checks and BEFORE check_kind and fam_regions, so a
+ * sabotage of a not-covered family's fields gets rule 5's message and never a later check's.
+ */
+static int lfam_carries(const lfam_t *f)
+{
+    return f->n != 0u || f->flagged || f->idx_off != 0u || f->start_off != 0u || f->end_off != 0u
+        || f->sev_off != 0u || f->meta_off != 0u || f->kind != 0u || f->param != 0u || f->rec_off != 0u
+        || f->sample_off != 0u || f->sample_count != 0u || f->depth_said != 0u;
+}
+
+static int check_coverage(const we_schema_t *t, const lfam_t *f4, const lfam_t *f6, we_load_detail_t *d)
+{
+    if (t->v4_coverage > WE_COV_NOT_COVERED || t->v6_coverage > WE_COV_NOT_COVERED) {
+        return refuse(d, WE_ERR_FORMAT, t->v4_coverage > WE_COV_NOT_COVERED ? 4 : 6, -1,
+                      "a coverage byte outside stated and not-covered");
+    }
+    if (t->v4_coverage == WE_COV_NOT_COVERED && t->v6_coverage == WE_COV_NOT_COVERED) {
+        return refuse(d, WE_ERR_FORMAT, 0, -1, "a plane that covers no family");
+    }
+    if (t->v4_coverage == WE_COV_NOT_COVERED && !we_coverage_allowed(t->plane_id, 4)) {
+        return refuse(d, WE_ERR_FORMAT, 4, -1, we_cov_refusal[0][t->plane_id]);
+    }
+    if (t->v6_coverage == WE_COV_NOT_COVERED && !we_coverage_allowed(t->plane_id, 6)) {
+        return refuse(d, WE_ERR_FORMAT, 6, -1, we_cov_refusal[1][t->plane_id]);
+    }
+    if (t->v4_coverage == WE_COV_NOT_COVERED && lfam_carries(f4)) {
+        return refuse(d, WE_ERR_FORMAT, 4, -1, "a not-covered family carries data");
+    }
+    if (t->v6_coverage == WE_COV_NOT_COVERED && lfam_carries(f6)) {
+        return refuse(d, WE_ERR_FORMAT, 6, -1, "a not-covered family carries data");
+    }
+    return WE_OK;
+}
+
+/*
  * The schema tail, FORMAT.md §2, and the format/plane/schema agreement. Everything here is the FORMAT
  * stage of §6: it reads only the 192-byte header, so it runs before the length is even compared.
  */
@@ -295,6 +395,10 @@ static int check_schema(const we_header_t *h, uint32_t format, lfam_t *f4, lfam_
         return WE_OK;
     }
 
+    /* format 2 reads 176 and 177 below; format 1 keeps all of 176..191 reserved */
+    if (format == WE_FORMAT_1 && (t->v4_coverage != 0u || t->v6_coverage != 0u)) {
+        return refuse(d, WE_ERR_FORMAT, 0, -1, "a reserved byte of the schema tail is not zero");
+    }
     for (i = 0; i < sizeof t->reserved; i++) {
         if (t->reserved[i] != 0u) {
             return refuse(d, WE_ERR_FORMAT, 0, -1, "a reserved byte of the schema tail is not zero");
@@ -342,6 +446,12 @@ static int check_schema(const we_header_t *h, uint32_t format, lfam_t *f4, lfam_
     f4->param = t->v4_index_param;
     f6->kind = t->v6_index_kind;
     f6->param = t->v6_index_param;
+    if (format == WE_FORMAT_2) {
+        rc = check_coverage(t, f4, f6, d);
+        if (rc != WE_OK) {
+            return rc;
+        }
+    }
     rc = check_kind(f4, format, d);
     if (rc == WE_OK) {
         rc = check_kind(f6, format, d);
@@ -630,7 +740,7 @@ static int all_zero(const uint8_t *p, size_t n)
 
 static int known_country(uint32_t code)
 {
-    return code <= WE_COUNTRY_MAX && ((we_country_known_table[code >> 3] >> (code & 7u)) & 1u) != 0u;
+    return code <= WE_COUNTRY_MAX && ((we_core_hot.country_known[code >> 3] >> (code & 7u)) & 1u) != 0u;
 }
 
 static int check_records(const uint8_t *base, const lfam_t *f, uint32_t plane, uint32_t schema, uint32_t feed_count,
@@ -787,7 +897,7 @@ static void fill_family(we_fam_t *out, const lfam_t *f, const uint8_t *base, uin
     out->file_param = (uint8_t)f->param;
     if (f->n == 0u) {
         out->kind = WE_KIND_RADIX;
-        out->idx = we_whole_window;
+        out->idx = we_core_hot.whole_window;
         return;                      /* n = 0 short-circuits every lookup before any of this is read */
     }
     out->n = f->n;
@@ -816,7 +926,7 @@ static void fill_family(we_fam_t *out, const lfam_t *f, const uint8_t *base, uin
     out->kind = WE_KIND_RADIX;
     k = (f->kind == WE_KIND_RADIX) ? f->param : 0u;
     out->idx = (f->kind == WE_KIND_RADIX) ? (const uint32_t *)(const void *)(base + f->idx_off)
-                                          : we_whole_window;
+                                          : we_core_hot.whole_window;
     out->shift = (uint8_t)(f->kb == 4u ? 32u - k : 63u - k);
 }
 
@@ -1041,8 +1151,12 @@ static int we_validate(const uint8_t *base, size_t size, const char *path, int a
     m->generation = h->generation;
     m->valid_until_ms = h->valid_until_ms;
     memcpy(m->digest, h->digest, 32);
+    if (format == WE_FORMAT_2) {
+        m->uncovered = (uint8_t)((h->schema.v4_coverage == WE_COV_NOT_COVERED ? WE_UNCOVERED_V4 : 0u)
+                                 | (h->schema.v6_coverage == WE_COV_NOT_COVERED ? WE_UNCOVERED_V6 : 0u));
+    }
     m->country_table_version = (h->flags & WE_H_SCHEMA) != 0u ? h->schema.country_table_version : 0u;
-    m->country_known = we_country_known_table;
+    m->country_known = we_core_hot.country_known;
     m->country_unknown = unknown;
     m->feed_count = format == WE_FORMAT_2 ? feed_count : 0u;
     m->feed_table_end = format == WE_FORMAT_2 ? feed_end : 0u;
@@ -1659,18 +1773,18 @@ we_map_t *we_map_new_revoked(void)
     /* Every family n = 0, which answers "no range" before any load; idx still names a valid two-entry
      * table, as fill_family gives an empty family. */
     m->f4.kind = WE_KIND_RADIX;
-    m->f4.idx = we_whole_window;
+    m->f4.idx = we_core_hot.whole_window;
     m->f4.key_bits = 32u;
     m->f6.kind = WE_KIND_RADIX;
-    m->f6.idx = we_whole_window;
+    m->f6.idx = we_core_hot.whole_window;
     m->f6.key_bits = 128u;
     m->f6w.kind = WE_KIND_RADIX;
-    m->f6w.idx = we_whole_window;
+    m->f6w.idx = we_core_hot.whole_window;
     m->f6w.key_bits = 64u;
     m->format = WE_FORMAT_2;
     m->plane_id = (uint8_t)WE_PLANE_TENANT;
     m->schema_id = (uint8_t)WE_SCHEMA_MEMBERSHIP;
-    m->country_known = we_country_known_table;
+    m->country_known = we_core_hot.country_known;
     m->revoked = 1u;
     return m;
 }
@@ -1681,7 +1795,7 @@ int we_handle_publish_map(we_handle_t *h, we_map_t *map, uint64_t now_ms)
         return WE_ERR_OPEN;
     }
     if (((uintptr_t)map & 63u) != 0u || !map->revoked || map->generation != 0u || map->base != NULL
-            || map->h != NULL || map->f4.n != 0u || map->f6.n != 0u || map->f6w.n != 0u) {
+            || map->h != NULL || map->f4.n != 0u || map->f6.n != 0u || map->f6w.n != 0u || map->uncovered != 0u) {
         return WE_ERR_FORMAT;
     }
     /* h->generation is NOT written and high_water is NOT lowered: see the header. */

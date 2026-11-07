@@ -57,6 +57,18 @@ MUTANTS=(
     "HH_SERVER_EXEMPT:F6"
     "HH_RAW_COMPARE:F6"
     "SERVER_UNSET_KEYED:F6"
+    "COVERAGE_IGNORED:C2"
+    "COVERAGE_IGNORED:C9"          # the same defect, held by C9's structural catcher too (no find, UNKNOWN)
+    "COVERAGE_INTO_STALE:C14"
+    "COVERAGE_PEEK_IGNORED:C3"
+    "COVERAGE_MARK_IGNORED:C3b"
+    "COVERAGE_PEEK_TENANT_GATED:C14"
+)
+# the mutants whose catching row lives in race_core (FORMAT.md section 2's swap across a coverage flip):
+# built from race_core.c in the same WE_TRACE build, the row's FAIL line carrying the row's name
+RACE_SRC=(race_core.c we_writer.c whisper_edge.c we_sha256.c we_counters.c we_policy.c)
+RACE_MUTANTS=(
+    "COVERAGE_SECOND_LOAD:C10"
 )
 
 mkdir -p "$OUT/mutants"
@@ -95,12 +107,34 @@ for row in "${MUTANTS[@]}"; do
     fi
 done
 
+for row in "${RACE_MUTANTS[@]}"; do
+    IFS=: read -r name want <<<"$row"
+    bin="$OUT/mutants/race_core_$name"
+    log="$OUT/mutants/$name.out"
+    checks=$((checks + 1))
+    if ! "$CC" "${CFLAGS[@]}" -pthread -DWE_TRACE "-DWE_TEST_$name=1" -o "$bin" "${RACE_SRC[@]}" 2>"$log.build"; then
+        echo "MUTANT FAIL: WE_TEST_$name does not build:"
+        sed 's/^/    /' "$log.build" | sed -n 1,10p
+        failures=$((failures + 1))
+        continue
+    fi
+    mkdir -p "$OUT/mutants/tmp-$name"
+    "$bin" "$OUT/mutants/tmp-$name" testdata/interop.snap >"$log" 2>&1
+    rc=$?
+    if [ "$rc" -eq 0 ] || [ "$rc" -gt 128 ] || ! grep -q "FAIL \[$want\]" "$log"; then
+        echo "MUTANT FAIL: WE_TEST_$name was not caught by race_core's row $want (exit $rc)"
+        failures=$((failures + 1))
+    else
+        echo "ok   mutant WE_TEST_$name caught by race_core's row $want ($(grep -c "FAIL \[$want\]" "$log") failing checks there)"
+    fi
+done
+
 # the guard on the mutants: every one refused by a plain build of the compiler, and the cachegrind
 # driver's exception (WE_CG_DRIVER) admits its two controls and no other. EXTRA_LOAD changes no
 # verdict (one more load per rule), so no test_policy row can catch it: cachegrind-gate.sh's per-rule
 # data-reference row is its catcher, and here it is held to the guard alone.
 CG_ADMITS=" NO_MEMO_HIT EXTRA_LOAD "
-for row in "${MUTANTS[@]}" "EXTRA_LOAD:cachegrind"; do
+for row in "${MUTANTS[@]}" "${RACE_MUTANTS[@]}" "EXTRA_LOAD:cachegrind"; do
     IFS=: read -r name want <<<"$row"
     checks=$((checks + 1))
     if "$CC" "${CFLAGS[@]}" "-DWE_TEST_$name=1" -c -o "$OUT/mutants/guard.o" we_policy.c 2>/dev/null; then
@@ -126,7 +160,7 @@ echo "ok   every mutant is refused by a plain build; WE_CG_DRIVER admits WE_TEST
 # mutant by that header's own #error, the one a stray -D on a shipped nginx, Apache or LiteSpeed build hits.
 guard_msg="the WE_TEST_\* mutants exist only in test_policy's WE_TRACE build"
 before=$failures
-for row in "${MUTANTS[@]}" "EXTRA_LOAD:cachegrind"; do
+for row in "${MUTANTS[@]}" "${RACE_MUTANTS[@]}" "EXTRA_LOAD:cachegrind"; do
     IFS=: read -r name want <<<"$row"
     checks=$((checks + 1))
     if "$CC" "${CFLAGS[@]}" "-DWE_TEST_$name=1" -c -o "$OUT/mutants/module-guard.o" we_module.c 2>"$OUT/mutants/module-guard.err"; then
@@ -162,9 +196,9 @@ done
 # guard of its own beside it). WE_TEST_NO_EVAL_SITES is the evaluation-site check's control, refused by
 # we_eval.h's own guard and held by gate/eval-sites.sh.
 checks=$((checks + 1))
-in_src=$(grep -ohE 'WE_TEST_[A-Z0-9_]+' we_eval.h we_policy.c test_policy.c | sed 's/^WE_TEST_//' \
+in_src=$(grep -ohE 'WE_TEST_[A-Z0-9_]+' we_eval.h we_policy.c test_policy.c race_core.c | sed 's/^WE_TEST_//' \
          | grep -vx 'NO_EVAL_SITES' | sort -u)
-in_rows=$( { for row in "${MUTANTS[@]}"; do echo "${row%%:*}"; done; echo EXTRA_LOAD; } | sort -u)
+in_rows=$( { for row in "${MUTANTS[@]}" "${RACE_MUTANTS[@]}"; do echo "${row%%:*}"; done; echo EXTRA_LOAD; } | sort -u)
 in_guard=$(sed -n '/^#if !defined(WE_TRACE) && ( \\$/,/^#error/p' we_policy.h | grep -oE 'WE_TEST_[A-Z0-9_]+' \
            | sed 's/^WE_TEST_//' | sort -u)
 if [ "$in_src" != "$in_rows" ]; then

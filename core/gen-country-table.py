@@ -64,10 +64,13 @@ def main():
     print("#define WE_COUNTRY_TABLE_YYYYMM %du" % yyyymm)
     print("#define WE_COUNTRY_TABLE_VERSION %du   /* YYYYMM mod 65536 */" % (yyyymm % 65536))
     print("#define WE_COUNTRY_TABLE_CODES %du" % len(codes))
-    print("static const uint8_t we_country_known_table[125] = {")
+    # the bytes as an initializer of their own, so a reader that places its copy (whisper_edge.c keeps the
+    # one a request reads at a fixed offset of a page) initialises it from the same generated list
+    print("#define WE_COUNTRY_KNOWN_BITS { \\")
     for i in range(0, 125, 16):
-        print("    " + ", ".join("0x%02x" % b for b in bits[i:i + 16]) + ",")
-    print("};")
+        print("    " + ", ".join("0x%02x" % b for b in bits[i:i + 16]) + ", \\")
+    print("}")
+    print("static const uint8_t we_country_known_table[125] = WE_COUNTRY_KNOWN_BITS;")
     print("\n#ifdef WE_COUNTRY_ALPHA2")
     print("/* The alpha-2 spelling of every known code, sorted by spelling for a binary search. */")
     print("typedef struct { char a2[2]; uint16_t num; } we_country_alpha2_t;")

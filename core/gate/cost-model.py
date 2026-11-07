@@ -546,6 +546,15 @@ def derive(meas, out=sys.stdout):
     return consts
 
 
+# A constant whose control measures a defect close to the shared band carries a band of its own. c_export's
+# control (WE_MOD_TEST_EAGER_EXPORT: all 25 attributes rendered on the default export path) moves it by
+# 11.3% on x86_64 gcc 13.3 and 9.5% on gcc 15.2, so at the shared 10% the gate is blind to that defect on
+# one toolchain and a hair from blind on the other. The counts are exact on one toolchain; the band is
+# there for deliberate code drift, not noise, and 5% sees the defect with the margin the shared band lacks
+# on every committed toolchain. cachegrind-gate.sh's C2+ reads this band from the `band` line printed here.
+BANDS = {"c_export": 5}
+
+
 def gate(meas_path, base_path, arch, compiler, tol_pct, write, out=sys.stdout):
     """The whole evaluator half of cachegrind-gate.sh for one toolchain: derive every constant, hold each
     to its committed value within tol_pct, run the soundness inequality on every slot that carries
@@ -571,6 +580,8 @@ def gate(meas_path, base_path, arch, compiler, tol_pct, write, out=sys.stdout):
     if "c_mod_fixed" in consts and not write:
         print("band\tc_mod_fixed\t+-max(%d%%, %.4f): the spread over %d committed toolchain%s" % (
             tol_pct, float(slack), len(fixed_all), "" if len(fixed_all) == 1 else "s"), file=out)
+    for name in sorted(BANDS):
+        print("band\t%s\t%d" % (name, BANDS[name]), file=out)
     for name in sorted(consts):
         if write:
             print("baseline\t%s\t%s\t%s\t%.4f" % (arch, compiler, name, float(consts[name])), file=out)
@@ -578,13 +589,14 @@ def gate(meas_path, base_path, arch, compiler, tol_pct, write, out=sys.stdout):
         if name not in committed:
             bad.append("no committed value for %s (derived %.4f)" % (name, float(consts[name])))
             continue
-        allowed = tol * abs(committed[name])
+        pct = BANDS.get(name, tol_pct)
+        allowed = Fraction(pct, 100) * abs(committed[name])
         if name == "c_mod_fixed" and slack > allowed:
             allowed = slack
         if abs(consts[name] - committed[name]) > allowed:
             bad.append("%s is %.4f against the committed %.4f, outside +-%s" % (
                 name, float(consts[name]), float(committed[name]),
-                "%d%%" % tol_pct if allowed == tol * abs(committed[name]) else "%.4f" % float(allowed)))
+                "%d%%" % pct if allowed == Fraction(pct, 100) * abs(committed[name]) else "%.4f" % float(allowed)))
     slots = [{"slot": r["slot"], "measured": r["measured"], "terms": r["sound"]} for r in meas if r.get("sound", "-") != "-"]
     try:
         if slots:

@@ -170,11 +170,13 @@ static uint8_t *fz_read(const char *path, size_t *n)
 static const char *const FZ_PLANES[8] = { "reputation", "tor", "rpki-unreachable", "routing", "anonymizer",
                                           "threat", "registry", "tenant" };
 
-#define FZ_MAX_ADDRS 512u
+#define FZ_MAX_ADDRS 576u   /* 8 planes x 64, and 64 IPv6 tor addresses for the alternate tor view */
 
 typedef struct {
     we_map_t m[8];
     int loaded[8];
+    we_map_t tor1;          /* the alternate tor view, tor-v4only.bin: tor.bin's IPv4, IPv6 not covered */
+    int tor1_loaded;
     uint8_t addr[FZ_MAX_ADDRS][16];
     int fam[FZ_MAX_ADDRS];
     size_t naddr;
@@ -234,7 +236,7 @@ static int fz_protect_map(we_map_t *m)
  * ranges (and the misses beside them). */
 #define FZ_ADDRS_PER_PLANE 64u
 
-static void fz_read_addrs(const char *path, fz_planes_t *pl)
+static void fz_read_addrs(const char *path, fz_planes_t *pl, int only)
 {
     FILE *f = fopen(path, "r");
     char line[512], a[128];
@@ -242,7 +244,8 @@ static void fz_read_addrs(const char *path, fz_planes_t *pl)
     unsigned k = 0;
     size_t cap = pl->naddr + FZ_ADDRS_PER_PLANE;
     while (f != NULL && fgets(line, sizeof line, f) != NULL && pl->naddr < FZ_MAX_ADDRS && pl->naddr < cap) {
-        if (sscanf(line, "%d %127s", &fam, a) != 2 || (fam != 4 && fam != 6) || (k++ % 7u) != 0u) {
+        if (sscanf(line, "%d %127s", &fam, a) != 2 || (fam != 4 && fam != 6) || (only != 0 && fam != only)
+            || (k++ % 7u) != 0u) {
             continue;
         }
         uint8_t raw[16] = { 0 };
@@ -276,7 +279,19 @@ static int fz_load_planes(const char *dir, fz_planes_t *pl)
                     rc == WE_OK ? "mprotect failed" : we_strerror(rc));
         }
         snprintf(path, sizeof path, "%s/%s.txt", dir, FZ_PLANES[i]);
-        fz_read_addrs(path, pl);
+        fz_read_addrs(path, pl, 0);
+    }
+    {
+        we_load_detail_t det;
+
+        snprintf(path, sizeof path, "%s/tor-v4only.bin", dir);
+        pl->tor1_loaded = we_plane_open(path, &pl->tor1, &det) == WE_OK && fz_protect_map(&pl->tor1) == 0;
+        /* tor's IPv6 deciding addresses, which the per-plane cap above never reaches (the IPv4 lines come
+         * first): the family the alternate view leaves not covered, so the comparison has requests in it */
+        snprintf(path, sizeof path, "%s/tor.txt", dir);
+        if (pl->tor1_loaded) {
+            fz_read_addrs(path, pl, 6);
+        }
     }
     return n;
 }
@@ -287,6 +302,34 @@ static void fz_views(we_eval_ctx_t *ec, const fz_planes_t *pl, uint8_t null_mask
     for (int i = 0; i < 8; i++) {
         ec->view[i].m = (pl->loaded[i] && !(null_mask & (1u << i))) ? &pl->m[i] : NULL;
     }
+}
+
+/*
+ * THE ALTERNATE TOR VIEW (FORMAT.md section 2). tor-v4only.bin is tor.bin with its IPv6 family dropped to
+ * not covered, so on a request whose two slots share one family the verdict under it is known without a
+ * second reading of the format: for IPv4 it equals the verdict with tor.bin, for IPv6 the verdict with the
+ * tor view NULL. Returns 1 when the request is single-family and both comparisons were made, -1 when the
+ * single-family comparison disagreed, 0 when it did not apply.
+ */
+static int fz_tor_one_family(const fz_planes_t *pl, uint8_t null_mask, const we_program_t *floor,
+                             const we_ctx_conf_t *fc, const we_program_t *ctx, const we_ctx_conf_t *cc,
+                             const we_hh_view_t *hh, const we_request_t *req, we_eval_ctx_t *ec)
+{
+    we_verdict_t one, ref;
+
+    if (!pl->tor1_loaded || !pl->loaded[1] || (null_mask & 0x02u) || req->floor.family != req->server.family) {
+        return 0;
+    }
+    memset(ec, 0, sizeof *ec);
+    fz_views(ec, pl, null_mask);
+    ec->view[1].m = &pl->tor1;
+    we_decide(floor, fc, ctx, cc, hh, req, ec, 1800000000000ull, &one);
+    memset(ec, 0, sizeof *ec);
+    fz_views(ec, pl, req->floor.family == 6u ? (uint8_t)(null_mask | 0x02u) : null_mask);
+    we_decide(floor, fc, ctx, cc, hh, req, ec, 1800000000000ull, &ref);
+    return (one.step == ref.step && one.action == ref.action && one.rule == ref.rule && one.reason == ref.reason
+            && one.unknown_plane == ref.unknown_plane && memcmp(one.log_fired, ref.log_fired, sizeof one.log_fired) == 0)
+           ? 1 : -1;
 }
 
 /* Did the planes decide anything? One request evaluated with the real views and again with every view

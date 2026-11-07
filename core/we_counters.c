@@ -45,6 +45,14 @@
 #include <string.h>
 #include <unistd.h>
 
+#ifndef WE_TEST_BOOT_CACHE_PER_UNIT
+/* the process's one boot-id cache (we_procid.h): every writer's identity reads it, and the master's prime
+ * fills it before the workers fork. Zeroed storage, no initialiser and no literal, so it joins no merged
+ * string pool and moves no hot word */
+char we_proc_boot_cached[40];
+int we_proc_boot_cached_from;
+#endif
+
 we_counters_t *we_counters_new(const we_map_t *m, uint64_t now_ms)
 {
     we_counters_t *c;

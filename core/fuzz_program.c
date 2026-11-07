@@ -36,7 +36,7 @@
 
 #include "fuzz_common.h"
 
-static unsigned long g_checks, g_failures, g_refused, g_accepted, g_evaluated, g_view_differ;
+static unsigned long g_checks, g_failures, g_refused, g_accepted, g_evaluated, g_view_differ, g_tor1;
 static uint64_t g_rs = 0x9e3779b97f4a7c15ull;   /* the pinned xorshift seed of POLICY.md */
 
 static uint32_t rnd(void)
@@ -81,6 +81,9 @@ static int fp_in(size_t off, size_t n, size_t len)
     return n > 0 && off <= len && n <= len - off;
 }
 
+/* Every draw is its own full expression: the order of two rnd() calls in one expression (an index and the
+ * value stored there, or two arguments) is unspecified in C, and compilers pick differently, so a shared
+ * expression gave each toolchain its own mutants from the same seed. */
 static size_t fp_mutate(uint8_t *b, size_t len, size_t cap)
 {
     (void)cap;
@@ -91,7 +94,8 @@ static size_t fp_mutate(uint8_t *b, size_t len, size_t cap)
     memcpy(&h, b, sizeof h);
     uint32_t k = rnd() % 16u;
     if (k == 0u) {
-        b[rnd() % len] ^= (uint8_t)(1u << (rnd() % 8u));
+        size_t at = rnd() % len;
+        b[at] ^= (uint8_t)(1u << (rnd() % 8u));
         return len;
     }
     if (k < 5u && fp_in(h.instrs_off, (size_t)h.instr_count * 8u, len)) {
@@ -112,7 +116,7 @@ static size_t fp_mutate(uint8_t *b, size_t len, size_t cap)
         case 1: r[2] = (uint8_t)rnd(); break;                                  /* dep_mask */
         case 2: put16(r + 4, (uint16_t)(rnd() % (h.instr_count + 2u))); break; /* instr_start */
         case 3: put16(r + 6, (uint16_t)(rnd() % (h.instr_count + 2u))); break; /* instr_count */
-        case 4: put32(r + 10, (uint32_t)(h.text_len > 0 ? rnd() % (h.text_len + 2u) : rnd())); break; /* src_off */
+        case 4: put32(r + 10, (uint32_t)(h.text_len > 0 ? rnd() % ((uint64_t)h.text_len + 2u) : rnd())); break; /* src_off, widened: a text_len near 2^32 must not wrap the modulus to 0 */
         case 5: put16(r + 14, (uint16_t)(rnd() % 4096u)); break;               /* src_len */
         default: r[1] = (uint8_t)rnd(); break;                                 /* flags */
         }
@@ -122,10 +126,10 @@ static size_t fp_mutate(uint8_t *b, size_t len, size_t cap)
         uint8_t *bd = b + h.bindings_off + (size_t)(rnd() % 8u) * 32u;
         switch (rnd() % 6u) {
         case 0: bd[0] = (uint8_t)(rnd() % 4u); break;                          /* schema_id, one past */
-        case 1: put16(bd + 1 + 2u * (rnd() % 2u), (uint16_t)(rnd() % 40u)); break; /* a record stride */
-        case 2: bd[5 + rnd() % 2u] = (uint8_t)(rnd() % 40u); break;            /* a block offset */
+        case 1: { size_t at = 1u + 2u * (rnd() % 2u); put16(bd + at, (uint16_t)(rnd() % 40u)); } break; /* a record stride */
+        case 2: { size_t at = 5u + rnd() % 2u; bd[at] = (uint8_t)(rnd() % 40u); } break;  /* a block offset */
         case 3: bd[7] = (uint8_t)(rnd() % 20u); break;                         /* block width */
-        case 4: bd[9 + rnd() % 14u] = (uint8_t)rnd(); break;                   /* the no-range template */
+        case 4: { size_t at = 9u + rnd() % 14u; bd[at] = (uint8_t)rnd(); } break; /* the no-range template */
         default: bd[23] = (uint8_t)(rnd() % 3u); break;                        /* inert_at_config */
         }
         return len;
@@ -220,6 +224,13 @@ static void fp_check(const uint8_t *b, size_t len)
             memset(ec, 0, sizeof *ec);
             fz_views(ec, &g_pl, 0xFFu);
             we_decide(placed ? p : NULL, &conf, p, &conf, placed ? &hh : NULL, &req, ec, 1800000000000ull, &none);
+            {
+                int t1 = fz_tor_one_family(&g_pl, 0x00u, placed ? p : NULL, &conf, p, &conf, placed ? &hh : NULL, &req, ec);
+
+                FP_ASSERT(t1 >= 0, "the alternate tor view (IPv6 not covered) decided a family-%u request differently "
+                          "from %s", req.floor.family, req.floor.family == 6u ? "a NULL tor view" : "tor.bin");
+                g_tor1 += (unsigned long)(t1 == 1);
+            }
             g_evaluated++;
             g_view_differ += (unsigned long)fz_verdicts_differ(&real, &none);
         }
@@ -265,7 +276,8 @@ size_t LLVMFuzzerMutate(uint8_t *data, size_t size, size_t max_size)
 {
     (void)max_size;
     if (size > 0) {
-        data[rnd() % size] ^= (uint8_t)(1u << (rnd() % 8u));
+        size_t at = rnd() % size;
+        data[at] ^= (uint8_t)(1u << (rnd() % 8u));
     }
     return size;
 }
@@ -356,10 +368,13 @@ int main(int argc, char **argv)
     int np = fz_load_planes(argv[4], &g_pl);
     FP_ASSERT(np == 8 && g_pl.naddr > 0, "%d of 8 planes and %zu addresses loaded from %s", np, g_pl.naddr, argv[4]);
     unsigned long per = strtoul(argv[6], NULL, 10), seeds = 0;
-    DIR *d = opendir(argv[2]);
-    FP_ASSERT(d != NULL, "no accept directory %s", argv[2]);
-    struct dirent *de;
-    while (d != NULL && (de = readdir(d)) != NULL) {
+    /* the seeds in name order: the mutation stream is one xorshift sequence across every seed, so a
+     * directory read in the file system's own order gave each host its own mutants and its own count */
+    struct dirent **ents = NULL;
+    int ne = scandir(argv[2], &ents, NULL, alphasort);
+    FP_ASSERT(ne >= 0, "no accept directory %s", argv[2]);
+    for (int ei = 0; ei < ne; ei++) {
+        const struct dirent *de = ents[ei];
         size_t l = strlen(de->d_name);
         if (l < 8 || strcmp(de->d_name + l - 7, ".policy") != 0) {
             continue;
@@ -385,16 +400,18 @@ int main(int argc, char **argv)
         free(m);
         fz_free(NULL, p);
     }
-    if (d != NULL) {
-        closedir(d);
+    for (int ei = 0; ei < ne; ei++) {
+        free(ents[ei]);
     }
+    free(ents);
     FP_ASSERT(g_refused > 0, "verify refused none of the mutants: the harness is not reaching it");
     FP_ASSERT(g_evaluated > 0, "no accepted block was evaluated");
     FP_ASSERT(g_view_differ > 0, "no verdict over %lu evaluations differed between the real views and NULL views: "
               "the planes decided nothing", g_evaluated);
+    FP_ASSERT(g_pl.tor1_loaded && g_tor1 > 0, "the alternate tor view tor-v4only.bin was not compared on any request");
     printf("fuzz_program replay: %lu seeds x %lu mutations: verify refused %lu, accepted %lu, %lu evaluations "
-           "under ASan, %lu of them decided differently with the real views than with NULL views\n", seeds, per,
-           g_refused, g_accepted, g_evaluated, g_view_differ);
+           "under ASan, %lu of them decided differently with the real views than with NULL views, %lu held to the "
+           "one-family tor view\n", seeds, per, g_refused, g_accepted, g_evaluated, g_view_differ, g_tor1);
     printf("%lu checks, %lu failures\n", g_checks, g_failures);
     return g_failures != 0 ? 1 : 0;
 }

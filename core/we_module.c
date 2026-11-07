@@ -1117,6 +1117,11 @@ int we_mod_procid(we_mod_procid_t *id)
     return we_proc_id(id);
 }
 
+int we_mod_boot_prime(void)
+{
+    return we_proc_boot_prime();
+}
+
 /*
  * Write `data` to `name` in `dirfd` so that no planted name is ever followed and no reader sees half a
  * file: a temp `.<pid>-<starttime>-<kind>.tmp` created with O_EXCL | O_NOFOLLOW (so a link or a file
@@ -1645,13 +1650,23 @@ int we_mod_retire_push(we_mod_retire_t *r, const we_map_t *m, void (*release)(we
     return -1;
 }
 
-/* every slot older than the grace released; the number released */
+/*
+ * Every slot older than the grace released; the number released. A slot stamped AFTER `mono_ms` is not
+ * old, it is new: the clock a sweep is handed may have been read before the stamp (the thread's tick
+ * read its clock, then acknowledged a publish whose displaced map was stamped a millisecond later), and
+ * the unsigned difference of the two wrapped to a huge age, so the map was released in the very tick
+ * that retired it, its grace never served (the legacy writer then read the freed map and the worker died on SIGSEGV).
+ */
 uint32_t we_mod_retire_sweep(we_mod_retire_t *r, uint64_t mono_ms, uint64_t grace_ms)
 {
     uint32_t i, n = 0u;
 
     for (i = 0u; i < WE_MOD_RETIRE_SLOTS; i++) {
-        if (r->slot[i].map != NULL && mono_ms - r->slot[i].at_ms >= grace_ms) {
+#ifndef WE_MOD_TEST_SWEEP_WRAP
+        if (r->slot[i].map != NULL && mono_ms >= r->slot[i].at_ms && mono_ms - r->slot[i].at_ms >= grace_ms) {
+#else
+        if (r->slot[i].map != NULL && mono_ms - r->slot[i].at_ms >= grace_ms) {   /* the control: the age wraps */
+#endif
             if (r->slot[i].release != NULL) {
                 r->slot[i].release(r->slot[i].map, r->slot[i].ud);
             }
@@ -1668,6 +1683,37 @@ uint64_t we_mod_monotonic_ms(void)
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+}
+
+#if defined(WE_MOD_DEBUG) || defined(WE_MOD_CONTROL_BUILD)
+static uint64_t g_mod_grace_clock;               /* the tests' pinned grace clock; 0: CLOCK_MONOTONIC */
+static uint64_t g_mod_grace_step;                /* added to the pin after every read: a clock that moves */
+
+void we_mod_test_grace_clock(uint64_t mono_ms)
+{
+    __atomic_store_n(&g_mod_grace_step, 0u, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_mod_grace_clock, mono_ms, __ATOMIC_RELEASE);
+}
+
+void we_mod_test_grace_clock_step(uint64_t mono_ms, uint64_t step_ms)
+{
+    __atomic_store_n(&g_mod_grace_step, step_ms, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_mod_grace_clock, mono_ms, __ATOMIC_RELEASE);
+}
+#endif
+
+/* the retire list's clock, for a slot's age and the sweep that frees it: CLOCK_MONOTONIC, or the tests' pin */
+static uint64_t mod_grace_clock(void)
+{
+#if (defined(WE_MOD_DEBUG) || defined(WE_MOD_CONTROL_BUILD)) && !defined(WE_MOD_TEST_GRACE_UNPINNED)
+    uint64_t pinned = __atomic_load_n(&g_mod_grace_clock, __ATOMIC_ACQUIRE);
+
+    if (pinned != 0u) {
+        return __atomic_fetch_add(&g_mod_grace_clock, __atomic_load_n(&g_mod_grace_step, __ATOMIC_ACQUIRE),
+                                  __ATOMIC_ACQ_REL);
+    }
+#endif
+    return we_mod_monotonic_ms();
 }
 
 /* ==================================================================================================
@@ -2244,6 +2290,7 @@ struct we_mod_planes {
     uint8_t        trans_out;       /* the out mask the last entries were written from (planes 1..7) */
     uint8_t        trans_tenant;    /* and the tenant state then (we_tenant_state_t) */
     uint8_t        trans_kind[8];   /* each plane's kind then (MOD_TK_*) */
+    uint8_t        trans_unc[8];    /* and each armed plane's not-covered families then (we_map_t.uncovered) */
     uint32_t       ntransitions;    /* the ring: the newest WE_MOD_TRANSITIONS entries, copied into the status */
     uint64_t       transition_ms[WE_MOD_TRANSITIONS];
     char           transition[WE_MOD_TRANSITIONS][WE_MOD_RING_ENTRY];
@@ -2260,10 +2307,26 @@ static const we_map_t *mod_view_ptr(const mod_plane_t *pp)
     }
 }
 
+#if defined(WE_MOD_DEBUG) || defined(WE_MOD_CONTROL_BUILD)
+static uint64_t g_mod_epoch_clock;               /* the tests' pinned wall clock; 0: CLOCK_REALTIME */
+
+void we_mod_test_epoch_clock(uint64_t epoch_ms)
+{
+    __atomic_store_n(&g_mod_epoch_clock, epoch_ms, __ATOMIC_RELEASE);
+}
+#endif
+
 static uint64_t mod_epoch_ms(void)
 {
     struct timespec ts;
 
+#if (defined(WE_MOD_DEBUG) || defined(WE_MOD_CONTROL_BUILD)) && !defined(WE_MOD_TEST_EPOCH_UNPINNED)
+    uint64_t pinned = __atomic_load_n(&g_mod_epoch_clock, __ATOMIC_ACQUIRE);
+
+    if (pinned != 0u) {
+        return pinned;
+    }
+#endif
     clock_gettime(CLOCK_REALTIME, &ts);
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
 }
@@ -2678,7 +2741,11 @@ static int mod_retire_ready(we_mod_planes_t *pl, mod_plane_t *pp, const char *wh
     if (pp->armed == NULL) {
         return 1;                                /* nothing to displace: no slot needed */
     }
-    we_mod_retire_sweep(&pp->retire, we_mod_monotonic_ms(), WE_DEFAULT_GRACE_MS);
+#ifndef WE_MOD_TEST_GRACE_EARLY
+    we_mod_retire_sweep(&pp->retire, mod_grace_clock(), WE_DEFAULT_GRACE_MS);
+#else
+    we_mod_retire_sweep(&pp->retire, mod_grace_clock(), 0u);   /* the control: a slot freed inside its grace */
+#endif
 #ifndef WE_MOD_TEST_RETIRE_UNCHECKED
     for (i = 0u; i < WE_MOD_RETIRE_SLOTS && pp->retire.slot[i].map != NULL; i++) {
     }
@@ -2942,15 +3009,22 @@ static int mod_program_affected(const we_program_t *p, uint8_t out, we_tenant_st
                          || we_program_dependents(p, was_out, was_ts, NULL, 0u) != 0u);
 }
 
-/* each plane's kind and the out mask and tenant state they make, read off the handles at `now` */
-static void mod_transition_state(const we_mod_planes_t *pl, uint64_t now, uint8_t kind[8], uint8_t *out,
-                                 we_tenant_state_t *ts)
+/* each plane's kind, its not-covered families, and the out mask and tenant state they make, read off the
+ * handles at `now` */
+static void mod_transition_state(const we_mod_planes_t *pl, uint64_t now, uint8_t kind[8], uint8_t unc[8],
+                                 uint8_t *out, we_tenant_state_t *ts)
 {
     uint32_t p;
 
     *out = 0u;
     for (p = 0u; p < 8u; p++) {
         kind[p] = (uint8_t)mod_plane_kind(pl, p, now);
+        unc[p] = 0u;
+        if (kind[p] == MOD_TK_ARMED && pl->cfg != NULL && pl->cfg->handle[p] != NULL) {
+            const we_map_t *m = we_current(pl->cfg->handle[p]);
+
+            unc[p] = m != NULL ? m->uncovered : 0u;
+        }
         if (p + 1u != WE_PLANE_TENANT && kind[p] != MOD_TK_UNBOUND && kind[p] != MOD_TK_ARMED) {
             *out |= (uint8_t)(1u << p);
         }
@@ -2963,16 +3037,74 @@ static void mod_transition_state(const we_mod_planes_t *pl, uint64_t now, uint8_
  * with no apply of its own. Taken here and not at the first apply, because the first apply may already be
  * the change (a plane armed at the start and stale by then), and that transition must be logged.
  */
-static void mod_transitions_baseline(we_mod_planes_t *pl, uint64_t now)
-{
-    uint8_t kind[8], out;
-    we_tenant_state_t ts;
+static void mod_family_lines(we_mod_planes_t *pl, uint32_t p, uint8_t kind, uint8_t out, we_tenant_state_t ts,
+                             const we_mod_arena_t *arena, uint64_t now, we_mod_log_fn log, void *ud);
 
-    mod_transition_state(pl, now, kind, &out, &ts);
+static void mod_transitions_baseline(we_mod_planes_t *pl, uint64_t now, we_mod_log_fn log, void *ud)
+{
+    uint8_t kind[8], unc[8], out;
+    we_tenant_state_t ts;
+    uint32_t p;
+
+    mod_transition_state(pl, now, kind, unc, &out, &ts);
+    /* a plane the worker inherits armed with a family it does not cover has no transition to say it on, so
+     * the baseline says it: the per-family lines, once per program a request of that family touches */
+    for (p = 0u; p < 8u; p++) {
+        if (unc[p] != 0u) {
+            mod_family_lines(pl, p, kind[p], out, ts, pl->cfg != NULL ? pl->cfg->arena : NULL, now, log, ud);
+        }
+    }
     pl->trans_init = 1;
     pl->trans_out = out;
     pl->trans_tenant = (uint8_t)ts;
     memcpy(pl->trans_kind, kind, sizeof kind);
+    memcpy(pl->trans_unc, unc, sizeof unc);
+}
+
+/*
+ * A plane that came to ARMED with a family it does not cover (FORMAT.md section 2): out4 and out6 differ, so
+ * each program a request of that family touches gets the per-family line, `plane tor does not cover IPv6:
+ * rule 1 disarmed`, through the same ring and logger. It is written on the transition that arms the plane,
+ * so the evasion a client selects by its address family is said where the outage lines are.
+ */
+static void mod_family_lines(we_mod_planes_t *pl, uint32_t p, uint8_t kind, uint8_t out, we_tenant_state_t ts,
+                             const we_mod_arena_t *arena, uint64_t now, we_mod_log_fn log, void *ud)
+{
+    const we_map_t *m;
+    uint32_t i, nblocks = we_mod_arena_blocks(arena);
+    int fam;
+    char entry[WE_MOD_RING_ENTRY];
+
+    if (kind != MOD_TK_ARMED || pl->cfg == NULL || pl->cfg->handle[p] == NULL) {
+        return;
+    }
+    m = we_current(pl->cfg->handle[p]);
+    if (m == NULL || m->uncovered == 0u) {
+        return;
+    }
+    for (fam = 4; fam <= 6; fam += 2) {
+        uint8_t out_f = (uint8_t)(out | (1u << p));
+
+        if (we_family_covered(m, fam)) {
+            continue;
+        }
+        for (i = 0u; i < nblocks; i++) {
+            const we_program_t *pg = we_mod_arena_block(arena, i);
+
+            if (pg == NULL || we_program_dependents(pg, out_f, ts, NULL, 0u) == 0u) {
+                continue;
+            }
+            entry[0] = '\0';
+            (void)we_program_family_line(pg, out, ts, p + 1u, fam, entry, sizeof entry);
+            if (entry[0] == '\0' || (pl->ntransitions > 0u && strcmp(pl->transition[pl->ntransitions - 1u], entry) == 0)) {
+                continue;
+            }
+            mod_transition_push(pl, now, entry);
+            if (log != NULL) {
+                log(ud, entry);
+            }
+        }
+    }
 }
 
 /*
@@ -2987,7 +3119,7 @@ static void mod_transitions_baseline(we_mod_planes_t *pl, uint64_t now)
 static void mod_transitions(we_mod_planes_t *pl, we_mod_log_fn log, void *ud)
 {
     uint64_t now = mod_epoch_ms();
-    uint8_t kind[8], out;
+    uint8_t kind[8], unc[8], out;
     we_tenant_state_t ts, was_ts = (we_tenant_state_t)pl->trans_tenant;
     uint32_t p, i, nprog = 0u, nblocks;
     const we_mod_arena_t *arena = pl->cfg != NULL ? pl->cfg->arena : NULL;
@@ -2995,11 +3127,12 @@ static void mod_transitions(we_mod_planes_t *pl, we_mod_log_fn log, void *ud)
     size_t o = 0u;
 
     if (!pl->trans_init) {
-        mod_transitions_baseline(pl, now);       /* no worker start ran: this apply is the baseline */
+        mod_transitions_baseline(pl, now, log, ud);   /* no worker start ran: this apply is the baseline */
         return;
     }
-    mod_transition_state(pl, now, kind, &out, &ts);
-    if (out == pl->trans_out && ts == was_ts && memcmp(kind, pl->trans_kind, sizeof kind) == 0) {
+    mod_transition_state(pl, now, kind, unc, &out, &ts);
+    if (out == pl->trans_out && ts == was_ts && memcmp(kind, pl->trans_kind, sizeof kind) == 0
+            && memcmp(unc, pl->trans_unc, sizeof unc) == 0) {
         return;
     }
     {
@@ -3017,11 +3150,19 @@ static void mod_transitions(we_mod_planes_t *pl, we_mod_log_fn log, void *ud)
             nprog += mod_program_affected(we_mod_arena_block(arena, i), out, ts, pl->trans_out, was_ts) != 0;
         }
         for (p = 0u; p < 8u; p++) {
-            if (kind[p] == pl->trans_kind[p] || kind[p] == MOD_TK_UNBOUND) {
-                continue;                        /* this plane did not change */
+            if (kind[p] == MOD_TK_UNBOUND) {
+                continue;
+            }
+            if (kind[p] == pl->trans_kind[p]) {
+                if (unc[p] != pl->trans_unc[p]) {
+                    /* re-armed with another coverage, the kind unchanged: only the per-family lines move */
+                    mod_family_lines(pl, p, kind[p], out, ts, arena, now, log, ud);
+                }
+                continue;                        /* this plane's state did not change */
             }
             snprintf(head, sizeof head, "plane %s %s out=%s tenant=%s", we_mod_plane_word(p), mod_tk_word[kind[p]], outs,
                      mod_tenant_word[ts]);
+            mod_family_lines(pl, p, kind[p], out, ts, arena, now, log, ud);
             if (nprog == 0u) {
                 continue;                        /* no program reads what changed: nothing to say */
             }
@@ -3081,6 +3222,7 @@ static void mod_transitions(we_mod_planes_t *pl, we_mod_log_fn log, void *ud)
     pl->trans_out = out;
     pl->trans_tenant = (uint8_t)ts;
     memcpy(pl->trans_kind, kind, sizeof kind);
+    memcpy(pl->trans_unc, unc, sizeof unc);
 }
 
 uint32_t we_mod_planes_apply(we_mod_planes_t *pl, we_mod_log_fn log, void *ud)
@@ -3121,7 +3263,7 @@ int we_mod_planes_pending(const we_mod_planes_t *pl)
 static void mod_ack(we_mod_planes_t *pl, mod_result_t *r)
 {
     mod_plane_t *pp = &pl->plane[r->p];
-    uint64_t mono = we_mod_monotonic_ms();
+    uint64_t mono = mod_grace_clock();           /* a displaced map's slot is stamped on the retire list's clock */
 
     if (r->kind == MOD_RES_LOG || r->kind == MOD_RES_NULL) {
         if (pp->inflight == r) {
@@ -3330,7 +3472,8 @@ static int mod_candidate_publish(we_mod_planes_t *pl, mod_plane_t *pp, const mod
     if (pp->view == MOD_VIEW_NULL) {
         mod_state(pl, pp, "loading", NULL);    /* verified and posted: still -l until the loop arms it */
     }
-    mod_log(pl, "plane %s: generation %llu verified, arming", pp->name, (unsigned long long)m->generation);
+    mod_log(pl, "plane %s: generation %llu verified, arming%s", pp->name, (unsigned long long)m->generation,
+            !we_family_covered(m, 4) ? "; it does not cover IPv4" : !we_family_covered(m, 6) ? "; it does not cover IPv6" : "");
     return mod_post(pl, pp, r);
 }
 
@@ -4787,7 +4930,7 @@ int we_mod_worker_start(we_mod_planes_t *pl, const we_mod_worker_args_t *w, char
 #ifdef WE_MOD_DEBUG
     __atomic_store_n(&g_mod_in_start, 0, __ATOMIC_RELAXED);
 #endif
-    mod_transitions_baseline(pl, mod_epoch_ms());   /* what this worker inherited: its first apply compares to it */
+    mod_transitions_baseline(pl, mod_epoch_ms(), pl->log, pl->log_ud);   /* what this worker inherited: its first apply compares to it */
     __atomic_store_n(&pl->worker_started, 1, __ATOMIC_RELEASE);
     msg[0] = '\0';
     return 0;
@@ -4808,7 +4951,7 @@ static void mod_planes_tick_body(void *planes, uint64_t tick, const int *stop)
 {
     we_mod_planes_t *pl = (we_mod_planes_t *)planes;
     we_mod_item_t *l;
-    uint64_t mono = we_mod_monotonic_ms();
+    uint64_t mono = mod_grace_clock();           /* the retire sweep's clock: its one use in the tick */
     uint32_t p;
     int posted = 0;
     uint64_t nulls;

@@ -46,7 +46,14 @@
 # (each prints, and bad sets a variable). And `$TTL` in a single-quoted printf is the zone-file
 # directive, written literally.
 # shellcheck disable=SC2015,SC2016
-set -euo pipefail
+set -Eeuo pipefail
+# A command that ends the run under set -e names itself. A collision used to read as a bare
+# "make: *** [Makefile:22: rpz] Error 9", which says nothing about which of a few hundred lines it was.
+# ERR fires exactly where errexit does, and -E carries it into functions; a command substitution's subshell
+# inherits it too but does not exit on it, so only the run's own process speaks.
+# shellcheck disable=SC2317  # reached through the ERR trap
+err_report() { [ "$BASHPID" = "$$" ] && echo "RPZ GATE: FAILED - line $2 exited $1: $3" >&2; return 0; }
+trap 'err_report "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 cd "$(dirname "$0")/.."            # the edge directory: the work directory default and core/ hang off it
 FIX="${WHISPER_EDGE_RPZ_FIXTURE:-./rpz/testdata}"
@@ -143,18 +150,20 @@ fi
 free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'; }
 
 probe_workdir() {
-    local dir=$1 port
+    local dir=$1 port pd
     port=$(free_port)
     mkdir -p "$dir" 2>/dev/null || return 1
-    cat > "$dir/probe.conf" <<PEOF
+    # A directory of this probe's own: two runs probing the same parent never share a file.
+    pd=$(mktemp -d "$dir/probe.XXXXXX" 2>/dev/null) || return 1
+    cat > "$pd/probe.conf" <<PEOF
 options {
-    directory "$dir"; pid-file "$dir/probe.pid";
+    directory "$pd"; pid-file "$pd/probe.pid";
     listen-on port $port { 127.0.0.1; }; listen-on-v6 { none; };
     recursion no; allow-query { 127.0.0.1; }; dnssec-validation no;
-    managed-keys-directory "$dir"; session-keyfile "$dir/probe.session.key";
+    managed-keys-directory "$pd"; session-keyfile "$pd/probe.session.key";
 };
 PEOF
-    named -c "$dir/probe.conf" -f >/dev/null 2>&1 &
+    named -c "$pd/probe.conf" -f >/dev/null 2>&1 &
     local pid=$! ok=1
     for _ in $(seq 1 20); do
         if dig +short +time=1 +tries=1 -p "$port" @127.0.0.1 . SOA >/dev/null 2>&1 && kill -0 "$pid" 2>/dev/null; then
@@ -164,7 +173,7 @@ PEOF
     done
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
-    rm -f "$dir/probe.conf" "$dir/probe.pid" "$dir/probe.session.key"
+    rm -rf "${pd:?}"
     return $ok
 }
 
@@ -195,21 +204,32 @@ if [ -z "$WORK" ]; then
 fi
 require_safe_workdir "$WORK" || exit 1
 WORK=$(cd "$WORK" && pwd)
-# Only the subdirectory this run owns is cleared, by name, never the work directory's other contents.
-RUN="$WORK/run"
-rm -rf "${RUN:?}"
-mkdir -p "$RUN"
+# A run directory of this run's own. It used to be the fixed "$WORK/run", cleared at start, so a second
+# run started while the first was up deleted the first's pid files: the first run's cleanup then found
+# nothing to stop and left its named reparented to pid 1, and the second died on the first's ports. The
+# directory is now mktemp'd, nothing else's is touched, and it goes on EXIT (RPZ_GATE_KEEP keeps it).
+RUN=$(mktemp -d "$WORK/run.XXXXXX")
 echo "work directory: $RUN"
 
+# Every named this run starts in the foreground is tracked by the pid $! gave, never by a pid file another
+# process could remove and never by name, and stopped on EXIT.
 PIDS=()
 cleanup() {
     local p
-    for p in "${PIDS[@]}"; do [ -f "$p" ] && kill "$(cat "$p")" 2>/dev/null || true; done
-    sleep 0.5
-    for p in "${PIDS[@]}"; do [ -f "$p" ] && kill -9 "$(cat "$p")" 2>/dev/null || true; done
+    for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done
+    for p in "${PIDS[@]}"; do
+        for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$p" 2>/dev/null || break; sleep 0.1; done
+        kill -9 "$p" 2>/dev/null || true
+        wait "$p" 2>/dev/null || true
+    done
     return 0
 }
-trap cleanup EXIT
+# shellcheck disable=SC2317  # reached through the EXIT trap
+on_exit() {
+    cleanup
+    [ -n "${RPZ_GATE_KEEP:-}" ] || rm -rf "${RUN:?}"
+}
+trap on_exit EXIT
 
 fail=0
 skipped=""
@@ -305,7 +325,7 @@ triggers_in() { grep -cE '\.rpz-(ip|nsip)\.' "$1" || true; }
 start_named() { # <conf> <pidfile> <port>
     named-checkconf "$1"
     named -c "$1" -d 3 -f > "$1.out" 2>&1 &
-    PIDS+=("$2")
+    PIDS+=("$!")
 }
 wait_up() { # <port>
     local i

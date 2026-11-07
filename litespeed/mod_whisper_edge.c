@@ -2008,6 +2008,9 @@ static int we_init(lsi_module_t *module)
 {
     ls_api_bind();
     (void) module;
+    if (we_mod_boot_prime() == WE_PROC_BOOT_NONE) {  /* at load, before the workers fork: they inherit it */
+        ls_log(LSI_LOG_WARN, "%s", WE_MOD_BOOT_HINT);
+    }
     ls_read_server_settings();
     ls_policy_line(LSI_LOG_NOTICE, "module loaded: ABI %u, %s; the configuration is compiled once every virtual host "
                    "has been read", WE_MODULE_ABI_VERSION, LS_SERVER_STRING);

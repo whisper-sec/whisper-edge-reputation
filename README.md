@@ -49,7 +49,7 @@ git clone https://github.com/whisper-sec/whisper-edge-reputation && cd whisper-e
 sudo ./install/install.sh
 ```
 
-The installer finds your servers, checks the signed data, adds a sensible default policy, runs your server's own config test and reloads only if it passes. It ends by printing the lines that undo everything. Add `--dry-run` to see what it would change first. [Full guide](REFERENCE.md#start-here-one-command)
+The installer finds your servers, checks the signed data, adds a sensible default policy, runs your server's own config test and reloads only if it passes. It ends by printing the lines that undo everything. Add `--dry-run` to see what it would change first, or `--log-only` to have every server log what it would deny before it denies anything; `--arm-deny` turns that to deny once you have read the log. [Full guide](REFERENCE.md#start-here-one-command)
 
 ## Safe by design
 
@@ -84,6 +84,10 @@ It works well alongside fail2ban or CrowdSec. It is not a DDoS shield: for flood
 
 **I blocked someone by mistake.** Run `whisper-edge-lookup <address>` to see why, then tell us at `abuse@whisper.security`.
 
+**Does `deny if tor_exit` block Tor over IPv6?** Not yet. The Tor data states IPv4 exits only, so `tor_exit` is unknown for every IPv6 client and Tor blocking is IPv4-only; a site that must block Tor publishes only an A record. [Why](POLICY.md#14-what-the-literals-mean-the-definite-values)
+
+**My log says "a reserved byte of the schema tail is not zero" for `tor.bin`.** Your module predates per-family coverage: upgrade the module. Until then Tor reads unknown and nothing is blocked because of it.
+
 **How do I remove it?** Paste the undo lines the installer printed.
 
 ## Learn more
@@ -92,4 +96,4 @@ It works well alongside fail2ban or CrowdSec. It is not a DDoS shield: for flood
 
 ---
 
-<sub>MIT licensed and free forever. Built by [Whisper Security](https://whisper.security), who map how the internet's networks, names and certificates connect, in one graph of about 47 billion objects.</sub>
+<sub>MIT licensed and free forever. Built by [Whisper Security](https://whisper.security), who map how the internet's networks, names and certificates connect, in one graph of tens of billions of objects.</sub>

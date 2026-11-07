@@ -2171,16 +2171,20 @@ static int we_post_config(apr_pool_t *pconf, apr_pool_t *plog, apr_pool_t *ptemp
     we_mod_bind_args_t args = WE_MOD_BIND_ARGS_INIT;
     void *data = NULL;
     char msg[512];
-    int rc;
+    int rc, boot;
 
     (void) plog;
     (void) ptemp;
     ap_add_version_component(pconf, "whisper-edge/2");
+    boot = we_mod_boot_prime();                /* in the parent, so every child inherits the boot id it read */
     if (b == NULL) {
         return OK;
     }
     if (ap_state_query(AP_SQ_MAIN_STATE) == AP_SQ_MS_CREATE_PRE_CONFIG) {
         return OK;                             /* the first of httpd's two passes: nothing is bound twice */
+    }
+    if (boot == WE_PROC_BOOT_NONE) {
+        ap_log_error(APLOG_MARK, APLOG_WARNING, 0, s, "whisper edge: %s", WE_MOD_BOOT_HINT);
     }
     we_say_flush(base, s);                     /* the configuration-time lines, once, into the opened error log */
 #ifdef WE_MOD_TEST_KEY_IN_PARENT
@@ -2533,18 +2537,19 @@ WE_COLD_SYMBOL we_shard_t *we_apache_shard_register(we_child_t *ch)
     sh->owner_tid = (uint64_t) syscall(SYS_gettid);   /* the trap's owner: the thread that registered */
 #endif
 #ifdef WE_MOD_TEST_MU_FLAG
-    {   /* the debug build times the wait for the mutex at a registration, and prints every wait over 1 ms: the
-         * writer's I/O runs outside the mutex, so a new worker's first request should never wait on it */
+    /* the debug build times the wait for the mutex at a registration, and prints every wait over 1 ms: the
+     * writer's I/O runs outside the mutex, so a new worker's first request should never wait on it. The line is
+     * printed AFTER the unlock: printing it under the mutex is a write by the holder, which the row's interposer
+     * rightly counts, so every wait a loaded runner caused became a fault of the module's (waits 3, I/O under
+     * the mutex 3, the same three) */
+    unsigned long reg_wait_us;
+    {
         struct timespec t0, t1;
-        unsigned long us;
 
         clock_gettime(CLOCK_MONOTONIC, &t0);
         we_mu_lock(ch);
         clock_gettime(CLOCK_MONOTONIC, &t1);
-        us = (unsigned long) ((t1.tv_sec - t0.tv_sec) * 1000000L + (t1.tv_nsec - t0.tv_nsec) / 1000L);
-        if (us > 1000u) {
-            ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, ap_server_conf, "whisper edge: a registration waited %lu us for the shard mutex", us);
-        }
+        reg_wait_us = (unsigned long) ((t1.tv_sec - t0.tv_sec) * 1000000L + (t1.tv_nsec - t0.tv_nsec) / 1000L);
     }
 #else
     we_mu_lock(ch);
@@ -2557,6 +2562,11 @@ WE_COLD_SYMBOL we_shard_t *we_apache_shard_register(we_child_t *ch)
     ch->dbg_alloc += WE_SHARD_HDR_BYTES + WE_SHARD_CTR_BYTES(ch->b->stride);
 #endif
     we_mu_unlock(ch);
+#ifdef WE_MOD_TEST_MU_FLAG
+    if (reg_wait_us > 1000u) {
+        ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, ap_server_conf, "whisper edge: a registration waited %lu us for the shard mutex", reg_wait_us);
+    }
+#endif
     if (pthread_setspecific(ch->key, sh) != 0) {
         return sh;                             /* the shard stays registered; the next request registers again */
     }
@@ -2958,10 +2968,17 @@ static void we_on_final(void *ud, uint64_t tick, const int *stop)
      * abandoned children left a temp file, so their threads were inside a write) */
     usleep((useconds_t) (WE_MOD_TEST_STALL_WRITE) * 1000u);
 #endif
+#ifdef WE_MOD_TEST_NO_FINAL_WRITE
+    /* the control: the shim as it was before its stop wrote, so a child ending between ticks lost its counts */
+    (void) ch;
+    (void) tick;
+    return;
+#else
     if (ch->b->planes != NULL) {
         we_mod_planes_apply(ch->b->planes, we_child_log, ch);
     }
     we_tick_write(ch, tick, 1, NULL);
+#endif
 }
 
 /*

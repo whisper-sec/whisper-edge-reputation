@@ -103,6 +103,21 @@ ev_rows=0       # every evaluator row this run met, live or dark, so the DARK co
 ARCH=$(uname -m)
 case "$ARCH" in arm64) ARCH=aarch64 ;; amd64) ARCH=x86_64 ;; esac
 
+# THE TOOLCHAIN PROFILE THE ROWS ARE KEYED BY. Every count here is exact for one compiler, one
+# valgrind and one C start-up, so a distribution release that moves all three moves every row, and the
+# 8-way conflict figures by half. No tolerance covers that and none should: a band wide enough to take
+# gcc 13 to gcc 15 would take a real regression too. So the rows are per profile, the distribution and
+# release this host runs (/etc/os-release: ID-VERSION_ID, or WE_CG_PROFILE). The reference profile is
+# the one the published figures are measured on, and its rows keep the bare architecture as their key
+# (`x86_64`, `aarch64`); every other profile's rows are keyed `<arch>@<profile>` (`x86_64@ubuntu-26.04`)
+# in the same files, written by --write-baseline on that profile and judged only there. The toolchain
+# header still names each key's compiler and valgrind exactly, so a point release inside a profile is
+# refused by name as before. A profile with no rows fails as a missing baseline does, naming the key.
+CG_REFERENCE_PROFILE=ubuntu-24.04
+PROFILE=${WE_CG_PROFILE:-$( (. /etc/os-release 2>/dev/null && printf '%s-%s' "${ID:-unknown}" "${VERSION_ID:-unknown}") || echo unknown)}
+case "$PROFILE" in *[!A-Za-z0-9._-]*|'') echo "usage: WE_CG_PROFILE=$PROFILE is not a profile name ([A-Za-z0-9._-])" >&2; exit 2 ;; esac
+if [ "$PROFILE" = "$CG_REFERENCE_PROFILE" ]; then BKEY=$ARCH; else BKEY="$ARCH@$PROFILE"; fi
+
 if ! command -v valgrind >/dev/null 2>&1; then
     echo "CACHEGRIND GATE: FAILED: valgrind is not installed, so nothing was measured"
     exit 1
@@ -111,7 +126,7 @@ if ! command -v python3 >/dev/null 2>&1; then
     echo "CACHEGRIND GATE: FAILED: python3 is not installed, so the cost model cannot run"
     exit 1
 fi
-echo "cachegrind gate, $ARCH, $(valgrind --version), $COUNT lookups per lookup row"
+echo "cachegrind gate, $ARCH, profile $PROFILE (rows keyed $BKEY), $(valgrind --version), $COUNT lookups per lookup row"
 
 # ---- the cost model's own negative controls, before it judges anything ------------------------------
 if ! python3 gate/cost-model.py selftest; then
@@ -336,7 +351,7 @@ build_ctl() {
 # outside BAND-CENTRE VALUE -> True when VALUE lies outside +-TOL_PCT% of the centre
 outside() { fx "abs(F('$2') - F('$1')) > F($TOL_PCT, 100) * abs(F('$1'))"; }
 mod_controls() {
-    local cc=$1 c_view c_count c_export c_prerewrite md_per slot k bound pi pr pw mi mr mw a b d di dr dw row st
+    local cc=$1 c_view c_count c_export c_prerewrite md_per slot k bound pi pr pw mi mr mw a b d di dr dw row st xb
     c_view=$(mconst "$cc" c_view); c_count=$(mconst "$cc" c_count@ctx0)
     c_export=$(mconst "$cc" c_export); c_prerewrite=$(mconst "$cc" c_prerewrite)
     md_per=$(per_req "$cc" module-default)
@@ -398,10 +413,15 @@ mod_controls() {
             fail=1
         else
             d=$(fx "F('$a') - F('$md_per')")
-            if [ "$(outside "$c_export" "$d")" = True ]; then
-                echo "ok   C2+: WE_MOD_TEST_EAGER_EXPORT makes the export pass cost $d against c_export $c_export ($cc), outside the +-$TOL_PCT% band"
+            # c_export's own band, the one the model holds it to (gate/cost-model.py BANDS), never the shared one
+            xb=$(awk -F'\t' '$1 == "band" && $2 == "c_export" { print $3; exit }' "$WORK/model.$cc.out")
+            if [ -z "$xb" ]; then
+                echo "GATE FAIL: C2+: the cost model printed no band for c_export ($cc), so the control has nothing to be held to"
+                fail=1
+            elif [ "$(fx "abs(F('$d') - F('$c_export')) > F($xb, 100) * abs(F('$c_export'))")" = True ]; then
+                echo "ok   C2+: WE_MOD_TEST_EAGER_EXPORT makes the export pass cost $d against c_export $c_export ($cc), outside c_export's +-$xb% band"
             else
-                echo "GATE FAIL: C2+: WE_MOD_TEST_EAGER_EXPORT makes the export pass cost $d against c_export $c_export ($cc), INSIDE the +-$TOL_PCT% band"
+                echo "GATE FAIL: C2+: WE_MOD_TEST_EAGER_EXPORT makes the export pass cost $d against c_export $c_export ($cc), INSIDE c_export's +-$xb% band"
                 fail=1
             fi
         fi
@@ -516,7 +536,7 @@ mod_controls() {
     {
         local mx="$WORK/meas.$cc.plus1.tsv"
         awk -F'\t' -v OFS='\t' '$1 == "module-worst" { split($2, q, "/"); $2 = (q[1] + q[2]) "/" q[2] } { print }' "$MEAS" > "$mx"
-        if python3 gate/cost-model.py gate "$mx" "$CONSTANTS" "$ARCH" "$cc" "$TOL_PCT" > "$WORK/model.$cc.plus1.out" 2>&1 \
+        if python3 gate/cost-model.py gate "$mx" "$CONSTANTS" "$BKEY" "$cc" "$TOL_PCT" > "$WORK/model.$cc.plus1.out" 2>&1 \
                 || ! grep -q 'EXACT: .*module-worst' "$WORK/model.$cc.plus1.out"; then
             echo "GATE FAIL: CX: module-worst one instruction a request dearer on this run's own rows is not refused by name by the module basis ($cc)"
             fail=1
@@ -541,21 +561,21 @@ mod_controls() {
 # check_band SLOT CC INSTR D1 -> prints ok, or fails naming the slot; the baseline row is the arch's
 check_band() {
     local slot=$1 cc=$2 di=$3 dd=$4 row bi bd verdict
-    row=$(awk -F'\t' -v a="$ARCH" -v c="$cc" -v s="$slot" '$1 == a && $2 == c && $3 == s { print $5 "\t" $6 }' "$BASELINE" 2>/dev/null || true)
+    row=$(awk -F'\t' -v a="$BKEY" -v c="$cc" -v s="$slot" '$1 == a && $2 == c && $3 == s { print $5 "\t" $6 }' "$BASELINE" 2>/dev/null || true)
     if [ -z "$row" ] && [ "$STALE" = 1 ]; then
-        echo "NOT PROVEN: $slot ($cc) measured instructions $di, D1 misses $dd; no $ARCH baseline on this layout"
+        echo "NOT PROVEN: $slot ($cc) measured instructions $di, D1 misses $dd; no $BKEY baseline on this layout"
         return
     fi
     if [ -z "$row" ]; then
-        echo "GATE FAIL: no baseline for $ARCH $cc $slot (measured: instructions $di, D1 misses $dd);"
-        echo "        run cachegrind-gate.sh --write-baseline on $ARCH and commit gate/cachegrind-baseline.tsv"
+        echo "GATE FAIL: no baseline for $BKEY $cc $slot (measured: instructions $di, D1 misses $dd);"
+        echo "        run cachegrind-gate.sh --write-baseline on $BKEY and commit gate/cachegrind-baseline.tsv"
         fail=1
         return
     fi
     IFS=$'\t' read -r bi bd <<<"$row"
     if [ "$STALE" = 1 ]; then
         # a baseline measured on another driver layout is not this measurement: printed, never judged
-        echo "NOT PROVEN: $slot ($cc) measured instructions $di, D1 misses $dd; the $ARCH baseline (instructions $bi, D1 misses $bd) is layout ${BASE_LAYOUT:-1}'s"
+        echo "NOT PROVEN: $slot ($cc) measured instructions $di, D1 misses $dd; the $BKEY baseline (instructions $bi, D1 misses $bd) is layout ${BASE_LAYOUT:-1}'s"
         return
     fi
     verdict=$(awk -v x="$di" -v b="$bi" -v y="$dd" -v c="$bd" -v t="$TOL_PCT" 'BEGIN {
@@ -587,23 +607,23 @@ done
 # new toolchain is adopted (it rewrites the header with the rows).
 if [ "$WRITE" != 1 ]; then
     for cc in "${COMPILERS[@]}"; do
-        want="# $ARCH $cc: $("$cc" --version | sed -n 1p), $(valgrind --version)"
-        have=$(grep -F "# $ARCH $cc: " "$BASELINE" 2>/dev/null | sed -n 1p || true)
+        want="# $BKEY $cc: $("$cc" --version | sed -n 1p), $(valgrind --version)"
+        have=$(grep -F "# $BKEY $cc: " "$BASELINE" 2>/dev/null | sed -n 1p || true)
         if [ -z "$have" ]; then
-            echo "GATE FAIL: gate/cachegrind-baseline.tsv names no toolchain for $ARCH $cc; it is measured with ${want#*: }"
+            echo "GATE FAIL: gate/cachegrind-baseline.tsv names no toolchain for $BKEY $cc; it is measured with ${want#*: }"
             fail=1
         elif [ "${have#"$want"}" = "$have" ]; then
-            echo "GATE FAIL: the baseline for $ARCH $cc was measured with ${have#*: }; this run has ${want#*: }"
+            echo "GATE FAIL: the baseline for $BKEY $cc was measured with ${have#*: }; this run has ${want#*: }"
             fail=1
         else
             # its control: the same header against a compiler one release away must not match
             planted="${want/ 1/ 9}"
             [ "$planted" = "$want" ] && planted="${want}-planted"
             if [ "${have#"$planted"}" != "$have" ]; then
-                echo "GATE FAIL: the toolchain check accepted a planted compiler string for $ARCH $cc"
+                echo "GATE FAIL: the toolchain check accepted a planted compiler string for $BKEY $cc"
                 fail=1
             else
-                echo "ok   the baseline's toolchain is this run's for $ARCH $cc, and a different one is refused"
+                echo "ok   the baseline's toolchain is this run's for $BKEY $cc, and a different one is refused"
             fi
         fi
     done
@@ -616,11 +636,11 @@ STALE=0
 LINK_BLIND=0
 LINK_BLIND_WHY=""   # the row that was blind, named in the verdict
 CF_DARK=0           # a module row with no conflict baseline on this layout: measured and printed, not judged
-BASE_LAYOUT=$(sed -n "s/^# layout $ARCH: \([0-9]*\)\$/\1/p" "$BASELINE" 2>/dev/null | sed -n 1p)
+BASE_LAYOUT=$(sed -n "s/^# layout $BKEY: \([0-9]*\)\$/\1/p" "$BASELINE" 2>/dev/null | sed -n 1p)
 DRV_LAYOUT=$(sed -n 's/^#define WE_CG_LAYOUT \([0-9]*\)$/\1/p' gate/cg_driver.c | sed -n 1p)
 if [ "$WRITE" != 1 ] && [ "${BASE_LAYOUT:-1}" != "$DRV_LAYOUT" ]; then
     STALE=1
-    echo "NOT PROVEN: the $ARCH baseline rows were measured on driver layout ${BASE_LAYOUT:-1}, this driver is layout $DRV_LAYOUT; every $ARCH row is printed, none judged, until cachegrind-gate.sh --write-baseline runs on $ARCH"
+    echo "NOT PROVEN: the $BKEY baseline rows were measured on driver layout ${BASE_LAYOUT:-1}, this driver is layout $DRV_LAYOUT; every $BKEY row is printed, none judged, until cachegrind-gate.sh --write-baseline runs on $BKEY"
 fi
 
 # THE STATICS the layout check holds: gate/cg_statics.h is the scan of the driver's file-scope statics
@@ -695,16 +715,17 @@ for cc in "${COMPILERS[@]}"; do
     # request between two placements), so the driver is linked LAST and nothing of its own can move them.
     # The control holds that by the placement itself, the same on every architecture, with 1,000 read-only
     # bytes in an object of their own (gate/cg_plant.c): linked after the driver they leave the page offset
-    # of every data object the core and the evaluator define unchanged, and linked before the core they move
-    # at least one (the arm that shows the comparison can see a move; a plant inside the driver could not,
-    # because the driver's page-aligned statics re-align whatever follows them). Then, with the plant after
-    # the driver, a row's instructions and D1 are measured equal with and without it.
+    # of every data object the core and the evaluator define unchanged, and linked inside the core, after its
+    # first object, they move at least one (the arm that shows the comparison can see a move). Not before
+    # the core, and not inside the driver: each starts with a table aligned to a page (the core's hot tables,
+    # the driver's statics), which re-aligns whatever follows it, so a plant there moves nothing. Then, with
+    # the plant after the driver, a row's instructions and D1 are measured equal with and without it.
     if [ -z "$EVAL_DARK" ]; then
         lo_slot=evaluator-basis-BOOL-F
         lo_ok=1
         for lo_name in rodata rodata_first; do
             lo_src=("${CORE_SRC[@]}" "${EVAL_SRC[@]}" gate/cg_driver.c gate/cg_plant.c)
-            [ "$lo_name" = rodata_first ] && lo_src=(gate/cg_plant.c "${CORE_SRC[@]}" "${EVAL_SRC[@]}" gate/cg_driver.c)
+            [ "$lo_name" = rodata_first ] && lo_src=("${CORE_SRC[0]}" gate/cg_plant.c "${CORE_SRC[@]:1}" "${EVAL_SRC[@]}" gate/cg_driver.c)
             if ! "$cc" -std=gnu11 -O2 -Wall -Wextra -Werror "${EVAL_DEF[@]}" -I"$HERE" -I"$HERE/gate" \
                    -o "$WORK/cg_${cc}_$lo_name" "${lo_src[@]}" 2>"$WORK/linkorder.$cc.err"; then
                 echo "GATE FAIL: the link-order control ($lo_name) does not build on $cc: $(head -1 "$WORK/linkorder.$cc.err")"
@@ -741,7 +762,7 @@ for cc in "${COMPILERS[@]}"; do
                 echo "GATE FAIL: with the driver linked last its planted bytes moved a core object ($cc): $(diff "$WORK/lo.last.$cc" "$WORK/lo.last-plant.$cc" | grep -m1 '^>')"
                 fail=1
             elif [ "$lo_moved_first" -eq 0 ]; then
-                echo "NOT PROVEN: the link-order control is blind on $cc: linked before the core, the planted bytes moved none of its $lo_n data objects"
+                echo "NOT PROVEN: the link-order control is blind on $cc: linked after the core's first object, the planted bytes moved none of its $lo_n data objects"
                 LINK_BLIND=1; LINK_BLIND_WHY="the link-order control ($cc)"
             else
                 read -r li ld _ _ <<<"$(measure_hw "cg_$cc" "$lo_slot" e 2000)"
@@ -750,23 +771,24 @@ for cc in "${COMPILERS[@]}"; do
                     echo "GATE FAIL: with the driver linked last its own read-only bytes still move the code's counts ($cc): $lo_slot $li/$ld against $pi/$pd"
                     fail=1
                 else
-                    echo "ok   the driver links last ($cc): a 1,000-byte plant after it leaves all $lo_n core data objects at their page offsets and $lo_slot at $li instructions, $ld misses on the 8-way D1; before the core the same plant moves $lo_moved_first of them"
+                    echo "ok   the driver links last ($cc): a 1,000-byte plant after it leaves all $lo_n core data objects at their page offsets and $lo_slot at $li instructions, $ld misses on the 8-way D1; after the core's first object the same plant moves $lo_moved_first of them"
                 fi
             fi
         fi
     fi
     # THE PLACEMENTS the two layout rows below measure: the production driver, and the same driver with the
-    # gate's plant of 1,000, 2,000 or 3,500 bytes linked before the core; and the conflict row's control builds
+    # gate's plant of 1,000, 2,000 or 3,500 bytes linked after the core's first object (the link-order
+    # control above says why there); and the conflict row's control builds
     # at each placement. Built once, here, for both rows, and measured once: every run the two rows read is
     # made up front, CG_JOBS at a time, into a cache the rows then read, so the conflict row never re-measures
     # what the layout row has measured (a cachegrind count does not depend on what else the host runs).
     cf_ok=0
     if [ -z "$EVAL_DARK" ] && [ "${lo_ok:-0}" = 1 ]; then
-        cf_build() { # cf_build NAME PLANT_BYTES [DEFINES...] -> cg_${cc}_NAME, the plant linked before the core unless 0
+        cf_build() { # cf_build NAME PLANT_BYTES [DEFINES...] -> cg_${cc}_NAME, the plant linked after the core's first object unless 0
             local name=$1 pb=$2
             shift 2
             local -a src=("${CORE_SRC[@]}" "${EVAL_SRC[@]}" gate/cg_driver.c) def=("$@")
-            if [ "$pb" != 0 ]; then src=(gate/cg_plant.c "${src[@]}"); def+=("-DWE_CG_PLANT_BYTES=$pb"); fi
+            if [ "$pb" != 0 ]; then src=("${CORE_SRC[0]}" gate/cg_plant.c "${CORE_SRC[@]:1}" "${EVAL_SRC[@]}" gate/cg_driver.c); def+=("-DWE_CG_PLANT_BYTES=$pb"); fi
             "$cc" -std=gnu11 -O2 -Wall -Wextra -Werror "${EVAL_DEF[@]}" "${def[@]}" -I"$HERE" -I"$HERE/gate" \
                 -o "$WORK/cg_${cc}_$name" "${src[@]}" 2>"$WORK/cf.$cc.$name.err"
         }
@@ -793,13 +815,21 @@ for cc in "${COMPILERS[@]}"; do
         cg_prefetch "${cf_runs[@]}"
     fi
     # THE D1 ROWS FOLLOW THE CODE, NOT THE LINK: every module row and the link-order row measured on the
-    # production build and at each of the three plant placements, which move the page offsets of the core's
-    # data and of everything linked after it, the driver's strings among them. On the rows' D1 every
-    # placement agrees within 1% (a line straddled or not is the only residue), and the instructions are
-    # equal; on the 8-way geometry some placement must move some row by more than 1%, or the plants moved
-    # nothing and the row is blind (one plant alone was, on x86_64 clang: run 38697985954)
+    # production build and at each of the three plant placements, which move the page offsets of the data of
+    # every core object after the first and of the evaluator's. On the rows' D1 every placement agrees within
+    # 1% (a line straddled or not is the only residue), and the instructions are equal. Each plant must move
+    # the page offset of at least one of those data objects, read from the build itself, or the placement
+    # moved nothing and the row is blind (one plant alone was, on x86_64 clang: run 38697985954). That a
+    # plant moves some row on the 8-way geometry is printed and not required: the module's words and the
+    # core's hot tables each start a set stride of their own, so a request reads no table the link places,
+    # and an 8-way row that moves with a plant is a hot table back in the link's hands (the conflict row
+    # below judges it at the production link).
     if [ "$cf_ok" = 1 ]; then
-        d1_moved=0 d1_bad=0 d1_n=0
+        d1_moved=0 d1_bad=0 d1_n=0 d1_still=""
+        for pb in 1000 2000 3500; do
+            lo_offsets "$WORK/cg_${cc}_prod_$pb" > "$WORK/lo.prod_$pb.$cc"
+            cmp -s "$WORK/lo.last.$cc" "$WORK/lo.prod_$pb.$cc" && d1_still="$d1_still $pb"
+        done
         for d1_slot in "$lo_slot" "${CF_SLOTS[@]}"; do
             cg_cached fa "cg_${cc}_prod_0" "$d1_slot"; read -r ai ad _ _ <<<"$CG_LINE"
             cg_cached hw "cg_${cc}_prod_0" "$d1_slot"; read -r hi ah _ _ <<<"$CG_LINE"
@@ -821,25 +851,26 @@ for cc in "${COMPILERS[@]}"; do
                 # a move is what the row's own test would call one: more than 1% of the row
                 awk -v a="$ah" -v b="$bh" 'BEGIN { d = a - b; if (d < 0) d = -d; exit !(d > a / 100) }' && d1_slot_moved=1
                 if [ "$ai" != "$bi" ] || awk -v a="$ad" -v b="$bd" 'BEGIN { d = a - b; if (d < 0) d = -d; exit !(d > a / 100) }'; then
-                    echo "GATE FAIL: the D1 row follows the link ($cc): $d1_slot reads $ad misses a request, and $bd with an unrelated $pb-byte plant linked before the core (instructions $ai and $bi)"
+                    echo "GATE FAIL: the D1 row follows the link ($cc): $d1_slot reads $ad misses a request, and $bd with an unrelated $pb-byte plant linked into the core (instructions $ai and $bi)"
                     d1_bad=1
                     fail=1
                 fi
             done
             d1_moved=$((d1_moved + d1_slot_moved))
         done
-        if [ "$d1_bad" = 0 ] && [ "$d1_moved" = 0 ]; then
-            echo "NOT PROVEN: the layout row is blind on $cc: no plant moved any row's 8-way D1 by more than 1%, so nothing was shown to be held"
+        if [ "$d1_bad" = 0 ] && [ -n "$d1_still" ]; then
+            echo "NOT PROVEN: the layout row is blind on $cc: the plant of${d1_still} bytes moved none of the $(wc -l < "$WORK/lo.last.$cc") core and evaluator data objects, so nothing was shown to be held"
             LINK_BLIND=1; LINK_BLIND_WHY="the D1 layout row ($cc)"
         elif [ "$d1_bad" = 0 ]; then
-            echo "ok   the D1 rows follow the code ($cc): $d1_n rows within 1% and at equal instructions under unrelated plants of 1,000, 2,000 and 3,500 bytes linked before the core, which move $d1_moved of them by more than 1% on the 8-way geometry"
+            echo "ok   the D1 rows follow the code ($cc): $d1_n rows within 1% and at equal instructions under unrelated plants of 1,000, 2,000 and 3,500 bytes linked into the core, each of which moves core data objects; $d1_moved of the rows move by more than 1% on the 8-way geometry"
         fi
     fi
     # THE 8-WAY CONFLICT ROW, gated. The rows' D1 above is fully associative, so it cannot see two hot
     # objects landing in one set: a conflict regression, which on a real 8-way cache evicts a line every
     # request. Planes are mapped page-aligned, so a stride of a page between hot lines is not hypothetical.
     # Each module row is measured on the hardware's 8-way D1 at four placements (the gate's plant of 0,
-    # 1,000, 2,000 and 3,500 bytes linked before the core), and two figures are held to the committed ones:
+    # 1,000, 2,000 and 3,500 bytes linked after the core's first object), and two figures are held to the
+    # committed ones:
     # - the MINIMUM over the four. The plants move objects by amounts that are not a page, so they leave
     #   every page-aligned object in its set: a conflict among page-aligned objects (the planes, the
     #   driver's arrays, set 0 where each of them starts) is the same at every placement and link jitter
@@ -883,15 +914,15 @@ for cc in "${COMPILERS[@]}"; do
             fail=1; cf_bad=1
         fi
         if [ "$WRITE" != 1 ] && [ "$STALE" != 1 ]; then
-            cf_have=$(awk -F'\t' -v a="$ARCH" -v c="$cc" '$1 == a && $2 == c { print $3 }' "$CONFLICT_BASE" 2>/dev/null || true)
+            cf_have=$(awk -F'\t' -v a="$BKEY" -v c="$cc" '$1 == a && $2 == c { print $3 }' "$CONFLICT_BASE" 2>/dev/null || true)
             cf_twice=$(printf '%s\n' "$cf_have" | sed '/^$/d' | sort | uniq -d | tr '\n' ' ')
             cf_orphans=$(comm -13 <(printf '%s\n' "${CF_SLOTS[@]}" | sort -u) <(printf '%s\n' "$cf_have" | sed '/^$/d' | sort -u) | tr '\n' ' ')
             if [ -n "$cf_twice" ]; then
-                echo "GATE FAIL: gate/conflict-baseline.tsv holds ${cf_twice% } more than once for $ARCH $cc"
+                echo "GATE FAIL: gate/conflict-baseline.tsv holds ${cf_twice% } more than once for $BKEY $cc"
                 fail=1; cf_bad=1
             fi
             if [ -n "$cf_orphans" ]; then
-                echo "GATE FAIL: gate/conflict-baseline.tsv commits figures for ${cf_orphans% } on $ARCH $cc, which CF_SLOTS does not name: a row removed from the conflict row is removed from the file too, by --write-baseline on each architecture"
+                echo "GATE FAIL: gate/conflict-baseline.tsv commits figures for ${cf_orphans% } on $BKEY $cc, which CF_SLOTS does not name: a row removed from the conflict row is removed from the file too, by --write-baseline on each architecture"
                 fail=1; cf_bad=1
             fi
         fi
@@ -914,13 +945,13 @@ for cc in "${COMPILERS[@]}"; do
                 fail=1; cf_ctl_bad=1
             fi
             if [ "$WRITE" = 1 ]; then
-                CFNEW+=("$ARCH	$cc	$cf_slot	$m	$p")
+                CFNEW+=("$BKEY	$cc	$cf_slot	$m	$p")
                 continue
             fi
-            b=$(awk -F'\t' -v a="$ARCH" -v c="$cc" -v s="$cf_slot" '$1 == a && $2 == c && $3 == s { print $4 }' "$CONFLICT_BASE" 2>/dev/null || true)
-            bp=$(awk -F'\t' -v a="$ARCH" -v c="$cc" -v s="$cf_slot" '$1 == a && $2 == c && $3 == s { print $5 }' "$CONFLICT_BASE" 2>/dev/null || true)
+            b=$(awk -F'\t' -v a="$BKEY" -v c="$cc" -v s="$cf_slot" '$1 == a && $2 == c && $3 == s { print $4 }' "$CONFLICT_BASE" 2>/dev/null || true)
+            bp=$(awk -F'\t' -v a="$BKEY" -v c="$cc" -v s="$cf_slot" '$1 == a && $2 == c && $3 == s { print $5 }' "$CONFLICT_BASE" 2>/dev/null || true)
             if [ -z "$b" ] || [ -z "$bp" ] || [ "$STALE" = 1 ]; then
-                echo "NOT PROVEN: $cf_slot ($cc) reads $m misses a request at its best 8-way placement and $p at the production link; no $ARCH conflict baseline for both on this layout"
+                echo "NOT PROVEN: $cf_slot ($cc) reads $m misses a request at its best 8-way placement and $p at the production link; no $BKEY conflict baseline for both on this layout"
                 CF_DARK=1
                 continue
             fi
@@ -932,7 +963,7 @@ for cc in "${COMPILERS[@]}"; do
                 echo "GATE FAIL: $cf_slot ($cc) has a conflict at the production link on the 8-way D1: $p misses a request at placement 0, against a committed $bp (bound $(cf_bound "$bp")); the other placements cure it, so it is an object the link places"
                 fail=1; cf_bad=1
             elif cf_cured "$m" "$b" || cf_cured "$p" "$bp"; then
-                echo "GATE FAIL: $cf_slot ($cc) has cured a conflict on the 8-way D1: $m misses a request at its best placement and $p at the production link, against a committed $b and $bp; more than $CF_MARGIN under is a new floor, and cachegrind-gate.sh --write-baseline on $ARCH records it, or a return of the same conflict reads green"
+                echo "GATE FAIL: $cf_slot ($cc) has cured a conflict on the 8-way D1: $m misses a request at its best placement and $p at the production link, against a committed $b and $bp; more than $CF_MARGIN under is a new floor, and cachegrind-gate.sh --write-baseline on $BKEY records it, or a return of the same conflict reads green"
                 fail=1; cf_bad=1
             fi
         done
@@ -1105,7 +1136,7 @@ for cc in "${COMPILERS[@]}"; do
         # the basis, every derived constant against its committed value, soundness, the worst fixture
         wflag=()
         [ "$WRITE" = 1 ] && wflag=(--write)
-        if ! python3 gate/cost-model.py gate "$MEAS" "$CONSTANTS" "$ARCH" "$cc" "$TOL_PCT" "${wflag[@]}" | tee "$WORK/model.$cc.out" | sed 's/^/  /'; then
+        if ! python3 gate/cost-model.py gate "$MEAS" "$CONSTANTS" "$BKEY" "$cc" "$TOL_PCT" "${wflag[@]}" | tee "$WORK/model.$cc.out" | sed 's/^/  /'; then
             fail=1
         fi
         grep -q '^GATE FAIL' "$WORK/model.$cc.out" && fail=1
@@ -1121,7 +1152,7 @@ for cc in "${COMPILERS[@]}"; do
             for c2slot in evaluator-memo evaluator-default; do
                 read -r mi _ _ _ <<<"$(measure "cg_${cc}_nomemo" "$c2slot" e "${REQ[$c2slot]}")"
                 # against the committed row; when this run is writing the baseline, against what it just measured
-                row=$(awk -F'\t' -v a="$ARCH" -v c="$cc" -v s="$c2slot" '$1 == a && $2 == c && $3 == s { print $5 }' "$BASELINE" 2>/dev/null || true)
+                row=$(awk -F'\t' -v a="$BKEY" -v c="$cc" -v s="$c2slot" '$1 == a && $2 == c && $3 == s { print $5 }' "$BASELINE" 2>/dev/null || true)
                 [ "$WRITE" = 1 ] && row=${GOT["$cc|$c2slot"]%% *}
                 if [ -z "$row" ]; then
                     echo "GATE FAIL: C2 cannot be judged ($cc): $c2slot has no baseline"
@@ -1151,12 +1182,12 @@ for cc in "${COMPILERS[@]}"; do
         # move the figure by exactly one; until it does, the control is the comparison itself, which must
         # refuse a figure one reference per rule higher, and the line says which control ran.
         read -r dri drr <<<"$(per_rule "cg_$cc")"
-        drrow=$(awk -F'\t' -v a="$ARCH" -v c="$cc" '$1 == a && $2 == c { print $3 "\t" $4 }' "$HERE/gate/dataref-baseline.tsv" 2>/dev/null || true)
+        drrow=$(awk -F'\t' -v a="$BKEY" -v c="$cc" '$1 == a && $2 == c { print $3 "\t" $4 }' "$HERE/gate/dataref-baseline.tsv" 2>/dev/null || true)
         if [ "$WRITE" = 1 ]; then
-            DRNEW+=("$ARCH	$cc	$drr	$dri")
+            DRNEW+=("$BKEY	$cc	$drr	$dri")
             echo "  data refs per rule ($cc): $drr (instructions $dri), written"
         elif [ -z "$drrow" ]; then
-            echo "GATE FAIL: no data-refs baseline for $ARCH $cc (measured: $drr data references, $dri instructions per rule)"
+            echo "GATE FAIL: no data-refs baseline for $BKEY $cc (measured: $drr data references, $dri instructions per rule)"
             fail=1
         else
             IFS=$'\t' read -r brefs bir <<<"$drrow"
@@ -1223,7 +1254,7 @@ if [ "$WRITE" = 1 ]; then
     done
     vmin=$(printf '%s\n' "${vt[@]}" | sort -n | sed -n 1p)
     vmax=$(printf '%s\n' "${vt[@]}" | sort -n | tail -1)
-    VANTAGE="load $(cut -d' ' -f1-3 /proc/loadavg) on $(nproc) CPUs at $(date -u +%Y-%m-%dT%H:%MZ); control $PROBE_SLOT timed ${vt[*]} ms"
+    VANTAGE="load $(cut -d' ' -f1-3 /proc/loadavg) on $(nproc) CPUs at $(date -u +%Y-%m-%dT%H:%MZ); control $PROBE_SLOT timed $(for t in "${vt[@]}"; do printf '%d.%03d ' $((t / 1000)) $((t % 1000)); done)s"
     vc_text=$(printf '%s\n' "${vc[@]}")
     if [ "$(printf '%s' "$vc_text" | sort -u | grep -c .)" != 1 ] || grep -q ERROR <<<"$vc_text"; then
         echo "NOT PROVEN: --write-baseline refused: the control target's counts differ across three runs: ${vc[*]}"
@@ -1240,15 +1271,15 @@ if [ "$WRITE" = 1 ]; then
     {
         echo "# cachegrind-baseline.tsv - instructions and D1 misses per lookup (or per request, for an evaluator"
         echo "# row), D1 32 KiB of 64-byte lines, fully associative. cachegrind-gate.sh gates each within +-$TOL_PCT% for its"
-        echo "# architecture and compiler. Rows are rewritten per architecture by --write-baseline."
-        awk '/^# (aarch64|x86_64) /' "$BASELINE" 2>/dev/null | grep -v "^# $ARCH " || true
+        echo "# architecture and compiler. Rows are rewritten per architecture and toolchain profile by --write-baseline."
+        awk -v k="# $BKEY " '/^# (aarch64|x86_64)(@[A-Za-z0-9._-]+)? / && index($0, k) != 1' "$BASELINE" 2>/dev/null || true
         for cc in "${COMPILERS[@]}"; do
-            echo "# $ARCH $cc: $("$cc" --version | sed -n 1p), $(valgrind --version), $(ldd --version 2>&1 | sed -n '1s/^ldd //p')"
+            echo "# $BKEY $cc: $("$cc" --version | sed -n 1p), $(valgrind --version), $(ldd --version 2>&1 | sed -n '1s/^ldd //p')"
         done
-        awk '/^# layout (aarch64|x86_64): /' "$BASELINE" 2>/dev/null | grep -v "^# layout $ARCH: " || true
-        echo "# layout $ARCH: $DRV_LAYOUT"
-        awk '/^# vantage (aarch64|x86_64): /' "$BASELINE" 2>/dev/null | grep -v "^# vantage $ARCH: " || true
-        echo "# vantage $ARCH: $VANTAGE"
+        awk -v k="# layout $BKEY: " '/^# layout (aarch64|x86_64)(@[A-Za-z0-9._-]+)?: / && index($0, k) != 1' "$BASELINE" 2>/dev/null || true
+        echo "# layout $BKEY: $DRV_LAYOUT"
+        awk -v k="# vantage $BKEY: " '/^# vantage (aarch64|x86_64)(@[A-Za-z0-9._-]+)?: / && index($0, k) != 1' "$BASELINE" 2>/dev/null || true
+        echo "# vantage $BKEY: $VANTAGE"
         echo "# the C library is recorded, not compared: no libc code runs between the instrumentation marks"
         echo "# Since the driver measures on its own aligned stack, a D1 row is a different quantity from one"
         echo "# measured on the launch stack: rows written with the launch probe in the gate are the reference,"
@@ -1257,51 +1288,51 @@ if [ "$WRITE" = 1 ]; then
         echo "# requests per run: the routing and shipped slots $COUNT per stream; lookup rows $COUNT; each evaluator"
         echo "# row the count the driver's slot table gives it (cg_driver <dir> slots)"
         echo "# arch	compiler	slot	stream	instructions	d1_misses"
-        grep -v '^#' "$BASELINE" 2>/dev/null | awk -F'\t' -v a="$ARCH" '$1 != a' || true
+        grep -v '^#' "$BASELINE" 2>/dev/null | awk -F'\t' -v a="$BKEY" '$1 != a' || true
         for cc in "${COMPILERS[@]}"; do
             for slot in "${SLOTS[@]}" "${QSLOTS[@]}" $(awk -F'\t' '!/^#/ { print $1 }' "$WORK/slots.$cc.tsv" 2>/dev/null); do
                 [ -n "${GOT["$cc|$slot"]:-}" ] || continue
                 read -r di dd <<<"${GOT["$cc|$slot"]}"
                 stream=dense
                 case "$slot" in lookup-*) stream=q ;; evaluator-*|module-*) stream="e${REQ[$slot]}" ;; esac
-                printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$ARCH" "$cc" "$slot" "$stream" "$di" "$dd"
+                printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$BKEY" "$cc" "$slot" "$stream" "$di" "$dd"
             done
         done
     } > "$WORK/baseline.new"
     mv "$WORK/baseline.new" "$BASELINE"
-    echo "wrote $BASELINE for $ARCH"
+    echo "wrote $BASELINE for $BKEY"
     if [ -z "$EVAL_DARK" ]; then
         {
             echo "# cost-constants.tsv - every constant gate/cost-model.py derives from the evaluator rows, per"
             echo "# architecture and compiler; cachegrind-gate.sh holds each within +-$TOL_PCT%."
             echo "# arch	compiler	name	value"
-            grep -v '^#' "$CONSTANTS" 2>/dev/null | awk -F'\t' -v a="$ARCH" '$1 != a' || true
+            grep -v '^#' "$CONSTANTS" 2>/dev/null | awk -F'\t' -v a="$BKEY" '$1 != a' || true
             for cc in "${COMPILERS[@]}"; do
                 sed -n 's/^baseline\t//p' "$WORK/model.$cc.out"
             done
         } > "$WORK/constants.new"
         mv "$WORK/constants.new" "$CONSTANTS"
-        echo "wrote $CONSTANTS for $ARCH"
+        echo "wrote $CONSTANTS for $BKEY"
         {
             echo "# dataref-baseline.tsv - data references (Dr + Dw) and instructions per rule on the straight-line"
             echo "# family evaluator-dr-64/-128, exact fractions; cachegrind-gate.sh holds the references EXACTLY."
             echo "# arch	compiler	refs_per_rule	instructions_per_rule"
-            grep -v '^#' "$HERE/gate/dataref-baseline.tsv" 2>/dev/null | awk -F'\t' -v a="$ARCH" '$1 != a' || true
+            grep -v '^#' "$HERE/gate/dataref-baseline.tsv" 2>/dev/null | awk -F'\t' -v a="$BKEY" '$1 != a' || true
             printf '%s\n' "${DRNEW[@]}"
         } > "$WORK/dataref.new"
         mv "$WORK/dataref.new" "$HERE/gate/dataref-baseline.tsv"
-        echo "wrote gate/dataref-baseline.tsv for $ARCH"
+        echo "wrote gate/dataref-baseline.tsv for $BKEY"
         if [ "${#CFNEW[@]}" -gt 0 ]; then
             {
                 echo "# conflict-baseline.tsv - each module row's 8-way D1 misses a request at its best of four placements"
                 echo "# and at placement 0, the production link (cachegrind-gate.sh's conflict row); each is refused above"
                 echo "# itself plus exactly three misses a request, and more than three below itself."
                 echo "# arch	compiler	slot	best_8way_misses	prod_8way_misses"
-                grep -v '^#' "$CONFLICT_BASE" 2>/dev/null | awk -F'\t' -v a="$ARCH" '$1 != a' || true
+                grep -v '^#' "$CONFLICT_BASE" 2>/dev/null | awk -F'\t' -v a="$BKEY" '$1 != a' || true
                 printf '%s\n' "${CFNEW[@]}"
             } > "$WORK/conflict.new"
             mv "$WORK/conflict.new" "$CONFLICT_BASE"
-            echo "wrote gate/conflict-baseline.tsv for $ARCH"
+            echo "wrote gate/conflict-baseline.tsv for $BKEY"
         fi
     fi
 fi
@@ -1617,18 +1648,18 @@ if [ -z "$EVAL_DARK" ] && [ "$dark" != 0 ]; then
     exit 1
 fi
 if [ "$LINK_BLIND" = 1 ]; then
-    echo "CACHEGRIND GATE: NOT PROVEN on $ARCH: ${LINK_BLIND_WHY:-a layout row} was blind (above), so no D1 row is shown to be the code's rather than the link's"
+    echo "CACHEGRIND GATE: NOT PROVEN on $BKEY: ${LINK_BLIND_WHY:-a layout row} was blind (above), so no D1 row is shown to be the code's rather than the link's"
     exit 2
 fi
 if [ "$CF_DARK" = 1 ] && [ "$STALE" != 1 ]; then
-    echo "CACHEGRIND GATE: NOT PROVEN on $ARCH: the 8-way conflict row has no committed minimum for a module row (above); cachegrind-gate.sh --write-baseline on $ARCH writes gate/conflict-baseline.tsv"
+    echo "CACHEGRIND GATE: NOT PROVEN on $BKEY: the 8-way conflict row has no committed minimum for a module row (above); cachegrind-gate.sh --write-baseline on $BKEY writes gate/conflict-baseline.tsv"
     exit 2
 fi
 if [ "$STALE" = 1 ]; then
-    echo "CACHEGRIND GATE: NOT PROVEN on $ARCH: the baseline rows are driver layout ${BASE_LAYOUT:-1}'s and this driver is layout $DRV_LAYOUT; every row was measured and printed above, none judged; cachegrind-gate.sh --write-baseline on $ARCH re-measures them"
+    echo "CACHEGRIND GATE: NOT PROVEN on $BKEY: the baseline rows are driver layout ${BASE_LAYOUT:-1}'s and this driver is layout $DRV_LAYOUT; every row was measured and printed above, none judged; cachegrind-gate.sh --write-baseline on $BKEY re-measures them"
     exit 2
 fi
 dark_note=""
 [ "$dark" != 0 ] && dark_note="; all $dark of $ev_rows evaluator rows DARK ($EVAL_DARK), each driver answer asserted EMPTY"
 [ "$vdark" != 0 ] && dark_note="$dark_note; $vdark of $ev_rows evaluator rows DARK for want of reference verdicts (make verdicts)"
-echo "CACHEGRIND GATE: CLEAR on $ARCH (${COMPILERS[*]}): every slot within +-$TOL_PCT% of its baseline; index misses per lookup within +-$TOL_PCT% of the baseline at '$GEO', the radix index resident in the LLC$dark_note"
+echo "CACHEGRIND GATE: CLEAR on $BKEY (${COMPILERS[*]}): every slot within +-$TOL_PCT% of its baseline; index misses per lookup within +-$TOL_PCT% of the baseline at '$GEO', the radix index resident in the LLC$dark_note"

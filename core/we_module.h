@@ -17,9 +17,12 @@
  * table, no atomic other than the acquire loads of the view pointers, no fence, and a frame under the
  * evaluator's bound. Locals: none on aarch64 under gcc and clang; the x86_64 legs below keep a measured spill
  * the gate's expected-locals table holds exactly (on x86_64 gcc 13 at -O keeps 8 bytes, the verdict pointer
- * across the rule loop; on x86_64 gcc 14 at -O keeps 8 bytes, the same spill; on x86_64 clang 18 under
+ * across the rule loop, none under -march=x86-64-v3; on x86_64 gcc 14 at -O keeps 8 bytes, the same spill,
+ * none under -march=x86-64-v3; on x86_64 gcc 15 at -O keeps
+ * 8 bytes, the same spill, none under the Zen tunings; on x86_64 clang 18 under
  * -fno-omit-frame-pointer keeps 16 bytes; on x86_64 clang 19 under the same flag keeps 16 bytes; on
- * x86_64 clang 20 under the same flag keeps 16 bytes), so a byte more or a byte fewer fails by name and
+ * x86_64 clang 20 under the same flag keeps 16 bytes; on x86_64 clang 21 under the same flag keeps 16
+ * bytes), so a byte more or a byte fewer fails by name and
  * every change to this function re-measures it; locals-claims.sh holds this
  * sentence and that table to each other, in both directions.
  *
@@ -96,6 +99,8 @@ WE_STATIC_ASSERT(WE_ERR_MODULE_FIRST == -32 && WE_ERR_MODULE_LAST == -63, "the m
         || defined(WE_MOD_TEST_PRINT_UNMEASURED) || defined(WE_MOD_TEST_RETIRE_UNCHECKED) \
         || defined(WE_MOD_TEST_TENANT_BY_MASK) || defined(WE_MOD_TEST_EUID0) || defined(WE_MOD_TEST_LOG_LIFO) \
         || defined(WE_MOD_TEST_SS_UNCONDITIONAL) || defined(WE_MOD_TEST_LAZY_NO_CLEAR) || defined(WE_MOD_TEST_RETIRE_LOCKED) \
+        || defined(WE_MOD_TEST_GRACE_EARLY) || defined(WE_MOD_TEST_GRACE_UNPINNED) || defined(WE_MOD_TEST_SWEEP_WRAP) \
+        || defined(WE_MOD_TEST_EPOCH_UNPINNED) \
         || defined(WE_MOD_TEST_PLANT_ALLOC) || defined(WE_MOD_TEST_PLANT_UNINIT) \
         || defined(WE_MOD_TEST_PORT_65536) || defined(WE_MOD_TEST_LEADING_ZERO) || defined(WE_MOD_TEST_DC_ZERO_GROUPS) \
         || defined(WE_MOD_TEST_PEER_ON_UNPARSED) || defined(WE_MOD_TEST_NO_HOP_CAP) \
@@ -131,7 +136,8 @@ WE_STATIC_ASSERT(WE_ERR_MODULE_FIRST == -32 && WE_ERR_MODULE_LAST == -63, "the m
         || defined(WE_MOD_TEST_SUBBLOCK_UNLOCKED) || defined(WE_MOD_TEST_FINAL_BLOCKING) \
         || defined(WE_MOD_TEST_HOLD_MU_AT_STOP) || defined(WE_MOD_TEST_DECIDE_INLINED) \
         || defined(WE_MOD_TEST_WRITER_UID_UNCHECKED) || defined(WE_MOD_TEST_STATUS_FOLLOWS) \
-        || defined(WE_MOD_TEST_TICK_AT_STOP) || defined(WE_MOD_TEST_TICK_BLOCKING) || defined(WE_MOD_TEST_DENY_AT_WARN))
+        || defined(WE_MOD_TEST_TICK_AT_STOP) || defined(WE_MOD_TEST_TICK_BLOCKING) || defined(WE_MOD_TEST_DENY_AT_WARN) \
+        || defined(WE_MOD_TEST_NO_FINAL_WRITE))
 #error "the WE_MOD_TEST_* controls and WE_MOD_PLANT_CALL exist only in a gate's control build (WE_MOD_CONTROL_BUILD)"
 #endif
 #ifdef WE_MOD_TEST_WORKER_SCRATCH_FILL
@@ -1184,58 +1190,181 @@ typedef struct {
 #define WE_MOD_DOM_REP    3u
 #define WE_MOD_DOM_RIR    4u
 
-static inline const we_mod_attr_t *we_mod_attr(uint32_t i)
+/*
+ * THE WORDS THE VARIABLES RENDER, and the attribute descriptors they are rendered through, in one block
+ * of their own that starts a set stride.
+ *
+ * A string literal is not the module's to place. The compiler puts it in a mergeable string section and
+ * the link pools every object's strings into one, sharing a word with any longer string that ends in it,
+ * so the bytes a variable renders land wherever that pool puts them, and the pool's size is every
+ * unrelated message in the build. Measured on x86_64 gcc: a refusal hint in the policy compiler made 56
+ * bytes longer moved the rendered `none` into the D1 set every page-aligned mapping starts in, and the
+ * pre-decision variable row went from 12.566 to 16.632 misses a request at the production link.
+ *
+ * So every word a request renders is a row of this one object, never a literal, and the object is
+ * aligned to WE_MOD_SET_STRIDE, the set stride of a 32 KiB 8-way D1 (and a page): the set a word lands in
+ * is decided by its offset here and by nothing the link puts before it. Where in the page is a choice
+ * too. A page-aligned object of n lines covers sets 0 to n - 1, so the low sets of a page are the ones
+ * every mapped plane, index and page-aligned pool shares, and the high sets the ones they share least.
+ * The block's first page therefore holds, from the bottom: two lines of the words of the states a
+ * healthy request does not reach (a disarmed or stale plane, a lapsed tenant, a value out of range), the
+ * reason combinations a request renders only when a pre-stage step or a tenant decided, and, in the
+ * page's last lines, everything a request reads on every rendering (`hot`). Its second page holds the
+ * verdict's flagged combinations. The plain reason (`-`) and the plain verdict (the level word) are the
+ * hot rows themselves, shared the way the link used to share them by accident.
+ *
+ * A single word's row is exactly its length and terminator, so sizeof gives its length; a table's rows
+ * are as wide as its longest word, with its lengths in a table beside it. test_module holds every row
+ * terminated inside its width and the block on a set-stride boundary; the asserts below hold the layout.
+ */
+#define WE_MOD_SET_STRIDE 4096u
+#define WE_MOD_REASON_WORDS (7u * 4u * 2u)
+typedef struct {
+    we_mod_attr_t attr[WE_MOD_ATTRS];
+    char dash[2], none[5], unknown[8], yes[5], no[6], undetermined[13], allow[6], deny[5], would_deny[11];
+    char floor_tag[7], ctx_tag[5];
+    char level[5][9];
+    char rpki[5][13], rpki_reason[3][13], rep[5][18], rir[6][13];
+    uint8_t level_len[5], rpki_len[5], rpki_reason_len[3], rep_len[5], rir_len[6];
+    char plane[8][17];
+    uint8_t plane_len[8];
+    char hex[16], letter[5];
+} we_mod_words_hot_t;
+typedef struct {
+    /* lines 0 and 1: the words of the states a healthy request does not reach */
+    char unread[7], revoked[8], lapsed_true[12], lapsed_false[13], stale_true[11], stale_false[12], pad0[1];
+    char unknown_stale[14], unknown_disarmed[17], what[2], pad1[31];
+    /* the reason combinations past the plain `-`, which is hot.dash */
+    char reason[WE_MOD_REASON_WORDS - 1u][54];
+    char pad2[WE_MOD_SET_STRIDE - 128u - (WE_MOD_REASON_WORDS - 1u) * 54u - sizeof(we_mod_words_hot_t)];
+    /* the first page's last lines */
+    we_mod_words_hot_t hot;
+    /* the second page: the verdict's flagged combinations (drop, inferred, both); the plain one is hot.level */
+    char fresh[2][5][3][32];
+} we_mod_words_t;
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, unknown_stale) == 64u && offsetof(we_mod_words_t, reason) == 128u,
+                 "the rare words fill the block's first two lines");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, hot) + sizeof(we_mod_words_hot_t) == WE_MOD_SET_STRIDE,
+                 "what a request reads ends the block's first page");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, fresh) == WE_MOD_SET_STRIDE, "the flagged verdicts start its second page");
+
+static inline const we_mod_words_t *we_mod_words(void)
 {
-    static const we_mod_attr_t a[WE_MOD_ATTRS] = {
-        { "inferred",         0, WE_ATTR_BOOL,    0, 0x80u, 0 },
-        { "rpki_unreachable", 2, WE_ATTR_BOOL,    0, 0x01u, 0 },
-        { "tor_exit",         1, WE_ATTR_BOOL,    0, 0x01u, 0 },
-        { "proxy",            4, WE_ATTR_BOOL,    0, 0x01u, 0 },
-        { "vpn",              4, WE_ATTR_BOOL,    0, 0x02u, 0 },
-        { "c2",               5, WE_ATTR_BOOL,    0, 0x01u, 0 },
-        { "bruteforce",       5, WE_ATTR_BOOL,    0, 0x02u, 0 },
-        { "spam",             5, WE_ATTR_BOOL,    0, 0x04u, 0 },
-        { "phishing",         5, WE_ATTR_BOOL,    0, 0x08u, 0 },
-        { "scanner",          5, WE_ATTR_BOOL,    0, 0x10u, 0 },
-        { "state_actor",      5, WE_ATTR_BOOL,    0, 0x20u, 0 },
-        { "anycast",          3, WE_ATTR_BOOL,    8, 0x01u, 0 },
-        { "moas",             3, WE_ATTR_BOOL,    8, 0x02u, 0 },
-        { "narrowed",         3, WE_ATTR_BOOL,    8, 0x04u, 0 },
-        { "tenant_allow",     7, WE_ATTR_BOOL,    0, 0x01u, 0 },
-        { "tenant_deny",      7, WE_ATTR_BOOL,    0, 0x02u, 0 },
-        { "listed",           0, WE_ATTR_LEVEL,   0, 0,     0 },
-        { "rpki_reason",      2, WE_ATTR_ENUM,    5, 0,     WE_MOD_DOM_REASON },
-        { "rpki",             3, WE_ATTR_ENUM,    6, 0,     WE_MOD_DOM_RPKI },
-        { "asn",              3, WE_ATTR_ASN,     0, 0,     0 },
-        { "asn_rep",          3, WE_ATTR_ENUM,    9, 0,     WE_MOD_DOM_REP },
-        { "country",          3, WE_ATTR_COUNTRY, 4, 0,     0 },
-        { "registry_country", 6, WE_ATTR_COUNTRY, 4, 0,     0 },
-        { "rir",              3, WE_ATTR_ENUM,    7, 0,     WE_MOD_DOM_RIR },
-        { "registry_rir",     6, WE_ATTR_ENUM,    7, 0,     WE_MOD_DOM_RIR },
+    static _Alignas(WE_MOD_SET_STRIDE) const we_mod_words_t w = {
+        .unread = "unread", .revoked = "revoked", .lapsed_true = "lapsed:true", .lapsed_false = "lapsed:false",
+        .stale_true = "stale:true", .stale_false = "stale:false", .pad0 = "",
+        .unknown_stale = "unknown,stale", .unknown_disarmed = "unknown,disarmed", .what = "?", .pad1 = "",
+        .reason = {
+            "tenant-revoked", "floor-header-missing", "floor-header-missing,tenant-revoked", "floor-header-unparsed",
+            "floor-header-unparsed,tenant-revoked", "floor-header-capped", "floor-header-capped,tenant-revoked",
+            "allow-by-unknown", "allow-by-unknown,tenant-revoked", "allow-by-unknown,floor-header-missing",
+            "allow-by-unknown,floor-header-missing,tenant-revoked", "allow-by-unknown,floor-header-unparsed",
+            "allow-by-unknown,floor-header-unparsed,tenant-revoked", "allow-by-unknown,floor-header-capped",
+            "allow-by-unknown,floor-header-capped,tenant-revoked", "hold-harmless", "hold-harmless,tenant-revoked",
+            "hold-harmless,floor-header-missing", "hold-harmless,floor-header-missing,tenant-revoked",
+            "hold-harmless,floor-header-unparsed", "hold-harmless,floor-header-unparsed,tenant-revoked",
+            "hold-harmless,floor-header-capped", "hold-harmless,floor-header-capped,tenant-revoked", "acme",
+            "acme,tenant-revoked", "acme,floor-header-missing", "acme,floor-header-missing,tenant-revoked",
+            "acme,floor-header-unparsed", "acme,floor-header-unparsed,tenant-revoked", "acme,floor-header-capped",
+            "acme,floor-header-capped,tenant-revoked", "tenant", "tenant,tenant-revoked",
+            "tenant,floor-header-missing", "tenant,floor-header-missing,tenant-revoked",
+            "tenant,floor-header-unparsed", "tenant,floor-header-unparsed,tenant-revoked",
+            "tenant,floor-header-capped", "tenant,floor-header-capped,tenant-revoked", "stale-tenant",
+            "stale-tenant,tenant-revoked", "stale-tenant,floor-header-missing",
+            "stale-tenant,floor-header-missing,tenant-revoked", "stale-tenant,floor-header-unparsed",
+            "stale-tenant,floor-header-unparsed,tenant-revoked", "stale-tenant,floor-header-capped",
+            "stale-tenant,floor-header-capped,tenant-revoked", "no-address", "no-address,tenant-revoked",
+            "no-address,floor-header-missing", "no-address,floor-header-missing,tenant-revoked",
+            "no-address,floor-header-unparsed", "no-address,floor-header-unparsed,tenant-revoked",
+            "no-address,floor-header-capped", "no-address,floor-header-capped,tenant-revoked",
+        },
+        .pad2 = "",
+        .hot = {
+            .attr = {
+            { "inferred",         0, WE_ATTR_BOOL,    0, 0x80u, 0 },
+            { "rpki_unreachable", 2, WE_ATTR_BOOL,    0, 0x01u, 0 },
+            { "tor_exit",         1, WE_ATTR_BOOL,    0, 0x01u, 0 },
+            { "proxy",            4, WE_ATTR_BOOL,    0, 0x01u, 0 },
+            { "vpn",              4, WE_ATTR_BOOL,    0, 0x02u, 0 },
+            { "c2",               5, WE_ATTR_BOOL,    0, 0x01u, 0 },
+            { "bruteforce",       5, WE_ATTR_BOOL,    0, 0x02u, 0 },
+            { "spam",             5, WE_ATTR_BOOL,    0, 0x04u, 0 },
+            { "phishing",         5, WE_ATTR_BOOL,    0, 0x08u, 0 },
+            { "scanner",          5, WE_ATTR_BOOL,    0, 0x10u, 0 },
+            { "state_actor",      5, WE_ATTR_BOOL,    0, 0x20u, 0 },
+            { "anycast",          3, WE_ATTR_BOOL,    8, 0x01u, 0 },
+            { "moas",             3, WE_ATTR_BOOL,    8, 0x02u, 0 },
+            { "narrowed",         3, WE_ATTR_BOOL,    8, 0x04u, 0 },
+            { "tenant_allow",     7, WE_ATTR_BOOL,    0, 0x01u, 0 },
+            { "tenant_deny",      7, WE_ATTR_BOOL,    0, 0x02u, 0 },
+            { "listed",           0, WE_ATTR_LEVEL,   0, 0,     0 },
+            { "rpki_reason",      2, WE_ATTR_ENUM,    5, 0,     WE_MOD_DOM_REASON },
+            { "rpki",             3, WE_ATTR_ENUM,    6, 0,     WE_MOD_DOM_RPKI },
+            { "asn",              3, WE_ATTR_ASN,     0, 0,     0 },
+            { "asn_rep",          3, WE_ATTR_ENUM,    9, 0,     WE_MOD_DOM_REP },
+            { "country",          3, WE_ATTR_COUNTRY, 4, 0,     0 },
+            { "registry_country", 6, WE_ATTR_COUNTRY, 4, 0,     0 },
+            { "rir",              3, WE_ATTR_ENUM,    7, 0,     WE_MOD_DOM_RIR },
+            { "registry_rir",     6, WE_ATTR_ENUM,    7, 0,     WE_MOD_DOM_RIR },
+            },
+            .dash = "-", .none = "none", .unknown = "unknown", .yes = "true", .no = "false",
+            .undetermined = "undetermined", .allow = "allow", .deny = "deny", .would_deny = "would-deny",
+            .floor_tag = "floor:", .ctx_tag = "ctx:",
+            .level = { "none", "low", "medium", "high", "critical" },
+            .rpki = { "undetermined", "valid", "invalid", "not-found", "unrouted" },
+            .rpki_reason = { "undetermined", "asn", "length" },
+            .rep = { "undetermined", "reputable", "neutral", "suspicious", "highly_suspicious" },
+            .rir = { "undetermined", "afrinic", "apnic", "arin", "lacnic", "ripe" },
+#ifndef WE_MOD_TEST_LEN_OFF
+            .level_len = { 4u, 3u, 6u, 4u, 8u },
+#else
+            .level_len = { 4u, 3u, 6u, 3u, 8u },   /* the control: "high" one byte short */
+#endif
+            .rpki_len = { 12u, 5u, 7u, 9u, 8u },
+            .rpki_reason_len = { 12u, 3u, 6u },
+            .rep_len = { 12u, 9u, 7u, 10u, 17u },
+            .rir_len = { 12u, 7u, 5u, 4u, 6u, 4u },
+            .plane = { "reputation", "tor", "rpki-unreachable", "routing", "anonymizer", "threat", "registry", "tenant" },
+            .plane_len = { 10u, 3u, 16u, 7u, 10u, 6u, 8u, 6u },
+            .hex = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' },
+            .letter = { 'a', 'a', 'u', 'r', 'l' },
+        },
+        .fresh = {
+            { { "none,drop", "none,inferred", "none,drop,inferred" },
+              { "low,drop", "low,inferred", "low,drop,inferred" },
+              { "medium,drop", "medium,inferred", "medium,drop,inferred" },
+              { "high,drop", "high,inferred", "high,drop,inferred" },
+              { "critical,drop", "critical,inferred", "critical,drop,inferred" } },
+            { { "none,spamhaus-drop", "none,inferred", "none,spamhaus-drop,inferred" },
+              { "low,spamhaus-drop", "low,inferred", "low,spamhaus-drop,inferred" },
+              { "medium,spamhaus-drop", "medium,inferred", "medium,spamhaus-drop,inferred" },
+              { "high,spamhaus-drop", "high,inferred", "high,spamhaus-drop,inferred" },
+              { "critical,spamhaus-drop", "critical,inferred", "critical,spamhaus-drop,inferred" } },
+        },
     };
 
-    return i < WE_MOD_ATTRS ? &a[i] : (const we_mod_attr_t *)NULL;
+    return &w;
 }
 
-/* The words a value renders as: one static table, so a rendering is a pointer and a length. */
+static inline const we_mod_attr_t *we_mod_attr(uint32_t i)
+{
+    return i < WE_MOD_ATTRS ? &we_mod_words()->hot.attr[i] : (const we_mod_attr_t *)NULL;
+}
+
+/* The words a value renders as: rows of the words block, so a rendering is a pointer and a length. */
 static inline const char *we_mod_enum_word(uint32_t dom, uint32_t v)
 {
-    static const char *const rpki[5] = { "undetermined", "valid", "invalid", "not-found", "unrouted" };
-    static const char *const reason[3] = { "undetermined", "asn", "length" };
-    static const char *const rep[5] = { "undetermined", "reputable", "neutral", "suspicious", "highly_suspicious" };
-    static const char *const rir[6] = { "undetermined", "afrinic", "apnic", "arin", "lacnic", "ripe" };
+    const we_mod_words_t *w = we_mod_words();
 
-    return dom == WE_MOD_DOM_RPKI ? (v < 5u ? rpki[v] : "?")
-         : dom == WE_MOD_DOM_REASON ? (v < 3u ? reason[v] : "?")
-         : dom == WE_MOD_DOM_REP ? (v < 5u ? rep[v] : "?")
-         : (v < 6u ? rir[v] : "?");
+    return dom == WE_MOD_DOM_RPKI ? (v < 5u ? w->hot.rpki[v] : w->what)
+         : dom == WE_MOD_DOM_REASON ? (v < 3u ? w->hot.rpki_reason[v] : w->what)
+         : dom == WE_MOD_DOM_REP ? (v < 5u ? w->hot.rep[v] : w->what)
+         : (v < 6u ? w->hot.rir[v] : w->what);
 }
 
 static inline const char *we_mod_level_word(uint32_t v)
 {
-    static const char *const level[5] = { "none", "low", "medium", "high", "critical" };
-
-    return level[(v & 0x0fu) <= 4u ? (v & 0x0fu) : 4u];
+    return we_mod_words()->hot.level[(v & 0x0fu) <= 4u ? (v & 0x0fu) : 4u];
 }
 
 /*
@@ -1246,26 +1375,17 @@ static inline const char *we_mod_level_word(uint32_t v)
  */
 static inline size_t we_mod_enum_len(uint32_t dom, uint32_t v)
 {
-    static const uint8_t rpki[5] = { 12u, 5u, 7u, 9u, 8u };
-    static const uint8_t reason[3] = { 12u, 3u, 6u };
-    static const uint8_t rep[5] = { 12u, 9u, 7u, 10u, 17u };
-    static const uint8_t rir[6] = { 12u, 7u, 5u, 4u, 6u, 4u };
+    const we_mod_words_t *w = we_mod_words();
 
-    return dom == WE_MOD_DOM_RPKI ? (v < 5u ? rpki[v] : 1u)
-         : dom == WE_MOD_DOM_REASON ? (v < 3u ? reason[v] : 1u)
-         : dom == WE_MOD_DOM_REP ? (v < 5u ? rep[v] : 1u)
-         : (v < 6u ? rir[v] : 1u);
+    return dom == WE_MOD_DOM_RPKI ? (v < 5u ? w->hot.rpki_len[v] : 1u)
+         : dom == WE_MOD_DOM_REASON ? (v < 3u ? w->hot.rpki_reason_len[v] : 1u)
+         : dom == WE_MOD_DOM_REP ? (v < 5u ? w->hot.rep_len[v] : 1u)
+         : (v < 6u ? w->hot.rir_len[v] : 1u);
 }
 
 static inline size_t we_mod_level_len(uint32_t v)
 {
-#ifndef WE_MOD_TEST_LEN_OFF
-    static const uint8_t level[5] = { 4u, 3u, 6u, 4u, 8u };
-#else
-    static const uint8_t level[5] = { 4u, 3u, 6u, 3u, 8u };   /* the control: "high" one byte short */
-#endif
-
-    return level[(v & 0x0fu) <= 4u ? (v & 0x0fu) : 4u];
+    return we_mod_words()->hot.level_len[(v & 0x0fu) <= 4u ? (v & 0x0fu) : 4u];
 }
 
 #define WE_MOD_ASN_BUF 11u   /* 4294967294 and its terminator */
@@ -1281,29 +1401,30 @@ static inline int we_attr_render_fast(uint32_t i, const uint8_t block[16], uint3
                                       const char **s, size_t *len)
 {
     const we_mod_attr_t *t = we_mod_attr(i);
+    const we_mod_words_t *W = we_mod_words();
     const char *w;
     size_t l;
 
-/* a word and its length, both from the literal: never measured at run time (see we_mod_enum_len) */
-#define WE_MOD_WORD(lit) (w = (lit), l = sizeof(lit) - 1u)
+/* a word and its length, both from its row of the words block: never measured at run time (see we_mod_enum_len) */
+#define WE_MOD_WORD(f) (w = W->f, l = sizeof(W->f) - 1u)
     if (t == NULL || block == NULL) {
         return -1;
     }
     if (state == WE_ST_NONE) {
-        WE_MOD_WORD("unread");
+        WE_MOD_WORD(unread);
     } else if (state == WE_ST_REVOKED) {
-        WE_MOD_WORD("revoked");
+        WE_MOD_WORD(revoked);
     } else if (state == WE_ST_UNKNOWN || ((state == WE_ST_STALE_HIT || state == WE_ST_STALE_NR) && t->plane != 7u)) {
-        WE_MOD_WORD("unknown");
+        WE_MOD_WORD(hot.unknown);
     } else if (state == WE_ST_STALE_HIT || state == WE_ST_STALE_NR) {
         /* the tenant's stale record: within the 48-hour grace `stale:`, past it (byte 14) `lapsed:` */
         if (block[14] != 0u) {
-            if ((block[t->off] & t->mask) != 0u) { WE_MOD_WORD("lapsed:true"); } else { WE_MOD_WORD("lapsed:false"); }
+            if ((block[t->off] & t->mask) != 0u) { WE_MOD_WORD(lapsed_true); } else { WE_MOD_WORD(lapsed_false); }
         } else {
-            if ((block[t->off] & t->mask) != 0u) { WE_MOD_WORD("stale:true"); } else { WE_MOD_WORD("stale:false"); }
+            if ((block[t->off] & t->mask) != 0u) { WE_MOD_WORD(stale_true); } else { WE_MOD_WORD(stale_false); }
         }
     } else if (t->cls == WE_ATTR_BOOL) {
-        if ((block[t->off & 15u] & t->mask) != 0u) { WE_MOD_WORD("true"); } else { WE_MOD_WORD("false"); }
+        if ((block[t->off & 15u] & t->mask) != 0u) { WE_MOD_WORD(hot.yes); } else { WE_MOD_WORD(hot.no); }
     } else if (t->cls == WE_ATTR_LEVEL) {
         w = we_mod_level_word(block[t->off & 15u]);
         l = we_mod_level_len(block[t->off & 15u]);
@@ -1316,7 +1437,7 @@ static inline int we_attr_render_fast(uint32_t i, const uint8_t block[16], uint3
 
         __builtin_memcpy(&a, block + (t->off & 15u), 4);
         if (a == 0xffffffffu) {
-            WE_MOD_WORD("undetermined");
+            WE_MOD_WORD(hot.undetermined);
         } else {
             do {
                 tmp[k++] = (char)('0' + a % 10u);
@@ -1336,7 +1457,7 @@ static inline int we_attr_render_fast(uint32_t i, const uint8_t block[16], uint3
 
         __builtin_memcpy(&c, block + (t->off & 15u), 2);
 #ifdef WE_MOD_TEST_NO_COUNTRY_COMPARE
-        w = c == 0u ? "undetermined" : we_country_a2_table()[c];   /* the control: the compare removed */
+        w = c == 0u ? W->hot.undetermined : we_country_a2_table()[c];   /* the control: the compare removed */
         l = 2u;
 #elif defined(WE_MOD_TEST_COUNTRY_SCAN)
         {
@@ -1350,15 +1471,15 @@ static inline int we_attr_render_fast(uint32_t i, const uint8_t block[16], uint3
                 seen += tab[j][0] != '\0';
             }
             __asm__ __volatile__("" : : "r"(seen));
-            w = c == 0u || c > 999u ? "undetermined" : tab[c];
+            w = c == 0u || c > 999u ? W->hot.undetermined : tab[c];
         }
 #else
-        w = c == 0u || c > 999u ? "undetermined" : we_country_a2_table()[c];
+        w = c == 0u || c > 999u ? W->hot.undetermined : we_country_a2_table()[c];
 #endif
         /* a country entry is two letters and its terminator, or empty, which reads undetermined; the
          * one other word here is "undetermined" itself, whose third byte is a letter */
         if (w[0] == '\0') {
-            WE_MOD_WORD("undetermined");
+            WE_MOD_WORD(hot.undetermined);
         } else {
             l = w[2] == '\0' ? 2u : 12u;
         }
@@ -1750,33 +1871,23 @@ static inline void we_mod_fill(we_mod_record_t *rec, const we_mod_cfg_t *c, we_m
 /* `$whisper_edge_verdict`: the reputation severity of the server's address, by its record entry. */
 static inline const char *we_mod_render_verdict(const we_mod_record_t *rec, uint32_t spelling)
 {
-    static const char *const fresh[2][5][4] = {
-        { { "none", "none,drop", "none,inferred", "none,drop,inferred" },
-          { "low", "low,drop", "low,inferred", "low,drop,inferred" },
-          { "medium", "medium,drop", "medium,inferred", "medium,drop,inferred" },
-          { "high", "high,drop", "high,inferred", "high,drop,inferred" },
-          { "critical", "critical,drop", "critical,inferred", "critical,drop,inferred" } },
-        { { "none", "none,spamhaus-drop", "none,inferred", "none,spamhaus-drop,inferred" },
-          { "low", "low,spamhaus-drop", "low,inferred", "low,spamhaus-drop,inferred" },
-          { "medium", "medium,spamhaus-drop", "medium,inferred", "medium,spamhaus-drop,inferred" },
-          { "high", "high,spamhaus-drop", "high,inferred", "high,spamhaus-drop,inferred" },
-          { "critical", "critical,spamhaus-drop", "critical,inferred", "critical,spamhaus-drop,inferred" } },
-    };
-    uint32_t st = rec->slot.state[0], b;
+    const we_mod_words_t *W = we_mod_words();
+    uint32_t st = rec->slot.state[0], b, lv, fl;
 
     if ((rec->disarmed_mask & 1u) != 0u) {
-        return "unknown,disarmed";
+        return W->unknown_disarmed;
     }
     if (st == WE_ST_FRESH_HIT) {
         b = rec->slot.e[0].block[0];
         /* the level from the memo's CLAMPED byte, the drop flag from the raw one */
-        return fresh[spelling & 1u][(b & 0x0fu) <= 4u ? (b & 0x0fu) : 4u]
-                    [((rec->raw_rep & WE_F_DROP) != 0u ? 1u : 0u) | ((b & WE_F_INFERRED) != 0u ? 2u : 0u)];
+        lv = (b & 0x0fu) <= 4u ? (b & 0x0fu) : 4u;
+        fl = ((rec->raw_rep & WE_F_DROP) != 0u ? 1u : 0u) | ((b & WE_F_INFERRED) != 0u ? 2u : 0u);
+        return fl == 0u ? W->hot.level[lv] : W->fresh[spelling & 1u][lv][fl - 1u];
     }
     if (st == WE_ST_FRESH_NR) {
-        return "none";
+        return W->hot.none;
     }
-    return st == WE_ST_UNKNOWN && rec->slot.e[0].generation != 0u ? "unknown,stale" : "unknown";
+    return st == WE_ST_UNKNOWN && rec->slot.e[0].generation != 0u ? W->unknown_stale : W->hot.unknown;
 }
 
 /* `$whisper_edge_<name>`: attribute i of the record's server-address entry; a disarmed plane is `unknown`. */
@@ -1788,8 +1899,8 @@ static inline int we_mod_render_attr(we_mod_record_t *rec, uint32_t i, const cha
         return -1;
     }
     if (((rec->disarmed_mask >> t->plane) & 1u) != 0u) {
-        *s = "unknown";
-        *len = 7u;
+        *s = we_mod_words()->hot.unknown;
+        *len = sizeof(we_mod_words()->hot.unknown) - 1u;
         return 0;
     }
     /* the entry's first sixteen bytes are the block, its `lapsed` byte and a pad: what the renderer reads */
@@ -1800,36 +1911,23 @@ static inline int we_mod_render_attr(we_mod_record_t *rec, uint32_t i, const cha
 /* `$whisper_edge_action`: allow, deny, would-deny; `-` before a decision. */
 static inline const char *we_mod_render_action(const we_mod_record_t *rec)
 {
-    return !rec->decided ? "-" : rec->severity == 2u ? "deny" : rec->severity == 1u ? "would-deny" : "allow";
+    const we_mod_words_t *W = we_mod_words();
+
+    return !rec->decided ? W->hot.dash : rec->severity == 2u ? W->hot.deny : rec->severity == 1u ? W->hot.would_deny : W->hot.allow;
 }
 
 /*
  * `$whisper_edge_reason`: the decision's own word (empty for a rule's TRUE and the default allow), the
- * walk's word, and `tenant-revoked`, comma-joined; `-` when there is none. Static strings, one per
+ * walk's word, and `tenant-revoked`, comma-joined; `-` when there is none. Rows of the words block, one per
  * combination. `note` and `walk` are the request's.
  */
 static inline const char *we_mod_render_reason(const we_mod_record_t *rec, uint32_t walk, uint32_t note)
 {
-    static const char *const words[7 * 4 * 2] = {
-        "-", "tenant-revoked", "floor-header-missing", "floor-header-missing,tenant-revoked",
-        "floor-header-unparsed", "floor-header-unparsed,tenant-revoked", "floor-header-capped", "floor-header-capped,tenant-revoked",
-        "allow-by-unknown", "allow-by-unknown,tenant-revoked", "allow-by-unknown,floor-header-missing", "allow-by-unknown,floor-header-missing,tenant-revoked",
-        "allow-by-unknown,floor-header-unparsed", "allow-by-unknown,floor-header-unparsed,tenant-revoked", "allow-by-unknown,floor-header-capped", "allow-by-unknown,floor-header-capped,tenant-revoked",
-        "hold-harmless", "hold-harmless,tenant-revoked", "hold-harmless,floor-header-missing", "hold-harmless,floor-header-missing,tenant-revoked",
-        "hold-harmless,floor-header-unparsed", "hold-harmless,floor-header-unparsed,tenant-revoked", "hold-harmless,floor-header-capped", "hold-harmless,floor-header-capped,tenant-revoked",
-        "acme", "acme,tenant-revoked", "acme,floor-header-missing", "acme,floor-header-missing,tenant-revoked",
-        "acme,floor-header-unparsed", "acme,floor-header-unparsed,tenant-revoked", "acme,floor-header-capped", "acme,floor-header-capped,tenant-revoked",
-        "tenant", "tenant,tenant-revoked", "tenant,floor-header-missing", "tenant,floor-header-missing,tenant-revoked",
-        "tenant,floor-header-unparsed", "tenant,floor-header-unparsed,tenant-revoked", "tenant,floor-header-capped", "tenant,floor-header-capped,tenant-revoked",
-        "stale-tenant", "stale-tenant,tenant-revoked", "stale-tenant,floor-header-missing", "stale-tenant,floor-header-missing,tenant-revoked",
-        "stale-tenant,floor-header-unparsed", "stale-tenant,floor-header-unparsed,tenant-revoked", "stale-tenant,floor-header-capped", "stale-tenant,floor-header-capped,tenant-revoked",
-        "no-address", "no-address,tenant-revoked", "no-address,floor-header-missing", "no-address,floor-header-missing,tenant-revoked",
-        "no-address,floor-header-unparsed", "no-address,floor-header-unparsed,tenant-revoked", "no-address,floor-header-capped", "no-address,floor-header-capped,tenant-revoked",
-    };
+    const we_mod_words_t *W = we_mod_words();
     uint32_t d = 0u, w;
 
     if (!rec->decided) {
-        return "-";
+        return W->hot.dash;
     }
     if (rec->reason == WE_WHY_ALLOW_BY_UNKNOWN) {
         d = 1u;
@@ -1841,7 +1939,8 @@ static inline const char *we_mod_render_reason(const we_mod_record_t *rec, uint3
         d = 5u;
     }
     w = note == WE_MOD_NOTE_UNPARSED ? 2u : note == WE_MOD_NOTE_CAPPED ? 3u : walk == WE_WALK_FLOOR_HEADER_MISSING ? 1u : 0u;
-    return words[(d * 4u + w) * 2u + ((rec->marks & WE_MARK_TENANT_REVOKED) != 0u ? 1u : 0u)];
+    w = (d * 4u + w) * 2u + ((rec->marks & WE_MARK_TENANT_REVOKED) != 0u ? 1u : 0u);
+    return w == 0u ? W->hot.dash : W->reason[w - 1u];
 }
 
 /* Did the context's program run for this decision (not a pre-stage step, not the floor, not mode off)? */
@@ -1855,7 +1954,7 @@ static inline int we_mod_ctx_ran(const we_mod_record_t *rec)
 static inline const char *we_mod_render_program(const we_mod_record_t *rec, const we_mod_cfg_t *c)
 {
     if (!rec->decided || rec->ctx == NULL || rec->ctx->cold == NULL) {
-        return c->cold != NULL ? c->cold->program_none : "-";
+        return c->cold != NULL ? c->cold->program_none : we_mod_words()->hot.dash;
     }
     return we_mod_ctx_ran(rec) ? rec->ctx->cold->program_ctx : rec->ctx->cold->program_floor;
 }
@@ -1863,26 +1962,27 @@ static inline const char *we_mod_render_program(const we_mod_record_t *rec, cons
 /* `$whisper_edge_rule_id` and `$whisper_edge_rule`: the deciding rule's id and canonical text, `-` for none. */
 static inline const char *we_mod_render_rule(const we_mod_record_t *rec, const we_mod_cfg_t *c, int text)
 {
+    const we_mod_words_t *W = we_mod_words();
     const char *const *tab;
     uint32_t n;
 
     if (!rec->decided || rec->rule == 0u) {
-        return "-";
+        return W->hot.dash;
     }
     if (rec->program == WE_VPROG_FLOOR) {
         if (c->cold == NULL) {
-            return "-";
+            return W->hot.dash;
         }
         tab = text ? c->cold->rule_text : c->cold->rule_id;
         n = c->cold->rule_count;
     } else {
         if (rec->ctx == NULL || rec->ctx->cold == NULL) {
-            return "-";
+            return W->hot.dash;
         }
         tab = text ? rec->ctx->cold->rule_text : rec->ctx->cold->rule_id;
         n = rec->ctx->cold->rule_count;
     }
-    return tab != NULL && rec->rule <= n ? tab[rec->rule - 1u] : "-";
+    return tab != NULL && rec->rule <= n ? tab[rec->rule - 1u] : W->hot.dash;
 }
 
 static inline size_t we_mod_put_u64(char *out, uint64_t v)
@@ -1919,7 +2019,7 @@ static inline size_t we_mod_render_logged(const we_mod_record_t *rec, char out[W
                 if (o != 0u) {
                     out[o++] = ' ';
                 }
-                memcpy(out + o, k == 0u ? "floor:" : "ctx:", k == 0u ? 6u : 4u);
+                memcpy(out + o, k == 0u ? we_mod_words()->hot.floor_tag : we_mod_words()->hot.ctx_tag, k == 0u ? 6u : 4u);
                 o += k == 0u ? 6u : 4u;
                 any = 1;
             } else {
@@ -1937,19 +2037,13 @@ static inline size_t we_mod_render_logged(const we_mod_record_t *rec, char out[W
 
 static inline const char *we_mod_plane_word(uint32_t p)
 {
-    static const char *const name[8] = {
-        "reputation", "tor", "rpki-unreachable", "routing", "anonymizer", "threat", "registry", "tenant"
-    };
-
-    return name[p & 7u];
+    return we_mod_words()->hot.plane[p & 7u];
 }
 
 /* the plane words' lengths, in the same order: never measured at run time (see we_mod_enum_len) */
 static inline size_t we_mod_plane_word_len(uint32_t p)
 {
-    static const uint8_t len[8] = { 10u, 3u, 16u, 7u, 10u, 6u, 8u, 6u };
-
-    return len[p & 7u];
+    return we_mod_words()->hot.plane_len[p & 7u];
 }
 
 #define WE_MOD_GEN_MAX 512u   /* eight tokens of at most 52 bytes and their separators */
@@ -1964,8 +2058,7 @@ static inline size_t we_mod_plane_word_len(uint32_t p)
  */
 static inline size_t we_mod_render_generations(const we_mod_record_t *rec, char out[WE_MOD_GEN_MAX])
 {
-    static const char hex[16] = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
-    static const char letter[5] = { 'a', 'a', 'u', 'r', 'l' };
+    const char *hex = we_mod_words()->hot.hex, *letter = we_mod_words()->hot.letter;
     size_t o = 0u;
     uint32_t p;
 
@@ -2142,6 +2235,19 @@ typedef struct we_procid we_mod_procid_t;
 int we_mod_procid(we_mod_procid_t *id);
 
 /*
+ * The boot id read and cached where the configuration is parsed, before the server forks its workers: a
+ * worker whose master cleared the environment (nginx) still names its boot from WHISPER_EDGE_BOOT_ID when
+ * its unit hides /proc/sys. Which source answered (we_procid.h: WE_PROC_BOOT_FROM_PROC, _FROM_ENV, or
+ * WE_PROC_BOOT_NONE, when the files will say "unknown"). WE_MOD_BOOT_HINT is the line a module logs then.
+ */
+int we_mod_boot_prime(void);
+#define WE_MOD_BOOT_HINT "this process cannot read its boot id (/proc/sys/kernel/random/boot_id is hidden, as " \
+    "ProcSubset=pid hides it, and WHISPER_EDGE_BOOT_ID is not set); its status files say boot unknown and " \
+    "whisper-edge-summary places it by its pid and start time. To name it exactly, add " \
+    "Environment=WHISPER_EDGE_BOOT_ID=%b to the server's unit (whisper-edge-install writes that drop-in) " \
+    "and restart the server"
+
+/*
  * Write a whole file under `name` in `dirfd` through `.<pid>-<starttime>-<kind>.tmp`, created O_EXCL |
  * O_NOFOLLOW and renamed into place; as root, only into a root-owned directory closed to group and world.
  * 0; WE_ERR_PERMISSIONS for that root refusal, which is the directory being provisioned for the workers'
@@ -2266,6 +2372,22 @@ int      we_mod_retire_push(we_mod_retire_t *r, const we_map_t *m, void (*releas
                             uint64_t mono_ms);
 uint32_t we_mod_retire_sweep(we_mod_retire_t *r, uint64_t mono_ms, uint64_t grace_ms);
 uint64_t we_mod_monotonic_ms(void);
+#if defined(WE_MOD_DEBUG) || defined(WE_MOD_CONTROL_BUILD)
+/*
+ * The tests' hold on the grace (debug and control builds only; a release build has no such symbol). The
+ * planes' retire list reads its clock here: a non-zero `mono_ms` pins it, so every displaced map stays
+ * inside its grace (its in-flight readers held, as far as the list can tell) until the test moves the
+ * clock past it; 0 hands the list back to CLOCK_MONOTONIC. A row that asserts which publishes the list
+ * deferred holds the grace this way, so a stalled runner cannot free a slot under it.
+ */
+void     we_mod_test_grace_clock(uint64_t mono_ms);
+/* the same pin, advanced by `step_ms` after every read, so two reads in one tick differ as they do on a real
+ * clock (the tick's own read, then an acknowledgement's stamp a millisecond later) */
+void     we_mod_test_grace_clock_step(uint64_t mono_ms, uint64_t step_ms);
+/* the same for the planes' wall clock (valid-until, stale, the transition stamps): a non-zero `epoch_ms`
+ * pins it, so a row that asserts fresh-then-stale moves time itself instead of sleeping past a deadline */
+void     we_mod_test_epoch_clock(uint64_t epoch_ms);
+#endif
 
 /* ---- the two single-producer, single-consumer lists: a pointer slot holding an intrusive list ---- */
 
@@ -2615,6 +2737,49 @@ WE_STATIC_ASSERT(offsetof(we_mod_attr_t, cls) == 9u, "we_mod_attr_t.cls: ABI lay
 WE_STATIC_ASSERT(offsetof(we_mod_attr_t, off) == 10u, "we_mod_attr_t.off: ABI layout");
 WE_STATIC_ASSERT(offsetof(we_mod_attr_t, mask) == 11u, "we_mod_attr_t.mask: ABI layout");
 WE_STATIC_ASSERT(offsetof(we_mod_attr_t, dom) == 12u, "we_mod_attr_t.dom: ABI layout");
+WE_STATIC_ASSERT(sizeof(we_mod_words_hot_t) == 984u && _Alignof(we_mod_words_hot_t) == 8u, "we_mod_words_hot_t: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, attr) == 0u, "we_mod_words_hot_t.attr: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, dash) == 400u, "we_mod_words_hot_t.dash: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, none) == 402u, "we_mod_words_hot_t.none: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, unknown) == 407u, "we_mod_words_hot_t.unknown: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, yes) == 415u, "we_mod_words_hot_t.yes: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, no) == 420u, "we_mod_words_hot_t.no: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, undetermined) == 426u, "we_mod_words_hot_t.undetermined: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, allow) == 439u, "we_mod_words_hot_t.allow: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, deny) == 445u, "we_mod_words_hot_t.deny: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, would_deny) == 450u, "we_mod_words_hot_t.would_deny: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, floor_tag) == 461u, "we_mod_words_hot_t.floor_tag: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, ctx_tag) == 468u, "we_mod_words_hot_t.ctx_tag: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, level) == 473u, "we_mod_words_hot_t.level: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, rpki) == 518u, "we_mod_words_hot_t.rpki: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, rpki_reason) == 583u, "we_mod_words_hot_t.rpki_reason: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, rep) == 622u, "we_mod_words_hot_t.rep: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, rir) == 712u, "we_mod_words_hot_t.rir: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, level_len) == 790u, "we_mod_words_hot_t.level_len: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, rpki_len) == 795u, "we_mod_words_hot_t.rpki_len: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, rpki_reason_len) == 800u, "we_mod_words_hot_t.rpki_reason_len: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, rep_len) == 803u, "we_mod_words_hot_t.rep_len: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, rir_len) == 808u, "we_mod_words_hot_t.rir_len: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, plane) == 814u, "we_mod_words_hot_t.plane: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, plane_len) == 950u, "we_mod_words_hot_t.plane_len: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, hex) == 958u, "we_mod_words_hot_t.hex: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_hot_t, letter) == 974u, "we_mod_words_hot_t.letter: ABI layout");
+WE_STATIC_ASSERT(sizeof(we_mod_words_t) == 5056u && _Alignof(we_mod_words_t) == 8u, "we_mod_words_t: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, unread) == 0u, "we_mod_words_t.unread: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, revoked) == 7u, "we_mod_words_t.revoked: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, lapsed_true) == 15u, "we_mod_words_t.lapsed_true: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, lapsed_false) == 27u, "we_mod_words_t.lapsed_false: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, stale_true) == 40u, "we_mod_words_t.stale_true: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, stale_false) == 51u, "we_mod_words_t.stale_false: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, pad0) == 63u, "we_mod_words_t.pad0: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, unknown_stale) == 64u, "we_mod_words_t.unknown_stale: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, unknown_disarmed) == 78u, "we_mod_words_t.unknown_disarmed: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, what) == 95u, "we_mod_words_t.what: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, pad1) == 97u, "we_mod_words_t.pad1: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, reason) == 128u, "we_mod_words_t.reason: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, pad2) == 3098u, "we_mod_words_t.pad2: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, hot) == 3112u, "we_mod_words_t.hot: ABI layout");
+WE_STATIC_ASSERT(offsetof(we_mod_words_t, fresh) == 4096u, "we_mod_words_t.fresh: ABI layout");
 WE_STATIC_ASSERT(sizeof(we_mod_record_t) == 576u && _Alignof(we_mod_record_t) == 64u, "we_mod_record_t: ABI layout");
 WE_STATIC_ASSERT(offsetof(we_mod_record_t, step) == 0u, "we_mod_record_t.step: ABI layout");
 WE_STATIC_ASSERT(offsetof(we_mod_record_t, action) == 1u, "we_mod_record_t.action: ABI layout");

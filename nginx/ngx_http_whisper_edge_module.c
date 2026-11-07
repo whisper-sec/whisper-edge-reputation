@@ -2745,9 +2745,15 @@ ngx_http_whisper_edge_init_module(ngx_cycle_t *cycle)
 {
     ngx_http_core_main_conf_t *cmcf = ngx_http_cycle_get_module_main_conf(cycle, ngx_http_core_module);
     ngx_http_whisper_edge_main_conf_t *mcf = ngx_http_cycle_get_module_main_conf(cycle, ngx_http_whisper_edge_module);
+    /* in the master, whose environment is whole: a worker keeps only TZ and the `env` lines, so it names
+     * its boot from what this read cached when its unit hides /proc/sys */
+    int boot = we_mod_boot_prime();
 
     if (cmcf == NULL || mcf == NULL) {
         return NGX_OK;                           /* no http block: nothing to assert */
+    }
+    if (boot == WE_PROC_BOOT_NONE) {
+        ngx_log_error(NGX_LOG_WARN, cycle->log, 0, "whisper edge: %s", WE_MOD_BOOT_HINT);
     }
     if (mcf->bind_lines != NULL) {
         ngx_str_t *l = mcf->bind_lines->elts;
@@ -2913,6 +2919,7 @@ static void we_ngx_efd_read(ngx_event_t *ev)
         it = it->next;
         w->legacy = si->set;
         si->set = old;
+        si->link.next = NULL;                /* posted alone: we_mod_list_post appends the chain an item leads */
         we_mod_list_post(&w->sets_to_thread, &si->link);
     }
 }

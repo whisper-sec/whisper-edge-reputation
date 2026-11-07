@@ -40,9 +40,9 @@ extern "C" {
 
 /*
  * The POLICY.md section 5.4 mutants plant known defects in the compiler, the verifier, the evaluator and
- * the classifier. They exist only in test_policy's traced build, so a stray -D can never ship one in a
- * copied core: every one of the 25 is refused here, in the header both we_policy.c and we_eval.h
- * include. The one exception is the cachegrind driver's two controls: WE_CG_DRIVER, which only that
+ * the classifier. They exist only in test_policy's traced build (and C10's WE_TEST_COVERAGE_SECOND_LOAD
+ * in race_core's), so a stray -D can never ship one in a copied core: every one of the 31 is refused
+ * here, in the header both we_policy.c and we_eval.h include. The one exception is the cachegrind driver's two controls: WE_CG_DRIVER, which only that
  * driver defines, admits WE_TEST_NO_MEMO_HIT and WE_TEST_EXTRA_LOAD (exactly one more data reference
  * per rule, the per-rule row's source-level control) and nothing else. policy-mutants.sh holds both
  * halves.
@@ -56,6 +56,9 @@ extern "C" {
         || defined(WE_TEST_TENANT_ATOM_U) || defined(WE_TEST_TENANT_BIT_IGNORED) || defined(WE_TEST_SPLUS_NO_CLAMP) \
         || defined(WE_TEST_NO_EXHAUSTIVE) || defined(WE_TEST_PLANTED_STORE) || defined(WE_TEST_HH_FLOOR_ENDS_ALL) \
         || defined(WE_TEST_HH_SERVER_EXEMPT) || defined(WE_TEST_HH_RAW_COMPARE) || defined(WE_TEST_SERVER_UNSET_KEYED) \
+        || defined(WE_TEST_COVERAGE_IGNORED) || defined(WE_TEST_COVERAGE_INTO_STALE) || defined(WE_TEST_COVERAGE_PEEK_IGNORED) \
+        || defined(WE_TEST_COVERAGE_MARK_IGNORED) || defined(WE_TEST_COVERAGE_PEEK_TENANT_GATED) \
+        || defined(WE_TEST_COVERAGE_SECOND_LOAD) \
         || (defined(WE_TEST_NO_MEMO_HIT) && !defined(WE_CG_DRIVER)))
 #error "the WE_TEST_* mutants exist only in test_policy's WE_TRACE build (and NO_MEMO_HIT in the cachegrind driver)"
 #endif
@@ -474,7 +477,7 @@ const char *we_policy_kind_name(uint8_t kind);
  * Reported, never refused (POLICY.md §1.5): one call per report, each printed once at config test with the
  * rule named. `code` and `detail` are the machine form the differential compares; `msg` is the sentence.
  * The codes: inert-at-config, inert-allow-exposes, shadowed-by, tautology, coverage, duplicate-member,
- * sentinel-negative, denies-all-absent, capturing-allow, unbounded, adds-nothing.
+ * sentinel-negative, denies-all-absent, capturing-allow, unbounded, adds-nothing, uncovered-family.
  */
 typedef struct {
     const char *context;     /* the program's context ("http" for the floor), or a declaration's */
@@ -605,6 +608,14 @@ uint32_t we_program_dependents(const we_program_t *p, uint8_t out_mask, we_tenan
  */
 int we_program_dependents_line(const we_program_t *p, uint8_t out_mask, we_tenant_state_t tenant,
                                const char *what, char *buf, size_t n);
+/*
+ * The per-family line (FORMAT.md section 2, POLICY.md): `plane <P> does not cover IPv<family>: <classes>`,
+ * classified under out_mask plus plane P, the out-set every request of that family meets. A dependent rule
+ * whose value set is exactly {T} is named `fires on every IPv<family> request`. plane is WE_PLANE_* (1..8),
+ * family 4 or 6; -1 on a bad argument or a cut line, as above.
+ */
+int we_program_family_line(const we_program_t *p, uint8_t out_mask, we_tenant_state_t tenant, uint32_t plane,
+                           int family, char *buf, size_t n);
 
 /*
  * ---- the language's attributes and the verdict, for tools (never the request path) ----

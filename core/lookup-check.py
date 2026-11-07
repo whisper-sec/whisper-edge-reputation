@@ -69,7 +69,7 @@ GRAMMAR = {
     "plane": ([("name", "s")],
               [("id", "n"), ("state", "s"), ("file", "s"), ("format", "n"), ("generation", "d"), ("unit", "s"),
                ("built", "t"), ("valid-until", "t"), ("admission-tier", "n"), ("ranges-v4", "n"),
-               ("ranges-v6", "n"), ("key-bits-v6", "n"), ("manifest", "s"), ("why", "l"),
+               ("ranges-v6", "n"), ("key-bits-v6", "n"), ("not-covered", "s"), ("manifest", "s"), ("why", "l"),
                ("entry-generation", "d"), ("bound-to", "s"), ("tier", "s"), ("sources", "d"),
                ("coverage-v4", "d"), ("coverage-v6", "d"), ("coverage-v6-slash32s", "d"), ("feed", "l"),
                ("until", "t"), ("refused", "s"), ("refused-detail", "s"), ("disagree", "l")]),
@@ -222,9 +222,14 @@ def expected_names(kind):
     return names
 
 
+# keys a line carries only when they say something, so the output of a plane without them is the output it
+# always was: `not-covered`, the family a plane leaves not covered (FORMAT.md section 2)
+OPTIONAL_KEYS = {"notCovered"}
+
+
 def check_object(kind, obj, where, extra=()):
-    """Names in order, every name present, every type right."""
-    want = expected_names(kind) + list(extra)
+    """Names in order, every name present but an optional one that has nothing to say, every type right."""
+    want = [n for n in expected_names(kind) + list(extra) if n not in OPTIONAL_KEYS or n in obj]
     check(list(obj.keys()) == want, "%s: %s keys %s, the grammar says %s" % (where, kind, list(obj.keys()), want))
     pos, keys = GRAMMAR[kind]
     for name, t in pos + keys:
@@ -278,6 +283,7 @@ def presence(kind, o, where, ctx):
             must(False, "disagree")
         if not armed:
             must(False, "key-bits-v6")
+            must(False, "not-covered")
         # feed: present when a manifest withholds the plane, or one of its own tier was read; absent when no
         # manifest was read at all
         if ctx.get("withheld_named", {}).get(o["name"]) or ctx.get("own_tier_read", {}).get(o["name"]):
@@ -367,7 +373,8 @@ def doc(json_path, lines_path):
                                       "coverage-v6-slash32s": po.get("coverageV6Slash32s"),
                                       "refused-detail": po.get("refusedDetail"),
                                       "entry-generation": po.get("entryGeneration"),
-                                      "key-bits-v6": po.get("keyBitsV6")}),
+                                      "key-bits-v6": po.get("keyBitsV6"),
+                                      "not-covered": po.get("notCovered")}),
                  "planes[%d]" % i, pctx)
         if p["name"] == "tenant" and p["state"] != "absent" and not (
                 p["state"] == "refused" and "inert-at-config" in (p.get("why") or "")):

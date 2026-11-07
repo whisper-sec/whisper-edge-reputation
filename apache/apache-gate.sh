@@ -53,6 +53,7 @@ cd "$(dirname "$0")" || exit 1
 # ROOT is the EDGE TREE's own root, one level up from this script, NOT two: two levels up is the parent of
 # the clone in the published repository, and `$ROOT/...` then resolves outside the checkout.
 ROOT=$(cd .. && pwd)
+. "$ROOT/curl-asis.sh"   # every request goes out as the row writes it, whatever curl release
 umask 022
 # the work directory is per tree by default (the gate's own path, hashed), so two trees walking on one box never
 # share logs, counters or pid files: a rehearsal clone and this tree walked the one default directory at once, and
@@ -2189,12 +2190,26 @@ PY
     # it into its ring; the /bound program's entry is the 990-byte line the model above computed, cut to 511 in
     # the ring, and /two's reputation rule gives the second head. Read per child: its logged entries against
     # its own status file's ring, byte for byte.
+    # THE PHASE'S PRECONDITION IS MEASURED, NOT ASSUMED. "The first transition after the workers start" holds only
+    # for a child that took its baseline while tor was still fresh: a child that started after tor's valid-until
+    # (a slow start on a loaded runner) takes the stale state as its baseline and logs no tor transition at all,
+    # and a child that did not tick between tor's edge and reputation's sees both at once and logs the joined
+    # transition instead; either reads exactly like a child that died. So the phase reads, per child, when it
+    # started and what its first transition was, and a run that missed either is not judged: it runs again with
+    # twice the lead and the gap (25 s and 30 s, then 50 and 60, then 100 and 120). A child gone from the server by the read (died, or replaced) is said by name with its
+    # own error-log lines, never folded into a byte count.
     q6_bound_phase() { # q6_bound_phase <module> <label> <tenant valid-until ms, 0 for none> -> $W/q6b-<label>.out
-        local so=$1 lbl=$2 tvu=$3 now kids n
+        local so=$1 lbl=$2 tvu=$3 now kids n lead gap torvu attempt aw alive k
+        for attempt in 1 2 3; do
+        lead=$((25000 << (attempt - 1)))
+        gap=$((30000 << (attempt - 1)))      # tor stale, then reputation: three 10 s refresh intervals apart, so every
+                                             # child ticks between them (one interval apart, a child whose tick slid past
+                                             # the edge saw both go stale at once: the CI failure of the uncut control)
         rm -rf "$W/counters"
         now=$(date +%s%3N)
-        plane_fixture reputation "$D/reputation.bin" $((pg + 50)) $((now + 35000))
-        plane_fixture tor "$D/tor.bin" $((pg + 51)) $((now + 25000))
+        torvu=$((now + lead))
+        plane_fixture reputation "$D/reputation.bin" $((pg + 50)) $((torvu + gap))
+        plane_fixture tor "$D/tor.bin" $((pg + 51)) "$torvu"
         plane_fixture tenant "$D/tenant.bin" $((pg + 52)) "$tvu"
         { conf_head "$MPM" | sed "s#^LoadModule whisper_edge_module .*#LoadModule whisper_edge_module $so#"; cat "$W/q6.body"
           echo '<Location /two>'; echo 'WhisperEdgePolicy "deny if listed >= high"'; echo 'WhisperEdgePolicy log if tor_exit'; echo '</Location>'
@@ -2205,11 +2220,16 @@ PY
         # shellcheck disable=SC2086
         set -- $kids
         n=$#
-        await "[ \"\$(plane_pids 'whisper edge: plane reputation stale out=reputation,tor')\" -ge $n ]" 75 "every child's second transition"
+        aw=1
+        await "[ \"\$(plane_pids 'whisper edge: plane reputation stale out=reputation,tor')\" -ge $n ]" $(((lead + gap) / 1000 + 40)) "every child's second transition" || aw=0
         await_next_tick
-        python3 - "$W/logs/error.log" "$W/counters" "$kids" <<'PY' > "$W/q6b-$lbl.out"
-import glob, re, sys
-log, cdir, kids = sys.argv[1], sys.argv[2], sys.argv[3].split()
+        alive=""
+        for k in $kids; do [ "$(ps -o ppid= -p "$k" 2>/dev/null | tr -d ' ')" = "$HTTPD_PID" ] && alive="$alive $k"; done
+        python3 - "$W/logs/error.log" "$W/counters" "$kids" "$alive" "$torvu" <<'PY' > "$W/q6b-$lbl.out"
+import glob, re, sys, time
+log, cdir, kids, alive, torvu = sys.argv[1], sys.argv[2], sys.argv[3].split(), set(sys.argv[4].split()), int(sys.argv[5])
+# a child's `started` is CLOCK_BOOTTIME (the module's we_boottime_ms): onto the epoch with this host's own offset
+boot2epoch = int(time.time() * 1000) - int(time.clock_gettime(time.CLOCK_BOOTTIME) * 1000)
 def unesc(s):
     o = bytearray(); i = 0
     while i < len(s):
@@ -2231,8 +2251,12 @@ for k in kids:
     fs = glob.glob("%s/%s-*.status" % (cdir, k))
     ring = []
     dropped = None
+    started = 0
     if fs:
         for l in open(fs[0], "rb").read().split(b"\n"):
+            m = re.search(rb" started ([0-9]+) ", l)
+            if m and not started:
+                started = int(m.group(1)) + boot2epoch
             m = re.match(rb'^transition [0-9]+ "(.*)"$', l)
             if m:
                 ring.append(unesc(m.group(1)))
@@ -2254,13 +2278,53 @@ for k in kids:
         "head2_text": int(bool(h_log) and b":" in h_log[0]),
         "all_in_ring": int(bool(ent) and all(e in ring for e in ent)),
         "dropped": dropped if dropped is not None else -1,
+        "alive": int(k in alive),
+        "started": started,
+        # the phase's two preconditions, read per child: it took its baseline while tor was fresh (2 s for its init,
+        # from the stamp to the baseline), and its first transition is tor's alone (a tick fell between the two edges)
+        "precond": int(0 < started and started + 2000 < torvu and bool(ent) and ent[0].startswith(TOR)),
     }
     for key, v in rec.items():
         print("%s %s %s" % (k, key, v))
 PY
+        echo "- awaited $aw" >> "$W/q6b-$lbl.out"
+        echo "- crashes $(grep -cE 'exit signal|AH00052|Segmentation fault' "$W/logs/error.log" || true)" >> "$W/q6b-$lbl.out"
+        echo "- torvu $torvu" >> "$W/q6b-$lbl.out"
+        cp "$W/logs/error.log" "$W/q6b-$lbl.error.log" 2>/dev/null || true
         stop_httpd "$W/q6b.conf" "$MPM" || echo "stop-failed" >> "$W/q6b-$lbl.out"
         await '[ "$(code_nohdr /)" = 000 ]' 15 "the stopped listener's port release"
+        # a dead or replaced child is a finding, not a slow start: never re-run past it
+        if [ "$(q6v "$lbl" precond)" = 1 ] || [ "$attempt" = 3 ] || [ "$(q6v "$lbl" alive)" != 1 ] || [ "$(q6v "$lbl" crashes)" != 0 ]; then
+            break
+        fi
+        echo "    [q6 $lbl: a child started after tor's valid-until, or saw tor and reputation go stale in one tick ($(awk '$2 == "started" { printf "%s at %s; ", $1, $3 }' "$W/q6b-$lbl.out")tor $torvu): not judged, again with a $((lead * 2 / 1000)) s lead and a $((gap * 2 / 1000)) s gap]"
+        done
+        q6_vital "$lbl"
         return 0
+    }
+    # the phase's children: each one's pid, whether it was still the server's child at the read, when it started
+    # against tor's valid-until, and its own error-log lines; printed under any failing row of the phase
+    q6_diag() { # q6_diag <label>
+        local k
+        echo "        [q6 $1: children $(awk '$2 == "alive" { printf "%s alive %s, ", $1, $3 }' "$W/q6b-$1.out")started $(awk '$2 == "started" { printf "%s ", $3 }' "$W/q6b-$1.out")against tor's valid-until $(q6v "$1" torvu); awaited $(q6v "$1" awaited); crash lines $(q6v "$1" crashes)]"
+        for k in $(awk '$2 == "alive" { print $1 }' "$W/q6b-$1.out"); do
+            grep -E "\[pid ${k}[]:]" "$W/q6b-$1.error.log" 2>/dev/null | tail -4 | cut -c1-220 | sed "s/^/        [pid $k] /"
+        done
+        grep -hE 'exit signal|AH00052|Segmentation fault' "$W/q6b-$1.error.log" 2>/dev/null | tail -3 | cut -c1-220 | sed 's/^/        [crash] /'
+        if [ -n "${WE_GATE_KEEP:-}" ]; then
+            mkdir -p "$WE_GATE_KEEP/q6-$1" && cp -r "$W/q6b-$1.out" "$W/q6b-$1.error.log" "$W/counters" "$WE_GATE_KEEP/q6-$1/" 2>/dev/null || true
+            echo "        [q6 $1: kept under $WE_GATE_KEEP/q6-$1]"
+        fi
+    }
+    q6bad() { bad "$2"; q6_diag "$1"; }   # q6bad <label> <message>
+    # a child gone from the server by the read, or a crash line in the phase's error log, fails by name: it is never
+    # read as a byte count of zero
+    q6_vital() { # q6_vital <label>
+        if [ "$(q6v "$1" alive)" != 1 ] || [ "$(q6v "$1" crashes)" != 0 ]; then
+            q6bad "$1" "q6 $1: a child was gone from the server by the read, or a child crashed (alive per child $(q6v "$1" alive), crash lines $(q6v "$1" crashes))"
+        elif [ "$(q6v "$1" precond)" != 1 ]; then
+            q6bad "$1" "q6 $1: on the third attempt (100 s lead, 120 s gap) a child still started after tor's valid-until or still saw both planes go stale in one tick, so the first-transition rows below measure nothing for it"
+        fi
     }
     q6v() { awk -v k="$2" '$2 == k { $1 = ""; $2 = ""; sub(/^  /, ""); print }' "$W/q6b-$1.out" | sort -u | paste -sd'|'; }   # the distinct values over the children, a value may hold spaces
     q6_bound_phase "$MODULE" main 0
@@ -2269,40 +2333,40 @@ PY
     else
         [ "$(q6v main bound_log_len)" = 511 ] && [ "$(q6v main bound_ring_len)" = 511 ] && [ "$(q6v main bound_equal)" = 1 ] \
             && ok "q6: the first transition after the workers start (tor going stale, no publish before it) is logged by each child, and the 256-rule entry is exactly 511 bytes in the log and in the ring, byte for byte the same: the model's 990 cut at the ring's bound" \
-            || bad "q6: the 256-rule entry: logged $(q6v main bound_log_len) bytes, ring $(q6v main bound_ring_len), equal $(q6v main bound_equal) (per child)"
+            || q6bad main "q6: the 256-rule entry: logged $(q6v main bound_log_len) bytes, ring $(q6v main bound_ring_len), equal $(q6v main bound_equal) (per child)"
         [ "$(q6v main bound_head)" = "plane tor stale out=tor tenant=fresh" ] \
             && ok "q6: its head is intact: plane tor stale out=tor tenant=fresh" \
-            || bad "q6: the 256-rule entry's head reads '$(q6v main bound_head)'"
+            || q6bad main "q6: the 256-rule entry's head reads '$(q6v main bound_head)'"
         [ "$(q6v main head2)" = "plane reputation stale out=reputation,tor tenant=fresh" ] && [ "$(q6v main head2_equal)" = 1 ] && [ "$(q6v main head2_text)" = 1 ] \
             && ok "q6: the second transition's head reads out=reputation,tor in plane order, with its dependents text, the entry equal to the status file's" \
-            || bad "q6: the second head: '$(q6v main head2)', equal $(q6v main head2_equal), text $(q6v main head2_text)"
+            || q6bad main "q6: the second head: '$(q6v main head2)', equal $(q6v main head2_equal), text $(q6v main head2_text)"
         [ "$(q6v main all_in_ring)" = 1 ] \
             && ok "q6: every transition entry each child logged is one of its status file's ring entries, byte for byte" \
-            || bad "q6: a logged transition entry is absent from its child's ring (per child: $(q6v main all_in_ring))"
-        [ "$(q6v main dropped)" = 0 ] && ok "q6: log-dropped 0 on every child's status file" || bad "q6: log-dropped reads $(q6v main dropped)"
+            || q6bad main "q6: a logged transition entry is absent from its child's ring (per child: $(q6v main all_in_ring))"
+        [ "$(q6v main dropped)" = 0 ] && ok "q6: log-dropped 0 on every child's status file" || q6bad main "q6: log-dropped reads $(q6v main dropped)"
         echo "    [q6: the 256-rule entry per child: logged $(q6v main bound_log_n) time(s), in the ring $(q6v main bound_ring_n) time(s) (printed, not gated: one transition, one entry, is the expectation)]"
     fi
     # a tenant plane past its valid-until and its 48 h grace: the head's tenant word is lapsed
     q6_bound_phase "$MODULE" lapsed $(( $(date +%s%3N) - 49 * 3600 * 1000 ))
     [ "$(q6v lapsed bound_head)" = "plane tor stale out=tor tenant=lapsed" ] \
         && ok "q6: with tenant.bin past its valid-until and its 48 h grace, the head reads tenant=lapsed" \
-        || bad "q6: the lapsed head reads '$(q6v lapsed bound_head)' ($(head -c 200 "$W/q6b-lapsed.out" | tr '\n' ' '))"
+        || q6bad lapsed "q6: the lapsed head reads '$(q6v lapsed bound_head)' ($(head -c 200 "$W/q6b-lapsed.out" | tr '\n' ' '))"
     # the controls: the uncut text handed to the logger, and the head alone handed to it
     if build_variant uncutlog -Wc,-DWE_MOD_CONTROL_BUILD -Wc,-DWE_MOD_TEST_UNCUT_LOG && q6_bound_phase "$CTL/uncutlog.so" uncut 0; then
         [ "$(q6v uncut bound_log_len)" = 990 ] && [ "$(q6v uncut bound_ring_len)" = 511 ] \
             && ok "q6: the uncut-log control (WE_MOD_TEST_UNCUT_LOG) logs the 256-rule entry at 990 bytes, the model's figure, against the ring's 511, so the 511 above is the cut" \
-            || bad "q6: the uncut-log control logged $(q6v uncut bound_log_len) bytes against the ring's $(q6v uncut bound_ring_len)"
+            || q6bad uncut "q6: the uncut-log control logged $(q6v uncut bound_log_len) bytes against the ring's $(q6v uncut bound_ring_len)"
     else
         bad "q6: the uncut-log control did not build or run: $(tail -2 "$CTL/uncutlog.log" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
     fi
     if build_variant headalone -Wc,-DWE_MOD_CONTROL_BUILD -Wc,-DWE_MOD_TEST_HEAD_ALONE && q6_bound_phase "$CTL/headalone.so" headalone 0; then
         [ "$(q6v headalone all_in_ring)" = 0 ] && [ "$(q6v headalone head2_text)" = 0 ] \
             && ok "q6: the head-alone control (WE_MOD_TEST_HEAD_ALONE) logs lines absent from the ring (no dependents text), so the byte comparison above can fail" \
-            || bad "q6: the head-alone control's lines matched the ring (in ring $(q6v headalone all_in_ring), text $(q6v headalone head2_text))"
+            || q6bad headalone "q6: the head-alone control's lines matched the ring (in ring $(q6v headalone all_in_ring), text $(q6v headalone head2_text))"
     else
         bad "q6: the head-alone control did not build or run: $(tail -2 "$CTL/headalone.log" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
     fi
-    rm -f "$W"/q6b-*.out "$W/q6b.conf"
+    rm -f "$W"/q6b-*.out "$W"/q6b-*.error.log "$W/q6b.conf"
     rm -rf "$D"
 }
 
@@ -3690,6 +3754,63 @@ run_baseline_rows() { # baseline: a counter baseline read behind the per-child b
 }
 bl_tick() { sed -n 's/^tick \([0-9]*\)$/\1/p' "$W"/counters/"$1"-*.rules.cnt 2>/dev/null | head -1; }
 bl_rule_ctx() { ctx_digest "$(cfg_lines)" 'server "127.0.0.1"'; }
+
+run_graceful_count_rows() { # a graceful restart loses no count; the old children's stop writes what no tick had
+    local v MPM so conf="$W/httpd-gcount.conf" d_ctx before after sent i kids t0 t1 window
+    echo "  [a graceful restart and the counts since the last tick]"
+    [ -n "$APXS" ] || { bad "gcount: no apxs to build the control module"; return; }
+    build_variant nofinal -Wc,-DWE_MOD_CONTROL_BUILD -Wc,-DWE_MOD_TEST_NO_FINAL_WRITE \
+        || { bad "gcount: the no-final-write build failed: $(tail -2 "$CTL/nofinal.log" | tr '\n' ' ' | cut -c1-200)"; return; }
+    # every MPM with the module as shipped, then the control: the shim as it was before its stop wrote, under
+    # prefork with ONE child, so the tick barrier returns on that child's own tick and the time to its next one is
+    # the whole refresh, which the refusals, the graceful and the exit must fit inside for the control to count
+    for v in $MPMS control; do
+        if [ "$v" = control ]; then MPM=prefork; so="$CTL/nofinal.so"; else MPM=$v; so=$MODULE; fi
+        rm -rf "$W/html" "$W/counters"; mkdir -p "$W/html"; echo page > "$W/html/index.html"
+        fresh_snapshot
+        { conf_head "$MPM"; conf_data; echo 'WhisperEdgeMode deny'; echo 'WhisperEdgePolicy "deny if listed >= low"'; } \
+            | sed "s#^LoadModule whisper_edge_module .*#LoadModule whisper_edge_module $so#" > "$conf"
+        [ "$v" = control ] && sed -i 's/^\(StartServers\|MinSpareServers\|MaxSpareServers\|MaxRequestWorkers\) 2$/\1 1/' "$conf"
+        if ! start_httpd "$conf" "$MPM"; then
+            bad "gcount($v): httpd did not start: $(grep -v 'whisper edge: policy:' "$W/start-$MPM.err" | tail -2 | tr '\n' ' ' | cut -c1-300)"
+            continue
+        fi
+        HTTPD_PID=$(cat "$W/httpd-$MPM.pid" 2>/dev/null)
+        await_first_tick || true
+        d_ctx=$(ctx_digest "$(cfg_lines)" 'server "127.0.0.1"')
+        # just after every child's tick, so the refusals land between two ticks. For the one-child control, t0 is
+        # within the barrier's 250 ms poll of that tick and the next is the 10 s refresh later: when the refusals, the
+        # graceful and the exit all finish inside 9 s of t0, no tick could have carried the counts, only a stop
+        # (a tick line in the file cannot tell: the final write stamps a tick of its own)
+        await_next_tick || true
+        t0=$(date +%s%N)
+        before=$(rule_count "$d_ctx" 1)
+        sent=0
+        for i in 1 2 3 4 5 6; do [ "$(code / "$LISTED")" = 403 ] && sent=$((sent + 1)); done
+        kids=$(pgrep -P "$HTTPD_PID" | sort | tr '\n' ' ')
+        timeout 20 "$HTTPD" -f "$conf" -k graceful >/dev/null 2>&1 || bad "gcount($v): the graceful did not return within 20 s"
+        if [ "$v" = control ]; then
+            await "! kill -0 $kids 2>/dev/null && [ -n \"\$(pgrep -P $HTTPD_PID)\" ]" 40 "the old child's exit" || true
+        else
+            await "children_turned_over \"$kids\"" 40 "the old children's exit" || true
+        fi
+        t1=$(date +%s%N); window=$(( (t1 - t0) / 1000000 ))
+        after=$(rule_count "$d_ctx" 1)
+        stop_httpd "$conf" "$MPM" || bad "gcount($v): httpd did not stop"
+        if [ "$v" != control ]; then
+            [ "$sent" = 6 ] && [ "$after" = $((before + sent)) ] \
+                && ok "gcount: $MPM: $sent refusals sent just after a tick, then apachectl graceful: rule 1 sums $after over the live and gone files, $before before, the old children gone ${window} ms after the barrier" \
+                || bad "gcount: $MPM: $sent of 6 refused, rule 1 read $before before and $after after the graceful: a graceful restart lost counts"
+        elif [ "$window" -ge 9000 ]; then
+            bad "gcount's control: the old child was gone only ${window} ms after its tick, past the 10 s refresh less a second, so a tick may have carried the counts and the control shows nothing; re-run on a quieter host"
+        else
+            [ "$sent" = 6 ] && [ "$after" -lt $((before + sent)) ] \
+                && ok "gcount's control: the shim with no write at the stop (WE_MOD_TEST_NO_FINAL_WRITE) reads $after for the same $sent refusals across the same graceful, its one old child gone ${window} ms after its tick, inside the refresh, so the sums above are the stop's own work" \
+                || bad "gcount's control: the build with no write at the stop still read $after for $sent refusals, so the rows above prove nothing"
+        fi
+    done
+    fresh_snapshot
+}
 
 run_slowstop_rows() { # Q1's slow-stop arms: a child whose module thread is slow to stop keeps the counts it served
     local MPM=prefork conf="$W/httpd-q1s.conf" v d_ctx total aband stagew t0 t1 i k served unaband nserved stillup
@@ -5527,7 +5648,7 @@ reach_path() { # the module functions <from> calls, one level, for the message
 }
 
 # gate_selected <group>: true for every group, or only for those WE_GATE_ONLY names
-GATE_GROUPS="run_suite run_walk_rows run_realip_only_rows run_evidence6_rows run_htaccess_rows run_satisfy_rows run_cache_rows run_envnote_rows run_frame_rows run_header_count_rows run_cgi_rows run_graceful_rows run_signal_rows run_q6_rows run_h2_rows run_shard_rows run_asan_rows run_outage_rows run_outage_debug_rows run_m10_control_rows run_pidreuse_rows run_nofold_rows run_slowstop_rows run_baseline_rows run_subblock_race_rows run_final_lock_rows run_mutex_rows run_cloexec_rows run_mlock_rows run_configtest_rows run_strictmodes_rows run_corpus_rows run_binding_rows run_refused_bind_rows run_graceful_refusal_rows run_truncate_rows run_debug_build_rows run_built_object_rows"
+GATE_GROUPS="run_suite run_walk_rows run_realip_only_rows run_evidence6_rows run_htaccess_rows run_satisfy_rows run_cache_rows run_envnote_rows run_frame_rows run_header_count_rows run_cgi_rows run_graceful_rows run_graceful_count_rows run_signal_rows run_q6_rows run_h2_rows run_shard_rows run_asan_rows run_outage_rows run_outage_debug_rows run_m10_control_rows run_pidreuse_rows run_nofold_rows run_slowstop_rows run_baseline_rows run_subblock_race_rows run_final_lock_rows run_mutex_rows run_cloexec_rows run_mlock_rows run_configtest_rows run_strictmodes_rows run_corpus_rows run_binding_rows run_refused_bind_rows run_graceful_refusal_rows run_truncate_rows run_debug_build_rows run_built_object_rows"
 gate_selected() { [ -z "${WE_GATE_ONLY:-}" ] && return 0; case " $WE_GATE_ONLY " in *" $1 "*) return 0 ;; esac; return 1; }
 # =====================================================================================================
 # the run
@@ -5581,6 +5702,7 @@ gate_selected run_frame_rows && run_frame_rows
 gate_selected run_header_count_rows && run_header_count_rows
 gate_selected run_cgi_rows && run_cgi_rows
 gate_selected run_graceful_rows && run_graceful_rows
+gate_selected run_graceful_count_rows && run_graceful_count_rows
 gate_selected run_signal_rows && run_signal_rows
 gate_selected run_q6_rows && run_q6_rows
 gate_selected run_h2_rows && run_h2_rows

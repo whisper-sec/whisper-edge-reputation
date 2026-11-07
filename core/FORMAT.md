@@ -86,7 +86,53 @@ Valid only when `WE_H_SCHEMA` is set. All fields that do not apply to a plane ar
 | 172 | 2 | `country_table_version` | the ISO 3166-1 numeric table the builder used, as `YYYYMM` modulo 65536 (202609 → 6001); a reader whose compiled table is older reads codes it does not know as `undetermined` and logs once |
 | 174 | 1 | `v4_depth` | rank only: the S-tree depth the builder computed (§4.2), for the gate's record; 0 for radix |
 | 175 | 1 | `v6_depth` | as v4 |
-| 176 | 16 | reserved | must be zero, or `WE_ERR_FORMAT` |
+| 176 | 1 | `v4_coverage` | format 2: 0 **stated**, 1 **not-covered** (below); 2 is reserved for `open` and refused; anything else refused. Format 1: reserved, must be zero |
+| 177 | 1 | `v6_coverage` | as v4 |
+| 178 | 14 | reserved | must be zero, or `WE_ERR_FORMAT` |
+
+**Per-family coverage.** A **stated** family (0) is what every format-2 file meant before these two bytes
+existed: absence from it is a definite negative (section 3). A **not-covered** family (1) says the plane's source
+makes no statement about that address family: the family carries no data, and a reader answers UNKNOWN for every
+attribute of an address in it, exactly as for a stale plane. Coverage is per plane and family, not per attribute:
+a plane may state a family only if every attribute's source states it. The loader's rules, each `WE_ERR_FORMAT`
+with the named message, run inside the tail checks after the record-stride and country-table checks and before
+the index-kind checks, so before every region and digest check:
+
+1. a coverage byte outside {0, 1}: "a coverage byte outside stated and not-covered";
+2. (retired: format 1 keeps 176..191 reserved, refused by the reserved-byte check);
+3. both bytes 1: "a plane that covers no family";
+4. a not-covered family the reader's **allowance table** does not permit: "plane P may not leave IPv4 (or IPv6) not
+   covered", and for the tenant plane "the tenant plane covers both families". Today the table has exactly one
+   cell, `tor` IPv6; widening it is a reader release;
+5. a not-covered family that carries anything: "a not-covered family carries data". The family's count and its
+   five header offsets (index, start, end, sev, meta) are 0, its INDEXED flag is clear, and its tail index kind,
+   parameter, record offset, sample offset, sample count and depth are 0; its record stride stays the schema's.
+
+The C loader, the builder's writer and the builder's commit check all implement these rules (the coverage rules
+and the reserved range), in this order. A
+reader built before them refuses a non-zero 176 or 177 by its reserved-byte check, which is the safe outcome 2.1
+describes, and the publisher holds every one-family plane withheld until a module release that reads the bytes is
+published. `whisper-edge-lookup` prints a not-covered family as `not-covered=v6` on the plane's line, and an
+attribute it leaves unknown as `UNKNOWN ... why=not-covered:ipv6`; `plane_check --dump` names the coverage on its
+stderr summary, never on stdout, whose four fields are an interface.
+
+In the armed map the two bytes become one, `uncovered`, with each family's bit at the family's own number (bit 4
+IPv4, bit 6 IPv6), on the cache line the evaluator's fill already reads; a fill of a not-covered family returns
+UNKNOWN before any lookup, exactly as a stale plane's does, and `stale` keeps meaning stale, so the tenant plane's
+bounded reading is untouched. The tenant plane cannot carry the byte at all: rule 4 refuses it from a file, and
+the in-memory revoked map is refused with it set.
+
+### 2.1 May-ignore and must-understand
+
+Header `flags` are **may-ignore**: a reader ignores a bit it does not know. In **format 2** the schema tail is
+**must-understand**: every format-2 reader refuses a non-zero byte it does not implement, so a field whose
+ignorance would change an answer (as the coverage bytes would: an old reader ignoring "not covered" would answer
+FALSE) goes in the tail, never in `flags`. In **format 1** there is no must-understand region for shipped readers,
+which load a format-1 file with `WE_H_SCHEMA` set and ignore the tail, so `reputation` can never go one-family
+through these bytes. A reader built before per-family coverage refuses a one-family plane with "a reserved byte
+of the schema tail is not zero", keeps its previously armed plane to that plane's own `valid_until_ms`, then reads
+UNKNOWN: it can lose information and never invents a negative. On a one-family plane that message means "this
+module predates per-family coverage; upgrade it".
 
 ## 3. Records (format 2)
 
@@ -119,6 +165,9 @@ are not strictly increasing after truncation.
 For a MOAS range, `rov` is the RFC 6811 state of the route whose origin is in `asn`, and `moas` says
 there were others.
 
+Absence from a stated family of the dense plane is the definite `unrouted`; in a not-covered family (section 2) it
+is UNKNOWN, never `unrouted`.
+
 ### 3.2 Schema 2, the membership record (planes `tor`, `rpki-unreachable`, `anonymizer`, `threat`, `tenant`)
 
 IPv4, 16 bytes:
@@ -145,7 +194,8 @@ them by `plane_id`):
 | threat | `c2` | `bruteforce` | `spam` | `phishing` | `scanner` | `state_actor` |
 | tenant | `tenant_allow` | `tenant_deny` | | | | |
 
-Absence from a fresh membership plane is a **definite negative** for every bit (POLICY.md §2).
+Absence from a fresh membership plane is a **definite negative** for every bit **in a stated family** (POLICY.md
+§2); in a not-covered family (section 2) every bit is UNKNOWN.
 
 ### 3.3 The blob (format 2)
 
@@ -230,10 +280,19 @@ reads an unknown in-range code as `undetermined`, which is the asymmetry the com
 
 ## 6. What the loader refuses, in order
 
+Within `WE_ERR_FORMAT` the tail is checked in a fixed order, so a file with several defects is refused for the
+first: the pre-schema tail (all zero); the reserved bytes (176..191 in format 1, 178..191 in format 2); `plane_id`,
+`schema_id`, the key widths, the record strides and the country table version; then the coverage rules of section
+2, 1, 3, 4 and 5 in that order; then the index kinds and their parameters. The coverage rules therefore run before
+every region, sort and digest check, and any single field set on a not-covered family is refused with rule 5's
+message; the record stride is the one exception, refused earlier with "a record stride is not the schema's".
+`testdata/coverage/MANIFEST.tsv` lists one file per rule and per field with its code and message, the table every
+reader of the format is held to.
+
 `WE_ERR_TOO_SMALL` (under 192 bytes), `WE_ERR_MAGIC`, `WE_ERR_FORMAT` (format not 1 or 2; a
 format-2 header with `generation` 0, which is reserved for the in-memory revoked tenant map and means
-"nothing armed"; an unknown index kind; a schema tail field outside its domain; a non-zero reserved byte; a `plane_id`
-that does not match the file name), `WE_ERR_TRUNCATED` (`file_len` ≠ size), `WE_ERR_OFFSETS` (any
+"nothing armed"; an unknown index kind; a schema tail field outside its domain; a non-zero reserved byte; a coverage rule of
+section 2; a `plane_id` that does not match the file name), `WE_ERR_TRUNCATED` (`file_len` ≠ size), `WE_ERR_OFFSETS` (any
 region outside the file or overlapping another; an alignment violation; a format-1 index that is not
 65,537 entries), `WE_ERR_UNSORTED` (starts not strictly increasing, after /64 truncation for 64-bit
 keys), `WE_ERR_OVERLAP` (an end at or past the next start), `WE_ERR_DIGEST`, and the record-domain
@@ -256,3 +315,8 @@ page boundary and the manifest's figures are computed that way. The writer's cos
 with the traced maxima of the same file. The deterministic test enumerates
 every outcome class (§7's cost model) and asserts **equality per lookup** against a data-free
 model, and equality of the maximum with the manifest.
+
+**The not-covered class.** A fill of a family the plane does not cover (section 2) makes no lookup: zero probes,
+zero index or record lines, and one descriptor line, the 64-byte line of the armed map that holds `generation`,
+`valid_until_ms` and `uncovered`, beside the binding's line. A bound that charges every fill a full lookup stays
+sound for it, since this class reads strictly less than any lookup does.

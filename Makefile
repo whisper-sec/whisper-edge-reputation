@@ -7,7 +7,7 @@
 # The split is deliberate, and `proof` FAILS rather than skips when a fixture or a tool is absent, so a
 # green `make` is never mistaken for a green `make proof`.
 
-.PHONY: all proof core interop rpz rpz-live nginx apache litespeed litespeed-sdk install-gate clean
+.PHONY: all proof core interop rpz rpz-concurrency rpz-live nginx apache litespeed litespeed-sdk install-gate clean
 
 all: core
 
@@ -23,6 +23,10 @@ interop:
 # and without it the gate exits 77 rather than claim it. See rpz/README.md.
 rpz:
 	./rpz/rpz-gate.sh
+
+# The control for two overlapping runs: both must finish CLEAR and leave no named behind.
+rpz-concurrency:
+	./rpz/rpz-gate-concurrency.sh
 
 # The same gate against a zone from a live build rather than the checked-in fixture:
 #   make rpz-live ZONE=/path/to/zone PROBES=/path/to/probes.txt PLANE=/path/to/plane.bin [ORIGIN=rpz.whisper.online]

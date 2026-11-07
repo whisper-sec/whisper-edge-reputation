@@ -671,6 +671,7 @@ typedef struct {
     uint8_t     r6[PMAX][32];
     uint32_t    kind4, param4, kind6, param6;
     int         noblob;
+    uint8_t     cov6;                  /* 1: IPv6 not covered (FORMAT.md section 2); the family is then empty */
 } pspec_t;
 
 static uint32_t stride_of(uint32_t plane, int fam)
@@ -765,6 +766,7 @@ static const we_map_t *mk_map(const pspec_t *ps, uint64_t gen, uint64_t vu, int 
     p.v4.param = ps->param4;
     p.v6.kind = ps->kind6;
     p.v6.param = ps->param6;
+    p.v6_coverage = ps->cov6;
     if (p.format == WE_FORMAT_1) {
         sev4 = (uint8_t *)calloc(PMAX, 1);
         sev6 = (uint8_t *)calloc(PMAX, 1);
@@ -801,7 +803,7 @@ static const we_map_t *mk_map(const pspec_t *ps, uint64_t gen, uint64_t vu, int 
         CHECK(0, "the writer built plane %u", ps->plane);
         return NULL;
     }
-    snprintf(path, sizeof path, "%s/plane-%d-%u.bin", TMP, seq++, ps->plane);
+    snprintf(path, sizeof path, "%s/plane-%ld-%d-%u.bin", TMP, (long)getpid(), seq++, ps->plane);
     if (ww_save(path, buf, len) != 0) {
         free(buf);
         CHECK(0, "saved %s", path);
@@ -841,11 +843,12 @@ static const we_map_t *mk_map(const pspec_t *ps, uint64_t gen, uint64_t vu, int 
 #define PS_NULL    3
 #define PS_REVOKED 4      /* the tenant plane only */
 #define PS_EMPTY   5      /* fresh, and listing nothing: every address is absent */
+#define PS_UNC6    6      /* tor only: fresh, its IPv4 records, IPv6 not covered (FORMAT.md section 2) */
 
 typedef struct {
     const pspec_t  *spec[8];          /* NULL: no records anywhere (an empty plane) */
     int             state[8];
-    const we_map_t *map[8][4];        /* fresh, stale, lapsed, fresh-and-empty */
+    const we_map_t *map[8][5];        /* fresh, stale, lapsed, fresh-and-empty, fresh-IPv6-not-covered */
 } world_t;
 
 static const we_map_t *revoked_map;
@@ -930,6 +933,17 @@ static void world_build(world_t *w)
         w->map[p][1] = mk_map(w->spec[p] != NULL ? w->spec[p] : &empty, 7u, NOW - 1000u, 0, NULL, NULL);
         w->map[p][2] = mk_map(w->spec[p] != NULL ? w->spec[p] : &empty, 7u, NOW - H48 - 1u, 0, NULL, NULL);
         w->map[p][3] = mk_map(&empty, 7u, 0u, 0, NULL, NULL);
+        if (p + 1u == WE_PLANE_TOR) {
+            /* the one cell the allowance table permits: tor's IPv4 records, IPv6 not covered */
+            static pspec_t one;
+
+            one = w->spec[p] != NULL ? *w->spec[p] : empty;
+            one.n6 = 0u;
+            one.kind6 = WE_KIND_NONE;
+            one.param6 = 0u;
+            one.cov6 = 1u;
+            w->map[p][4] = mk_map(&one, 7u, 0u, 0, NULL, NULL);
+        }
     }
 }
 
@@ -940,6 +954,7 @@ static const we_map_t *world_view(const world_t *w, uint32_t p)
     case PS_STALE:   return w->map[p][1];
     case PS_LAPSED:  return w->map[p][2];
     case PS_EMPTY:   return w->map[p][3];
+    case PS_UNC6:    return w->map[p][4];
     case PS_REVOKED: return revoked_map;
     default:         return NULL;
     }
@@ -1035,9 +1050,14 @@ static int ref_atom(const we_program_t *prog, const we_instr_t *I, const world_t
     uint8_t blk[16];
     int hit, v = 0;
     int stale = st == PS_STALE || st == PS_LAPSED;
+    /* the fifth unknown case (POLICY.md): the canonical address is in a family the plane does not cover */
+    int unc = st == PS_UNC6 && a->family == 6u && p != 7u;
 
     if ((op & WE_OP_ISUNK) != 0u) {
-        return (st == PS_NULL || stale) ? RT : RF;
+        return (st == PS_NULL || stale || unc) ? RT : RF;
+    }
+    if (unc) {
+        return RU;
     }
     if (st == PS_NULL) {
         return RU;
@@ -1237,12 +1257,13 @@ static void canon(we_addr_t *a)
     *a = o;
 }
 
-static int ref_unknown_plane(const we_rule_t *R, const world_t *w)
+static int ref_unknown_plane(const we_rule_t *R, const world_t *w, const we_addr_t *a)
 {
     uint32_t p;
 
     for (p = 0u; p < 8u; p++) {
-        if (((R->dep_mask >> p) & 1u) && (w->state[p] == PS_NULL || w->state[p] == PS_STALE || w->state[p] == PS_LAPSED)) {
+        if (((R->dep_mask >> p) & 1u) && (w->state[p] == PS_NULL || w->state[p] == PS_STALE || w->state[p] == PS_LAPSED
+                                          || (w->state[p] == PS_UNC6 && a->family == 6u && p != 7u))) {
             return (int)p + 1;
         }
     }
@@ -1359,7 +1380,7 @@ static void ref_decide(const scen_t *s, we_verdict_t *v)
                 v->program = pass == 0 ? WE_VPROG_FLOOR : WE_VPROG_CONTEXT;
                 v->rule = (uint16_t)(r + 1u);
                 v->reason = val == RT ? WE_WHY_RULE : WE_WHY_ALLOW_BY_UNKNOWN;
-                v->unknown_plane = val == RT ? 0u : (uint8_t)ref_unknown_plane(R, w);
+                v->unknown_plane = val == RT ? 0u : (uint8_t)ref_unknown_plane(R, w, a);
                 return;
             }
         }
@@ -2552,6 +2573,12 @@ static uint8_t exact_values(const we_program_t *p, const we_rule_t *R, uint8_t o
         }
         atom_of[k] = j;
     }
+    /* A stack machine with its invariant checked, not assumed. exact_values only ever sees programs our own
+     * compiler emitted and the verifier accepted, and the verifier refuses a rule that does not end in exactly
+     * one END (step 4) or that leaves a stack height other than 1 (step 12), so every push fits and every pop
+     * has its operands. The reference still checks each push and pop and the final height: a program that
+     * breaks them is a defect in the compiler or the verifier, and the reference refuses it (returns no value
+     * class, which its caller fails) rather than reading a slot nothing wrote. */
     for (asg = 0u; asg < (1u << natoms); asg++) {
         int st[64], sp = 0;
 
@@ -2561,20 +2588,35 @@ static uint8_t exact_values(const we_program_t *p, const we_rule_t *R, uint8_t o
             if (I->op & WE_OP_ATOM) {
                 int on = (out >> I->plane) & 1u;
 
+                if (sp == (int)(sizeof st / sizeof st[0])) {
+                    return 0u;
+                }
                 if (I->op & WE_OP_ISUNK) {
                     st[sp++] = on ? RT : RF;
                 } else {
                     st[sp++] = on ? RU : (((asg >> atom_of[k]) & 1u) ? RT : RF);
                 }
             } else if (I->op & WE_OP_NOT) {
+                if (sp < 1) {
+                    return 0u;
+                }
                 st[sp - 1] = ref_not(st[sp - 1]);
             } else if (I->op & WE_OP_AND) {
+                if (sp < 2) {
+                    return 0u;
+                }
                 st[sp - 2] = ref_and(st[sp - 2], st[sp - 1]);
                 sp--;
             } else if (I->op & WE_OP_OR) {
+                if (sp < 2) {
+                    return 0u;
+                }
                 st[sp - 2] = ref_or(st[sp - 2], st[sp - 1]);
                 sp--;
             }
+        }
+        if (sp != 1) {
+            return 0u;
         }
         vals = (uint8_t)(vals | (st[0] == RT ? 1u : st[0] == RF ? 2u : 4u));
     }
@@ -2653,6 +2695,7 @@ static void test_classifier(void)
                 }
                 we_program_dependents(p, (uint8_t)out, WE_TENANT_FRESH, &rc, 1);
                 exact = exact_values(p, R, (uint8_t)out);
+                CHECK(exact != 0u, "[D2] %s out 0x%02x: the reference ran the program to exactly one value", rules[i], out);
                 if (R->action == WE_ACT_ALLOW) {
                     CHECK(!((exact & 4u) && !(rc.values & 4u)), "[D2] %s out 0x%02x: never omits captures", rules[i], out);
                 } else {
@@ -2660,6 +2703,316 @@ static void test_classifier(void)
                           rules[i], out);
                 }
             }
+        }
+    }
+}
+
+/* ======================================================================================================
+ * C1-C4, C11, C14: a family the plane does not cover (FORMAT.md section 2). The standard world with tor
+ * in PS_UNC6: its IPv4 records, IPv6 not covered. Every verdict is held to the reference, which reads the
+ * fifth unknown case from POLICY.md's text, and the rows assert rules that tell U from F.
+ * ==================================================================================================== */
+
+#define V6_PROBE (((__uint128_t)0x20010db8u << 96) | 1u)           /* 2001:db8::1 */
+
+static int cov_case(const char *const *lines, int n, int v6, uint32_t a4, const char *row, const char *what,
+                    we_verdict_t *v)
+{
+    const we_program_t *p = ctxprog(lines, n);
+    scen_t s;
+
+    if (p == NULL) {
+        return 0;
+    }
+    scen_init(&s, &W, EMPTY_FLOOR, p, a4);
+    s.hh = HH;
+    if (v6) {
+        addr6(&s.req.floor, V6_PROBE);
+        s.req.server = s.req.floor;
+        s.req.hold_harmless_eligible = 0u;  /* 2001:db8::/32 is on the hold-harmless list; judge it anyway */
+    }
+    return agree(&s, row, what, v);
+}
+
+/* a copy of a tenant map with `uncovered` forced past both barriers (the loader and we_handle_publish_map) */
+static const we_map_t *cov_forced(const we_map_t *m, uint8_t unc)
+{
+    we_map_t *c = (we_map_t *)(void *)region(sizeof(we_map_t), 0);
+
+    *c = *m;
+    c->uncovered = unc;
+    ro(c, sizeof *c);
+    return c;
+}
+
+/* the tenant world under a forced or a plain fresh map: the same verdict, field for field */
+static int cov_tenant_pair(const char *const *lines, int n, int state, uint32_t floor_a, uint32_t server_a,
+                           const we_map_t *forced, const char *what)
+{
+    const we_program_t *p = ctxprog(lines, n);
+    const we_map_t *keep;
+    scen_t s;
+    we_verdict_t a, b;
+    char fa[4096], fb[4096];
+    int slot = state == PS_STALE ? 1 : 0;
+
+    if (p == NULL) {
+        return 0;
+    }
+    scen_init(&s, &TW, EMPTY_FLOOR, p, floor_a);
+    s.hh = HH;
+    addr4(&s.req.server, server_a);
+    TW.state[7] = state;
+    run(&s, &a);
+    keep = TW.map[7][slot];
+    TW.map[7][slot] = forced;
+    run(&s, &b);
+    TW.map[7][slot] = keep;
+    TW.state[7] = PS_FRESH;
+    fmt_verdict(&a, fa, sizeof fa);
+    fmt_verdict(&b, fb, sizeof fb);
+    CHECK(same_verdict(&a, &b), "[C14] %s: with uncovered forced the evaluator says `%s`, with 0 `%s`", what, fb, fa);
+    return same_verdict(&a, &b);
+}
+
+static void test_coverage(void)
+{
+    we_verdict_t v;
+    int was = W.state[1];
+
+    SECTION("C1-C4: tor stated for IPv4, not covered for IPv6");
+    W.state[1] = PS_UNC6;
+    {
+        const char *a[1] = { "deny if not tor_exit" };
+        const char *b[1] = { "log if tor_exit is unknown" };
+        const char *c[1] = { "deny if tor_exit" };
+
+        cov_case(a, 1, 0, A_F, "C1", "deny if not tor_exit, IPv4 absent", &v);
+        CHECK(v.action == WE_ACT_DENY && v.rule == 1u, "[C1] a stated family's absence is FALSE: deny if not tor_exit fires");
+        cov_case(b, 1, 0, A_F, "C1", "log if tor_exit is unknown, IPv4", &v);
+        CHECK((v.log_fired[1][0] & 1u) == 0u, "[C1] tor_exit is unknown is FALSE for a stated family");
+        cov_case(c, 1, 0, A_T, "C1", "deny if tor_exit, IPv4 listed", &v);
+        CHECK(v.action == WE_ACT_DENY, "[C1] the IPv4 exit is still TRUE");
+    }
+    {
+        const char *a[1] = { "deny if not tor_exit" };
+        const char *b[2] = { "allow if not tor_exit", "deny if not c2" };
+        const char *c[2] = { "log if tor_exit", "log if tor_exit is unknown" };
+        const char *d[3] = { "@partners 64496", "allow if tor_exit or asn in @partners", "deny if not c2" };
+
+        cov_case(a, 1, 1, A_F, "C2", "deny if not tor_exit, IPv6", &v);
+        CHECK(v.action == WE_ACT_ALLOW && v.rule == 0u, "[C2] deny if not tor_exit does not fire on a not-covered family");
+        cov_case(b, 2, 1, A_F, "C2", "allow if not tor_exit, IPv6", &v);
+        CHECK(v.reason == WE_WHY_ALLOW_BY_UNKNOWN && v.rule == 1u && v.unknown_plane == WE_PLANE_TOR,
+              "[C2] allow if not tor_exit ends allow-by-unknown, naming tor");
+        cov_case(c, 2, 1, A_F, "C2", "is unknown after a fill, IPv6", &v);
+        CHECK(v.log_fired[1][0] == 0x02u, "[C2] after the fill, tor_exit is unknown fires and tor_exit does not");
+        {
+            const char *e[1] = { "deny if tor_exit" };
+
+            /* C9, structurally: a fill of a not-covered family makes no lookup, reads one line of the map's
+             * descriptor (D = 1: the line generation, valid_until_ms and uncovered share; no we_fam_t) and
+             * leaves the plane UNKNOWN */
+            const we_map_t *tm = W.map[WE_PLANE_TOR - 1u][4];
+
+            trace_reset();
+            trace_on = 1;
+            cov_case(e, 1, 1, A_F, "C9", "deny if tor_exit, IPv6", &v);
+            trace_on = 0;
+            CHECK(trace_lines(tm, (const uint8_t *)tm + sizeof *tm) == 1,
+                  "[C9] the not-covered fill reads exactly one line of tor's map descriptor (%d)",
+                  trace_lines(tm, (const uint8_t *)tm + sizeof *tm));
+            CHECK(trace_lines(tm->base, (const uint8_t *)tm->base + tm->len) == 0,
+                  "[C9] and nothing of tor's plane buffer (%d lines)", trace_lines(tm->base, (const uint8_t *)tm->base + tm->len));
+            CHECK(v.lookups[0][WE_PLANE_TOR - 1u] == 0u && v.lookups[1][WE_PLANE_TOR - 1u] == 0u,
+                  "[C9] the not-covered fill runs no find (%u, %u)", v.lookups[0][WE_PLANE_TOR - 1u],
+                  v.lookups[1][WE_PLANE_TOR - 1u]);
+            CHECK(ectx->slot[0].state[WE_PLANE_TOR - 1u] == WE_ST_UNKNOWN,
+                  "[C9] and leaves the plane UNKNOWN in the memo (state %u)", ectx->slot[0].state[WE_PLANE_TOR - 1u]);
+            trace_reset();
+            trace_on = 1;
+            cov_case(e, 1, 0, A_F, "C9", "deny if tor_exit, IPv4", &v);
+            trace_on = 0;
+            CHECK(trace_lines(tm->base, (const uint8_t *)tm->base + tm->len) > 0,
+                  "[C9] control: the stated family's fill reads tor's plane buffer (%d lines)",
+                  trace_lines(tm->base, (const uint8_t *)tm->base + tm->len));
+            CHECK(v.lookups[0][WE_PLANE_TOR - 1u] + v.lookups[1][WE_PLANE_TOR - 1u] == 1u,
+                  "[C9] the stated family's fill runs exactly one find");
+        }
+        cov_case(d, 3, 1, A_F, "C2", "the capture, a non-partner IPv6", &v);
+        CHECK(v.reason == WE_WHY_ALLOW_BY_UNKNOWN && v.rule == 1u && v.unknown_plane == WE_PLANE_TOR,
+              "[C2] allow if tor_exit or asn in @partners captures a non-partner IPv6 request");
+    }
+    {
+        const char *a[1] = { "log if tor_exit is unknown" };
+
+        cov_case(a, 1, 1, A_F, "C3", "is unknown on an unfilled slot, IPv6", &v);
+        CHECK((v.log_fired[1][0] & 1u) != 0u, "[C3] tor_exit is unknown, never filled, fires for IPv6");
+        cov_case(a, 1, 0, A_F, "C3", "is unknown on an unfilled slot, IPv4", &v);
+        CHECK((v.log_fired[1][0] & 1u) == 0u, "[C3] and does not for IPv4");
+    }
+    {
+        const char *peek[2] = { "allow if tor_exit is unknown and asn == 64496", "deny if not c2" };
+        const char *fill[3] = { "@partners 64496", "allow if tor_exit or asn in @partners", "deny if not c2" };
+        int rs = W.state[3];
+
+        W.state[3] = PS_STALE;            /* routing stale: asn reads U, so the rule is U and the mark is taken */
+        cov_case(peek, 2, 1, A_F, "C3b", "the mark, tor peek-only, IPv6", &v);
+        CHECK(v.reason == WE_WHY_ALLOW_BY_UNKNOWN && v.unknown_plane == WE_PLANE_TOR,
+              "[C3b] the mark's peek names tor, the lowest-id plane out for IPv6 (got plane %u)", v.unknown_plane);
+        cov_case(fill, 3, 1, A_F, "C3b", "the mark, tor filled first, IPv6", &v);
+        CHECK(v.reason == WE_WHY_ALLOW_BY_UNKNOWN && v.unknown_plane == WE_PLANE_TOR,
+              "[C3b] filled first, the mark names tor (got plane %u)", v.unknown_plane);
+        W.state[3] = rs;
+    }
+    {
+        const char *a[1] = { "deny if not tor_exit" };
+        const char *c[1] = { "deny if tor_exit" };
+        const we_program_t *p = ctxprog(a, 1), *q = ctxprog(c, 1);
+        scen_t s;
+
+        /* ::ffff:21.0.1.1 and ::ffff:21.0.0.1: canonicalised to IPv4 before the family is tested */
+        if (p != NULL && q != NULL) {
+            scen_init(&s, &W, EMPTY_FLOOR, p, A_F);
+            s.hh = HH;
+            addr6(&s.req.floor, ((__uint128_t)0xffffu << 32) | A_F);
+            s.req.server = s.req.floor;
+            agree(&s, "C4", "deny if not tor_exit, ::ffff:21.0.1.1", &v);
+            CHECK(v.action == WE_ACT_DENY, "[C4] a mapped address takes its IPv4 answer, never U");
+            s.ctx = q;
+            addr6(&s.req.floor, ((__uint128_t)0xffffu << 32) | A_T);
+            s.req.server = s.req.floor;
+            agree(&s, "C4", "deny if tor_exit, ::ffff:21.0.0.1", &v);
+            CHECK(v.action == WE_ACT_DENY, "[C4] the mapped IPv4 exit reads TRUE");
+        }
+    }
+    W.state[1] = was;
+
+    SECTION("C11: the per-family line and the uncovered-family report");
+    {
+        static const struct { const char *l[3]; int n; const char *want; } rows[] = {
+            { { "@partners 64496", "allow if tor_exit or asn in @partners", "deny if not c2" }, 3,
+              "plane tor does not cover IPv6: rule 1 allow captures; rule 2 disarmed" },
+            { { "log if tor_exit" }, 1, "plane tor does not cover IPv6: rule 1 disarmed" },
+            { { "deny if tor_exit" }, 1, "plane tor does not cover IPv6: rule 1 disarmed" },
+            { { "log if tor_exit is unknown" }, 1, "plane tor does not cover IPv6: rule 1 fires on every IPv6 request" },
+            { { "deny if listed >= high" }, 1, "plane tor does not cover IPv6: none" },
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof rows / sizeof rows[0]; i++) {
+            const we_program_t *p = ctxprog(rows[i].l, rows[i].n);
+            char line[512];
+
+            line[0] = '\0';
+            if (p != NULL) {
+                we_program_family_line(p, 0u, WE_TENANT_FRESH, WE_PLANE_TOR, 6, line, sizeof line);
+            }
+            CHECK(strcmp(line, rows[i].want) == 0, "[C11] %s: `%s`, want `%s`", rows[i].l[rows[i].n - 1], line,
+                  rows[i].want);
+        }
+        {
+            const we_program_t *p = ctxprog(rows[3].l, 1);
+            char line[512];
+
+            CHECK(p != NULL && we_program_dependents_line(p, 0x02u, WE_TENANT_FRESH, "plane tor stale", line, sizeof line) > 0
+                  && strcmp(line, "plane tor stale: rule 1 narrowed") == 0,
+                  "[C11] the plane-state line is unchanged: `is unknown` under a stale plane stays narrowed");
+            CHECK(p != NULL && we_program_family_line(p, 0u, WE_TENANT_FRESH, WE_PLANE_TENANT, 6, line, sizeof line) > 0
+                  && we_program_family_line(p, 0u, WE_TENANT_FRESH, 0u, 6, line, sizeof line) == -1
+                  && we_program_family_line(p, 0u, WE_TENANT_FRESH, WE_PLANE_TOR, 5, line, sizeof line) == -1,
+                  "[C11] a bad plane or family is refused");
+        }
+        {
+            static const char *const rules[] = {
+                "allow if tor_exit or proxy", "deny if not tor_exit", "log if tor_exit is unknown or c2",
+                "allow if not tor_exit and proxy", "deny if (tor_exit or proxy) and (c2 or not spam)",
+            };
+
+            for (i = 0; i < sizeof rules / sizeof rules[0]; i++) {
+                const we_program_t *p = prog1(rules[i]);
+                const we_rule_t *R;
+                we_rule_class_t rc;
+                uint8_t exact;
+
+                if (p == NULL) {
+                    continue;
+                }
+                R = (const we_rule_t *)(const void *)((const uint8_t *)p + p->rules_off);
+                /* out4 = {} and out6 = {tor}: the brute force agrees with the value set under each */
+                we_program_dependents(p, 0x02u, WE_TENANT_FRESH, &rc, 1);
+                exact = exact_values(p, R, 0x02u);
+                CHECK(R->action == WE_ACT_ALLOW ? !((exact & 4u) && !(rc.values & 4u)) : !((exact & 1u) && !(rc.values & 1u)),
+                      "[C11] %s under out6: the classifier is sound against the brute force", rules[i]);
+                we_program_dependents(p, 0x00u, WE_TENANT_FRESH, &rc, 1);
+                CHECK(rc.dependent == 0u, "[C11] %s under out4 (nothing out): unaffected", rules[i]);
+            }
+        }
+        {
+            const char *mixed[3] = { "@partners 64496", "allow if tor_exit or asn in @partners", "deny if not c2" };
+            const char *iu[1] = { "allow if tor_exit is unknown" };
+            const char *ok[2] = { "allow if asn in { 64496 }", "deny if tor_exit" };
+
+            report_len = 0u;
+            if (report_buf != NULL) {
+                report_buf[0] = '\0';
+            }
+            (void)ctxprog(mixed, 3);
+            CHECK(report_buf != NULL && strstr(report_buf, "report ctx http/server:a 1 uncovered-family tor,ipv6\n") != NULL,
+                  "[C11] an allow mixing tor_exit with a term that does not read tor gets the uncovered-family report");
+            report_len = 0u;
+            report_buf[0] = '\0';
+            (void)ctxprog(iu, 1);
+            CHECK(strstr(report_buf, "1 uncovered-family tor,ipv6\n") != NULL,
+                  "[C11] allow if tor_exit is unknown gets it too: it allows every IPv6 request");
+            report_len = 0u;
+            report_buf[0] = '\0';
+            (void)ctxprog(ok, 2);
+            CHECK(strstr(report_buf, "uncovered-family") == NULL, "[C11] a rule that does not read tor gets none");
+        }
+    }
+
+    SECTION("C14: the tenant arm's order is unchanged, fill and peek, with uncovered forced");
+    {
+        const char *a1[2] = { "allow if tenant_allow", "deny if listed >= low" };
+        const char *a2[1] = { "deny if tenant_deny" };
+        const char *a3[2] = { "allow if tenant_allow is unknown", "deny if listed >= low" };
+        const char *a4[2] = { "allow if tenant_allow is unknown and asn == 64496", "deny if listed >= low" };
+        const we_map_t *fresh = cov_forced(TW.map[7][0], (uint8_t)(WE_UNCOVERED_V4 | WE_UNCOVERED_V6));
+        const we_map_t *stale = cov_forced(TW.map[7][1], (uint8_t)(WE_UNCOVERED_V4 | WE_UNCOVERED_V6));
+        scen_t s;
+        const we_program_t *p;
+
+        cov_tenant_pair(a1, 2, PS_FRESH, TA, TA, fresh, "fresh: allow if tenant_allow, the pre-stage");
+        cov_tenant_pair(a2, 1, PS_FRESH, TD, TD, fresh, "fresh: deny if tenant_deny");
+        cov_tenant_pair(a1, 2, PS_STALE, TA, TA, stale, "stale: the bounded occurrence");
+        cov_tenant_pair(a3, 2, PS_FRESH, TX, TA, fresh, "fresh: is unknown on an unfilled server slot (peek)");
+        cov_tenant_pair(a4, 2, PS_FRESH, TX, TA, fresh, "fresh: the mark's peek");
+        /* a stale tenant on an unfilled slot keeps `is unknown` TRUE, through the atom's peek and the mark's */
+        p = ctxprog(a3, 2);
+        if (p != NULL) {
+            scen_init(&s, &TW, EMPTY_FLOOR, p, TX);
+            s.hh = HH;
+            addr4(&s.req.server, TA);
+            TW.state[7] = PS_STALE;
+            agree(&s, "C14", "stale tenant, is unknown, peek-only", &v);
+            CHECK(v.action == WE_ACT_ALLOW && v.rule == 1u, "[C14] a stale tenant on an unfilled slot: is unknown is TRUE");
+            TW.state[7] = PS_FRESH;
+        }
+        p = ctxprog(a4, 2);
+        if (p != NULL) {
+            int rs = TW.state[3];
+
+            scen_init(&s, &TW, EMPTY_FLOOR, p, TX);
+            s.hh = HH;
+            addr4(&s.req.server, TA);
+            TW.state[7] = PS_STALE;
+            TW.state[3] = PS_STALE;
+            agree(&s, "C14", "stale tenant, the mark's peek", &v);
+            CHECK(v.reason == WE_WHY_ALLOW_BY_UNKNOWN && v.unknown_plane == WE_PLANE_ROUTING,
+                  "[C14] the mark: tenant is unknown TRUE, asn U, routing named (got plane %u)", v.unknown_plane);
+            TW.state[7] = PS_FRESH;
+            TW.state[3] = rs;
         }
     }
 }
@@ -4725,6 +5078,7 @@ typedef struct {
     int       has_conf[2];
     we_ctx_conf_t conf[2];   /* [0] floor, [1] ctx */
     int       stale[8];      /* the seven non-tenant planes */
+    int       unc[8];        /* the family a plane does not cover: 0, 4 or 6 (FORMAT.md section 2) */
     int       tenant;
     uint64_t  now, vu;
     char      addr[2][64];
@@ -4837,6 +5191,7 @@ static void cs_patch(uint8_t *r, uint32_t plane, int fam, const uint64_t *f)
  * record, which is the clamps' whole point, so the map is built and loaded with zeroed records and the
  * case's bytes are written into the loaded copy afterwards, as the M4 rows patch theirs.
  */
+#define CS_UNC6 0x100u
 static const we_map_t *cs_map(uint32_t plane, uint64_t gen, uint64_t vu, const cs_ent_t *e, int ne)
 {
     uint8_t key[512];
@@ -4853,8 +5208,10 @@ static const we_map_t *cs_map(uint32_t plane, uint64_t gen, uint64_t vu, const c
     we_map_t tmp, *desc;
     we_load_detail_t det;
     static int seq = 0;
+    int unc6 = (plane & CS_UNC6) != 0u;
 
-    key[kl++] = (uint8_t)plane;
+    plane &= 0xffu;
+    key[kl++] = (uint8_t)(plane | (unc6 ? 0x80u : 0u));
     memcpy(key + kl, &gen, 8);
     kl += 8u;
     memcpy(key + kl, &vu, 8);
@@ -4863,8 +5220,8 @@ static const we_map_t *cs_map(uint32_t plane, uint64_t gen, uint64_t vu, const c
         __uint128_t kk = cs_key(&e[k].a, plane);
         int fam = e[k].a.family;
 
-        if (e[k].r == NULL || !e[k].r->has || e[k].r->none) {
-            continue;
+        if (e[k].r == NULL || !e[k].r->has || e[k].r->none || (fam == 6 && unc6)) {
+            continue;                       /* a not-covered family carries no record */
         }
         for (j = 0; j < (fam == 4 ? n4 : n6); j++) {
             if ((fam == 4 ? s4[j] : s6[j]) == kk) {
@@ -4922,6 +5279,7 @@ static const we_map_t *cs_map(uint32_t plane, uint64_t gen, uint64_t vu, const c
     p.v6.start = s6;
     p.v6.end = s6;
     p.v4.kind = p.v6.kind = WE_KIND_NONE;
+    p.v6_coverage = (uint8_t)(unc6 ? WE_COV_NOT_COVERED : WE_COV_STATED);
     if (p.format == WE_FORMAT_1) {
         p.v4.sev = zeros;
         p.v6.sev = zeros;
@@ -4934,7 +5292,9 @@ static const we_map_t *cs_map(uint32_t plane, uint64_t gen, uint64_t vu, const c
         CHECK(0, "[cases] the writer built plane %u", plane);
         return NULL;
     }
-    snprintf(path, sizeof path, "%s/case-%d.bin", TMP, seq++ & 7);
+    /* per process: the lookup gate runs test_policy --cases beside check-policy's own runs in one TMP, and a
+     * shared name let one process unlink the file another had just written */
+    snprintf(path, sizeof path, "%s/case-%ld-%d.bin", TMP, (long)getpid(), seq++ & 7);
     if (ww_save(path, buf, len) != 0) {
         free(buf);
         CHECK(0, "[cases] saved %s", path);
@@ -5529,7 +5889,16 @@ static void cs_views(const cs_case_t *c, const cs_ent_t ent[9][2], int force_pla
             continue;
         }
         st = force_plane == (int)p ? force_state : c->stale[p];
-        view[p - 1u] = st == 2 ? cs_gen0(cs_map(p, 7u, 0u, ent[p], 2)) : cs_map(p, 7u, st ? c->now - 1u : 0u, ent[p], 2);
+        if (c->unc[p] != 0 && !we_coverage_allowed(p, c->unc[p])) {
+            view[p - 1u] = NULL;          /* a cell the reader's table refuses: a refused load, read as stale */
+            continue;
+        }
+        {
+            /* CS_UNC6 in the plane argument: the map leaves IPv6 not covered */
+            uint32_t pk = p | (c->unc[p] == 6 ? CS_UNC6 : 0u);
+
+            view[p - 1u] = st == 2 ? cs_gen0(cs_map(pk, 7u, 0u, ent[p], 2)) : cs_map(pk, 7u, st ? c->now - 1u : 0u, ent[p], 2);
+        }
     }
 }
 
@@ -5954,13 +6323,18 @@ static int run_cases(const char *path)
                 c.conf[x].allow_inferred = (uint8_t)a;
             }
         } else if (strcmp(line, "plane") == 0) {
-            char n[32], st[16];
+            char n[32], st[16], cov[16];
+            int got = sscanf(rest, "%31s %15s %15s", n, st, cov);
 
-            if (sscanf(rest, "%31s %15s", n, st) == 2) {
+            if (got >= 2) {
                 int pid = cs_plane_id(n);
 
                 if (pid >= 1 && pid <= 7) {
                     c.stale[pid] = strcmp(st, "fresh") == 0 ? 0 : strcmp(st, "gen0") == 0 ? 2 : 1;
+                    c.unc[pid] = got == 3 ? (strcmp(cov, "uncovered-v4") == 0 ? 4 : 6) : 0;
+                    if (c.unc[pid] != 0 && !we_coverage_allowed((uint32_t)pid, c.unc[pid]) && c.stale[pid] == 0) {
+                        c.stale[pid] = 1;     /* a refused load: the plane is out, as policy_ref.py reads it */
+                    }
                 }
             }
         } else if (strcmp(line, "tenant") == 0) {
@@ -6373,6 +6747,7 @@ int main(int argc, char **argv)
     test_exhaustive();
     test_state_vectors();
     test_classifier();
+    test_coverage();
     test_revocation();
     test_d_rest();
     test_memo();

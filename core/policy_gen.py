@@ -470,10 +470,16 @@ def write_cases(rng, out, pid, leg, dirs, run, cfg, meta, cid, absent=(), legacy
             out.write('conf floor %d %d\n' % conf_for(rng, dirs, 'http'))
             out.write('conf ctx %d %d\n' % conf_for(rng, dirs, run))
             for i, p in enumerate(nonten):
+                # the reader's one allowed one-family cell (FORMAT.md section 2): tor with IPv6 not covered, in one
+                # case in three, decided by the case id so no draw of the case's own stream moves; a request of
+                # either family meets it, so out4 and out6 differ on the same program
+                unc = ' uncovered-v6' if (p, 6) in R.COVERAGE_ALLOWED and cid % 3 == 0 else ''
                 if mask >> i & 1:
                     # one unknown plane in four is a generation-0 map, which still carries its records:
                     # an evaluator that reads them (or the template) as definite disagrees (D-ae)
-                    out.write('plane %s %s\n' % (R.PLANES[p - 1], 'gen0' if rng.chance(1, 4) else 'stale'))
+                    out.write('plane %s %s%s\n' % (R.PLANES[p - 1], 'gen0' if rng.chance(1, 4) else 'stale', unc))
+                elif unc:
+                    out.write('plane %s fresh%s\n' % (R.PLANES[p - 1], unc))
             out.write(tenant_line(rng, tst) + '\n')
             fa = draw_addr(rng)
             if rng.chance(1, 4):

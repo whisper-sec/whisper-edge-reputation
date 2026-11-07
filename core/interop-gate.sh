@@ -83,13 +83,22 @@ check_plane() {
     stage "$bin" "$dir/$plane.bin"
 
     got_sha=$(sha256sum "$bin" | cut -d' ' -f1)
-    if ! python3 - "$man" "$got_sha" "$plane" <<'PY'
+    if ! python3 - "$man" "$got_sha" "$plane" "$bin" <<'PY'
 import json, sys
 m = json.load(open(sys.argv[1]))
 if m.get("sha256") != sys.argv[2]:
     sys.exit("manifest sha256 %s, the file is %s" % (m.get("sha256"), sys.argv[2]))
 if m.get("name") != sys.argv[3]:
     sys.exit("manifest names plane %r, the file is %s.bin" % (m.get("name"), sys.argv[3]))
+# the per-family coverage (FORMAT.md section 2): a family's byte is 0 exactly when the manifest's
+# `families` says stated or says nothing, the one rule every reader of the two applies
+hdr = open(sys.argv[4], "rb").read(192)
+if int.from_bytes(hdr[8:12], "little") == 2:
+    fam = m.get("families") or {}
+    for i, f in enumerate(("v4", "v6")):
+        word = fam.get(f, "stated")
+        if (hdr[176 + i] == 0) != (word == "stated"):
+            sys.exit("families.%s is %r, the header's byte %d is %d" % (f, word, 176 + i, hdr[176 + i]))
 PY
     then
         echo "INTEROP GATE: FAILED - $label: the manifest does not describe this file"

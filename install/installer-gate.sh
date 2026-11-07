@@ -256,6 +256,15 @@ render_rows() {
       && pass "the control: a $i translation that merges two rules fails the check" \
       || fail "the merge control ($i)" "a rendering with two rules on one line passed"
   done
+  # W36: --log-only renders the same drop-in with the mode line in log and no other byte moved
+  for i in nginx apache; do
+    t=$(render "$i" WHISPER_EDGE_DIR=/var/lib/whisper-edge) || true
+    l=$(render "$i" WHISPER_EDGE_DIR=/var/lib/whisper-edge WHISPER_EDGE_LOG_ONLY=1) || true
+    d=$(printf '%s\n' "$t" | sed 1d | sed 's/^whisper_edge_mode deny;$/whisper_edge_mode log;/; s/^WhisperEdgeMode deny$/WhisperEdgeMode log/')
+    { [ "$(printf '%s\n' "$l" | sed 1d)" = "$d" ] && [ "$d" != "$(printf '%s\n' "$t" | sed 1d)" ]; } \
+      && pass "W36: the $i drop-in under --log-only is the same file with its mode line in log" \
+      || fail "W36: the $i --log-only rendering" "$(printf '%s\n' "$l" | grep -i mode)"
+  done
   t=$(render litespeed WHISPER_EDGE_DIR=/var/lib/whisper-edge) || true
   why=$(check_translation litespeed "$t")
   { [ -z "$why" ] && hasline "$t" 'module mod_whisper_edge {' && hasline "$t" '    whisper_edge_data /var/lib/whisper-edge'; } \
@@ -304,6 +313,50 @@ render_rows() {
   { hasline "$t" 'LimitMEMLOCK=69206016' && hasline "$t" '[Service]'; } \
     && pass "the LimitMEMLOCK drop-in carries the computed value under [Service]" \
     || fail "the LimitMEMLOCK drop-in" "$t"
+  # A unit whose sandbox hides /proc/sys (Ubuntu 26.04's apache2.service sets ProcSubset=pid) gets
+  # the boot id from systemd's %b; with the memory lock alone the drop-in is the earlier release's bytes
+  t=$(render unit-dropin WHISPER_EDGE_INSTALL_TEST_BOOTID=1) || true
+  m=$(render unit-dropin WHISPER_EDGE_INSTALL_TEST_BOOTID=1 WHISPER_EDGE_INSTALL_TEST_MEMLOCK=69206016) || true
+  o=$(render unit-dropin WHISPER_EDGE_INSTALL_TEST_MEMLOCK=69206016) || true
+  { hasline "$t" '[Service]' && hasline "$t" 'Environment=WHISPER_EDGE_BOOT_ID=%b' && ! says "$t" '^LimitMEMLOCK=' \
+    && hasline "$m" 'Environment=WHISPER_EDGE_BOOT_ID=%b' && hasline "$m" 'LimitMEMLOCK=69206016' \
+    && [ "$o" = "$(render memlock WHISPER_EDGE_INSTALL_TEST_MEMLOCK=69206016)" ] && ! says "$o" 'WHISPER_EDGE_BOOT_ID'; } \
+    && pass "the unit drop-in passes the boot id as systemd's %b (alone, or beside the memory lock), and the memory lock alone is the earlier drop-in's bytes" \
+    || fail "the unit drop-in" "$t / $m / $o"
+  if command -v systemd-analyze >/dev/null 2>&1; then
+    printf '[Unit]\nDescription=x\n[Service]\nExecStart=/bin/true\n' > "$W/bootid-check.service"
+    printf '%s\n' "$t" | sed '1,2d' >> "$W/bootid-check.service"
+    _sv=$(systemd-analyze verify "$W/bootid-check.service" 2>&1 || :)
+    case "$_sv" in
+      *WHISPER_EDGE_BOOT_ID*|*Environment*|*specifier*) fail "systemd reads the boot id line" "$_sv" ;;
+      *) pass "systemd-analyze verify reads the boot id line and its %b specifier without a complaint" ;;
+    esac
+  else
+    skip "the boot id line under systemd-analyze" "systemd-analyze is not on this host"
+  fi
+  # the SELinux context an undo sets back: only a context's shape; uutils' stat (Ubuntu 26.04) prints its
+  # error, "unsupported for this operating system", as the context and exits 0, and a restore once wrote
+  # that back as the file's security.selinux
+  _cb=""
+  for c in "system_u:object_r:httpd_config_t:s0" "unconfined_u:object_r:user_home_t:s0-s0:c0.c1023" "u:r:t"; do
+    [ "$(render se-ctx WHISPER_EDGE_INSTALL_TEST_CTX="$c")" = context ] || _cb="$_cb [$c refused]"
+  done
+  for c in "" "-" "?" "unsupported for this operating system" "system_u:object_r" "a:b:c;rm -rf /" "a:b:c d" "a:b:\$(x)"; do
+    [ "$(render se-ctx WHISPER_EDGE_INSTALL_TEST_CTX="$c")" = none ] || _cb="$_cb [$c taken]"
+  done
+  [ -z "$_cb" ] && pass "the undo sets back only a context's shape (user:role:type[:range]); a tool's message, ?, - and a part are never written as security.selinux" \
+    || fail "the SELinux context guard" "$_cb"
+  # the kept copy's reader, taken from the installer's own text and run on a file here
+  printf 'x\n' > "$W/ctx-probe"
+  sed -n "/^OWNER_READ='/,/>&3'\$/p" "$INSTALL" > "$W/owner-read.sh"
+  _rc=$( . "$W/owner-read.sh"; sh -c "$OWNER_READ" sh "$W/ctx-probe" 3>&1 >/dev/null | cut -d' ' -f2-)
+  _sc=$(stat -c %C -- "$W/ctx-probe" 2>/dev/null | sed -n 1p)
+  if [ "$(render se-ctx WHISPER_EDGE_INSTALL_TEST_CTX="$_sc")" = context ]; then
+    [ "$_rc" = "$_sc" ] && pass "the kept copy's reader records this host's context ($_sc)" || fail "the kept copy's reader on a labelled host" "recorded '$_rc', stat says '$_sc'"
+  else
+    [ "$_rc" = - ] && pass "the kept copy's reader records - where stat prints no context ('$_sc'), never the text itself" \
+      || fail "the kept copy's reader on an unlabelled host" "recorded '$_rc' from stat's '$_sc'"
+  fi
 
   # the options: a bad one is one line and the usage, exit 2
   for a in "--bogus" "--server iis" "--dir relative/path" "--dir"; do
@@ -595,7 +648,7 @@ dry() { keep dry_run "$@"; }
 # prefixes, a line of a paste block (two spaces and text, or deeper), the stop line, or the line to watch.
 # A child's raw line (the refresh's "installed ...", a "whisper-edge-refresh:" alarm, curl's own words)
 # matches none, so a raw line leaking through fails here; the installer re-says each one under a prefix.
-REPORT_LINE='^$|^(== (detected|armed|applied|proved|undo)|install\.sh: .*|  [^ ].*|    .*|watch: .* the cycle is T the timer period in s, D the signed cadenceSeconds, A the publication lag \(not measured by this run\), F the refresh fetch budget in s|   (\(nothing\)|already present: .*|wrote .* \(.*, [0-9]+ lines\)|would (write|create|install|enable|make|fetch|leave|stop) .*|would run: .*|enabled whisper-edge-refresh@[a-z-]+\.timer \(.*\).*|signing key: .*|the feed is fetched over plain http: .*|the (installed )?signing key .* is not the pinned key .*|test hooks active \(a disposable box\):.*|refresh: .*|built whisper-edge-(lookup|summary) in .*|installed /.*|edited /.*|enabled /.*|undo, (nginx|Apache|OpenLiteSpeed): sh -c .*|to print these lines again: .*|the run ended unexpectedly .*|could not .*|counters: .*|schedule: .*|tenant plane: .*|enrolment: .*|undo, the shared parts \(after every server line\): sh -c .*|by hand, if you want the data gone too: .*|nothing of the web half was written.*|no shared parts were written .*|wrote /.*/policy\.conf \(the default policy, [0-9]+ bytes, to read and edit\)|the resolver half has no undo line.*|recovered an interrupted run \(run\.[0-9TZ.]+\): .*|labelled (the planes in )?/.*|kept your SELinux file context .*|would label (the planes in )?/.*|took back the SELinux file context rule\(s\) this run added .*|restored /.* to its bytes from before the interrupted run|kept /.*|restored /.* from the copy the interrupted run kept; .*|(reputation|rpki-unreachable|tor)( armed, generation [0-9]+, digest [0-9a-f]{16}, valid until .*| withheld by the signed manifest: .*| kept, generation [0-9]+, digest [0-9a-f]{16} \(computed here over the file\).*| is published.*|\.bin was installed for the first time: .*| already current: .*|: .*)|no web server .*|no web configuration to reconcile .*|no plane fetched: .*|BIND .*|(nginx|Apache|OpenLiteSpeed)( [0-9.]+| \(version unknown\))? at .*|(nginx|Apache|OpenLiteSpeed): .*|fs\.protected_hardlinks is .*|another installer run is in progress, started .*|LimitMEMLOCK: .*|zone .*|zone timers enabled, .*|the signed manifest .*|could not fetch the signing key .*|no systemctl here, .*|--no-timer: .*|the earlier .*|disabled the earlier snapshot timer .*|/.* is not a file this installer wrote; .*|/.* is not root.s alone \(.*|/.* is a symbolic link; .*))$'
+REPORT_LINE='^$|^(== (detected|armed|applied|proved|undo)|install\.sh: .*|  [^ ].*|    .*|watch: .* the cycle is T the timer period in s, D the signed cadenceSeconds, A the publication lag \(measured, not by this run: [0-9]+ s, [^)]*\), F the refresh fetch budget in s|   (\(nothing\)|already present: .*|wrote .* \(.*, [0-9]+ lines\)|would (write|create|install|enable|make|fetch|leave|stop) .*|would run: .*|enabled whisper-edge-refresh@[a-z-]+\.timer \(.*\).*|signing key: .*|the feed is fetched over plain http: .*|the (installed )?signing key .* is not the pinned key .*|test hooks active \(a disposable box\):.*|refresh: .*|built whisper-edge-(lookup|summary) in .*|installed /.*|edited /.*|enabled /.*|undo, (nginx|Apache|OpenLiteSpeed): sh -c .*|to print these lines again: .*|the run ended unexpectedly .*|could not .*|counters: .*|schedule: .*|tenant plane: .*|enrolment: .*|undo, the shared parts \(after every server line\): sh -c .*|by hand, if you want the data gone too: .*|nothing of the web half was written.*|no shared parts were written .*|wrote /.*/policy\.conf \(the default policy, [0-9]+ bytes, to read and edit\)|the resolver half has no undo line.*|recovered an interrupted run \(run\.[0-9TZ.]+\): .*|labelled (the planes in )?/.*|kept your SELinux file context .*|would label (the planes in )?/.*|took back the SELinux file context rule\(s\) this run added .*|restored /.* to its bytes from before the interrupted run|kept /.*|restored /.* from the copy the interrupted run kept; .*|(reputation|rpki-unreachable|tor)( armed, generation [0-9]+, digest [0-9a-f]{16}, valid until .*| withheld by the signed manifest: .*| kept, generation [0-9]+, digest [0-9a-f]{16} \(computed here over the file\).*| is published.*|\.bin was installed for the first time: .*| already current: .*|: .*)|no web server .*|no web configuration to reconcile .*|no plane fetched: .*|BIND .*|(nginx|Apache|OpenLiteSpeed)( [0-9.]+| \(version unknown\))? at .*|(nginx|Apache|OpenLiteSpeed): .*|fs\.protected_hardlinks is .*|another installer run is in progress, started .*|LimitMEMLOCK: .*|boot id: .*|zone .*|zone timers enabled, .*|the signed manifest .*|could not fetch the signing key .*|no systemctl here, .*|--no-timer: .*|the earlier .*|disabled the earlier snapshot timer .*|/.* is not a file this installer wrote; .*|/.* is not root.s alone \(.*|/.* is a symbolic link; .*))$'
 stray_line() { # <file>: the first line no shape matches, or nothing
   grep -nvE -- "$REPORT_LINE" "$1" | sed -n 1p || true
 }
@@ -1428,16 +1481,20 @@ bg_wait() { # <pid> -> its exit status, or 124 after 600 s (killed)
 # real binary run underneath. A hand-started server reloads by signal, so the wrapper sees each one.
 RLC="$W/reloads"
 srv_shims() {
-  shim nginx "case \" \$* \" in *' -s reload '*) echo nginx >> '$RLC' ;; esac; exec /usr/sbin/nginx \"\$@\""
-  shim "$APCTL" "case \" \$* \" in *' graceful '*|*' -k graceful '*) echo apache >> '$RLC' ;; esac; exec /usr/sbin/$APCTL \"\$@\""
-  [ "$APDRV" = "$APCTL" ] || shim "$APDRV" "case \" \$* \" in *' -k graceful '*) echo apache >> '$RLC' ;; esac; exec /usr/sbin/$APDRV \"\$@\""
+  shim nginx "case \" \$* \" in *' -s reload '*) echo nginx shim >> '$RLC' ;; esac; exec /usr/sbin/nginx \"\$@\""
+  shim "$APCTL" "case \" \$* \" in *' graceful '*|*' -k graceful '*) echo apache shim:$APCTL >> '$RLC' ;; esac; exec /usr/sbin/$APCTL \"\$@\""
+  [ "$APDRV" = "$APCTL" ] || shim "$APDRV" "case \" \$* \" in *' -k graceful '*) echo apache shim:$APDRV >> '$RLC' ;; esac; exec /usr/sbin/$APDRV \"\$@\""
   for _b in apache2 httpd apachectl a2enconf a2disconf a2query; do if [ -x "/usr/sbin/$_b" ] && [ ! -e "$SH/$_b" ]; then ln -sf "/usr/sbin/$_b" "$SH/$_b"; fi; done
 }
 # Under systemd the installer reloads through the unit, so the counter is a drop-in on the unit that adds
-# one ExecReload line appending to the same file; the server's own reload still runs first.
+# one ExecReload line appending to the same file; the server's own reload still runs first. The line is
+# `+`-prefixed, so it runs outside the unit's sandbox: the counter is the gate's instrument, not the server.
+# Ubuntu 26.04's apache2.service makes /root inaccessible and /home read-only (InaccessiblePaths=/root,
+# ProtectHome=read-only, PrivateTmp=true), so a sandboxed counter writing into this work tree failed, and
+# with it every reload, while the server's own graceful, still sandboxed, was fine.
 unit_counter() { # <unit> <name>
   mkdir -p "/etc/systemd/system/$1.d"
-  printf '[Service]\nExecReload=/bin/sh -c "echo %s >> %s"\n' "$2" "$RLC" > "/etc/systemd/system/$1.d/zz-installer-gate-count.conf"
+  printf '[Service]\nExecReload=+/bin/sh -c "echo %s unit:%s >> %s"\n' "$2" "$1" "$RLC" > "/etc/systemd/system/$1.d/zz-installer-gate-count.conf"
   systemctl daemon-reload
 }
 unit_counters_off() { rm -f /etc/systemd/system/nginx.service.d/zz-installer-gate-count.conf /etc/systemd/system/apache2.service.d/zz-installer-gate-count.conf /etc/systemd/system/httpd.service.d/zz-installer-gate-count.conf; daemon_reload; }
@@ -1458,7 +1515,12 @@ srv_start() { # <unit> <name> <start command...>: through its unit when systemd 
   # Ubuntu's apache2ctl start hands the start to systemd when it runs, so the unit may be what came up
   if [ "$SYSD" = 1 ] && systemctl is-active --quiet "$_u" 2>/dev/null && ! grep -qF -- "$RLC" "/etc/systemd/system/$_u.d/zz-installer-gate-count.conf" 2>/dev/null; then unit_counter "$_u" "$_nm"; fi
 }
-reloads() { _rn=$(grep -c "^$1\$" "$RLC" 2>/dev/null) || :; echo "${_rn:-0}"; }   # grep -c prints 0 AND fails on none
+reloads() { _rn=$(grep -cE "^$1( |\$)" "$RLC" 2>/dev/null) || :; echo "${_rn:-0}"; }   # grep -c prints 0 AND fails on none
+# Which counter saw each reload: every line is "<server> <source>", the source being the wrapped binary
+# (shim:apache2ctl) or the unit's ExecReload drop-in (unit:apache2.service). Two counts then say whether
+# the installer reloaded twice through one path or one reload reached both counters (a run once showed
+# reloads=2 with nothing to tell them apart). Printed next to every count a row fails on.
+reload_by() { _rb=$(grep -E "^$1( |\$)" "$RLC" 2>/dev/null | cut -d' ' -f2- | tr '\n' ',' | sed 's/,$//') || :; [ -z "$_rb" ] || printf ' [by %s]' "$_rb"; }
 srv_run() { # [env...]: the installer for real, the real servers visible through the counting wrappers
   env PATH="$SH:/usr/sbin:/usr/bin:/sbin:/bin" WHISPER_EDGE_RESOLVE="$RES" WHISPER_EDGE_SERVER="${SRVSEL:-}" "$@" sh "$INSTALL" --base "$FEED"
 }
@@ -1628,6 +1690,49 @@ stale_counter_row() {
     || fail "a stale gate counter drop-in" "clean start before: ${pre:-nothing}; after: ${post:-nothing}; teardown said: $(printf '%s' "$so" | head -2 | tr '\n' ';'); file: $([ -e "$sdf" ] && echo left || echo gone)"
   rm -f "$sdf"; [ "$sdx" = 0 ] || rmdir "$sd" 2>/dev/null || :
 }
+# W36, one server's mode rows: from a box with nothing installed, --log-only, a plain re-run, --arm-deny,
+# --log-only again; then the control, an installer that does not read the drop-in's mode, whose plain re-run
+# arms deny on the host the admin put in log; then the first run's undo line takes it all back.
+mode_rows() { # <nginx|apache> <the drop-in> <its log line> <its deny line> <the record's trees>
+  _ms=$1; _md=$2; _ml=$3; _mdn=$4; _mt=$5
+  _mn=$(case $_ms in nginx) echo nginx ;; *) echo Apache ;; esac)
+  _mm() { grep -qx "$_ml" "$_md" && echo log || { grep -qx "$_mdn" "$_md" && echo deny; } || echo none; }
+  : > "$RLC"; _m0=$(record $_mt)
+  out=$(keep srv_run WHISPER_EDGE_LOG_ONLY=1) && rc=0 || rc=$?; _mout=$out
+  { [ "$rc" = 0 ] && [ "$(_mm)" = log ] && [ "$(reloads $_ms)" = 1 ] && says "$out" "$_mn: confirmed by the module: worker pid" \
+    && says "$out" "$_mn: the policy is in log mode, which denies nothing; to deny, after reading what it logs: sudo .*/install.sh --server $_ms --arm-deny"; } \
+    && pass "W36: $_ms --log-only: the same four rules in log mode, tested, one reload, confirmed by the module, and the report names the line that arms deny" \
+    || fail "W36: $_ms --log-only" "rc=$rc mode=$(_mm) reloads=$(reloads $_ms)$(reload_by $_ms) $(printf '%s\n' "$out" | grep -E "^ *$_mn: " | head -4 | cut -c1-220)"
+  out=$(keep srv_run) && rc=0 || rc=$?
+  { [ "$rc" = 0 ] && [ "$(_mm)" = log ] && [ "$(reloads $_ms)" = 1 ] && says "$out" "$_mn: nothing changed in its configuration, so it was not reloaded"; } \
+    && pass "W36: $_ms: a plain re-run keeps log, changes no byte and reloads nothing (so a refresh-era re-run never arms deny behind the admin's back)" \
+    || fail "W36: $_ms: a plain re-run keeps the mode" "rc=$rc mode=$(_mm) reloads=$(reloads $_ms)$(reload_by $_ms)"
+  out=$(keep srv_run WHISPER_EDGE_ARM_DENY=1) && rc=0 || rc=$?
+  { [ "$rc" = 0 ] && [ "$(_mm)" = deny ] && [ "$(reloads $_ms)" = 2 ] && says "$out" "$_mn: the configuration test passed" \
+    && says "$out" "$_mn: confirmed by the module: worker pid" && ! says "$out" "$_mn: the policy is in log mode"; } \
+    && pass "W36: $_ms --arm-deny: deny written, tested, one reload, confirmed by the module" \
+    || fail "W36: $_ms --arm-deny" "rc=$rc mode=$(_mm) reloads=$(reloads $_ms)$(reload_by $_ms) $(printf '%s\n' "$out" | grep -E "^ *$_mn: " | head -4 | cut -c1-220)"
+  out=$(keep srv_run WHISPER_EDGE_LOG_ONLY=1) && rc=0 || rc=$?
+  { [ "$rc" = 0 ] && [ "$(_mm)" = log ] && [ "$(reloads $_ms)" = 3 ]; } \
+    && pass "W36: $_ms --log-only after deny: back to log, one reload" || fail "W36: $_ms back to log" "rc=$rc mode=$(_mm) reloads=$(reloads $_ms)$(reload_by $_ms)"
+  # the control: the same tree with the drop-in's mode never read; its plain re-run arms deny
+  rm -rf "$W/w36"; mkdir -p "$W/w36"; cp -a "$HERE/../." "$W/w36/"; chown -R 0:0 "$W/w36"; chmod -R go-w "$W/w36"
+  sed -i '/rd_file "\$_drop" | grep_any -x .* && SRV_MODE=log ;;$/d' "$W/w36/install/install.sh"
+  if cmp -s "$INSTALL" "$W/w36/install/install.sh"; then fail "W36's control ($_ms)" "the planted copy is the installer itself, so the control proves nothing"
+  else
+    isave=$INSTALL; INSTALL=$W/w36/install/install.sh
+    out=$(keep srv_run) && rc=0 || rc=$?
+    INSTALL=$isave
+    [ "$(_mm)" = deny ] \
+      && pass "W36's control: an installer that does not read the drop-in's mode arms deny on a plain re-run of a host in log, which the re-run row above refuses" \
+      || fail "W36's control ($_ms)" "rc=$rc mode=$(_mm): the planted installer kept log, so the re-run row proves nothing"
+  fi
+  rm -rf "$W/w36"
+  u=$(undo_of "$_mout" "$_mn")
+  if [ -n "$u" ]; then eval "PATH=\"$SH:/usr/sbin:/usr/bin:/sbin:/bin\" sh -c $u" >/dev/null 2>&1 || :; fi
+  [ "$(record $_mt | grep -v '^/etc/whisper-edge')" = "$(printf '%s\n' "$_m0" | grep -v '^/etc/whisper-edge')" ] \
+    || fail "W36's cleanup ($_ms)" "the first run's undo line did not restore the record"
+}
 server_rows() {
   stale_counter_row
   mount_guard_rows
@@ -1670,7 +1775,7 @@ server_arms() {
       && says "$out" 'nginx: confirmed by the module: worker pid [0-9]*, new since the reload, runs program [0-9a-f]\{16\}, reputation armed at generation 497775' \
       && /usr/sbin/nginx -t >/dev/null 2>&1; } \
       && pos_pass nginx-apply "nginx: the load file and the drop-in written, the test passed, exactly one reload, and the record differs by them (the positive control)" \
-      || fail "nginx: apply, test, reload" "rc=$rc reloads=$(reloads nginx)
+      || fail "nginx: apply, test, reload" "rc=$rc reloads=$(reloads nginx)$(reload_by nginx)
 $(printf '%s\n' "$out" | sed -n '/^== applied/,$p' | head -40)"
     writer_rows nginx-apply "$(ps -eo pid=,args= | awk '$2 == "nginx:" && $3 == "master" { print $1; exit }')" "the applied nginx"
     # W4: the written drop-in is the pinned policy in nginx's idiom
@@ -1682,7 +1787,7 @@ $(printf '%s\n' "$out" | sed -n '/^== applied/,$p' | head -40)"
       && says "$out" 'nginx: confirmed read-only (nothing changed, so nothing was reloaded): .*this checks the program and the plane only, not that the worker is new' \
       && [ "$(record $NG_TREES)" = "$after" ]; } \
       && neg nginx-apply "a second run with nothing to change: no byte changed, no reload (the count stays 1)" \
-      || fail "the zero-change re-run" "rc=$rc reloads=$(reloads nginx) (1 is the positive control's own reload; the re-run adds none) \
+      || fail "the zero-change re-run" "rc=$rc reloads=$(reloads nginx)$(reload_by nginx) (1 is the positive control's own reload; the re-run adds none) \
 $(says "$out" 'nginx: nothing changed in its configuration, so it was not reloaded' || echo '     the not-reloaded line is missing')
 $(says "$out" 'nginx: confirmed read-only' || echo "     the read-only confirmation is missing: $(printf '%s' "$out" | grep -E 'nginx: (applied|confirmed)' | head -2 | cut -c1-250)")
 $([ "$(record $NG_TREES)" = "$after" ] || printf '     the record differs: %s' "$(record $NG_TREES | diff -- - "$W/rec.after.$$" 2>/dev/null | head -6 | tr '\n' ';')")"
@@ -1722,7 +1827,7 @@ $([ "$(record $NG_TREES)" = "$after" ] || printf '     the record differs: %s' "
         && printf '%s\n' "$out" | grep_any -x '     whisper_edge_trusted_proxy 127.0.0.1 ::1;' && printf '%s\n' "$out" | grep_any -x '     whisper_edge_trusted_header X-Forwarded-For;' \
         && ! grep -rq 'whisper_edge_trusted' /etc/nginx; } \
         && pass "nginx: an http-level realip trust is advised with its own addresses and header (whisper_edge_trusted_proxy 127.0.0.1 ::1; whisper_edge_trusted_header X-Forwarded-For;), and nothing is written" \
-        || fail "nginx: the realip advice" "rc=$rc reloads=$(reloads nginx) $(printf '%s\n' "$out" | grep -E 'realip|trusted' | head -4 | cut -c1-250)"
+        || fail "nginx: the realip advice" "rc=$rc reloads=$(reloads nginx)$(reload_by nginx) $(printf '%s\n' "$out" | grep -E 'realip|trusted' | head -4 | cut -c1-250)"
       printf 'server {\n  listen 127.0.0.1:8098;\n  set_real_ip_from 127.0.0.1;\n  real_ip_header X-Forwarded-For;\n}\n' > /etc/nginx/conf.d/zz-realip.conf
       out=$(keep srv_run) && rc=0 || rc=$?
       { [ "$rc" = 0 ] && ! says "$out" 'real_ip_header at http level' && ! printf '%s\n' "$out" | grep_any 'whisper_edge_trusted'; } \
@@ -1742,8 +1847,11 @@ $([ "$(record $NG_TREES)" = "$after" ] || printf '     the record differs: %s' "
       { [ "$urc" = 0 ] && [ "$(record $NG_TREES | grep -v '^/etc/whisper-edge')" = "$(printf '%s\n' "$before" | grep -v '^/etc/whisper-edge')" ] \
         && [ "$(reloads nginx)" = 2 ] && /usr/sbin/nginx -t >/dev/null 2>&1 && [ "$(eff_digest nginx)" = "$eff0" ] && [ "$(unit_state nginx.service)" = "$us0" ]; } \
         && pass "nginx: the printed undo line restores the configuration record exactly, the effective configuration (nginx -T, $eff0) and the unit's state ($us0), tests, and reloads once" \
-        || fail "nginx: the undo line" "rc=$urc reloads=$(reloads nginx) $uo $(printf '%s\n' "$before" > "$W/rec.b"; record $NG_TREES > "$W/rec.a"; diff "$W/rec.b" "$W/rec.a" | head -4)"
+        || fail "nginx: the undo line" "rc=$urc reloads=$(reloads nginx)$(reload_by nginx) $uo $(printf '%s\n' "$before" > "$W/rec.b"; record $NG_TREES > "$W/rec.a"; diff "$W/rec.b" "$W/rec.a" | head -4)"
     fi
+    # W36: --log-only writes the same policy in log mode, a plain re-run keeps the mode the drop-in
+    # carries, --arm-deny turns it to deny through the test and one reload, and the module confirms each
+    mode_rows nginx /etc/nginx/conf.d/whisper-edge.conf 'whisper_edge_mode log;' 'whisper_edge_mode deny;' "$NG_TREES"
     # O1, the verdict's own arms (C7). Each starts from an applied, confirmed nginx and takes the drop-in
     # away by hand (no reload), so the next run writes the same bytes again: the same config digest the
     # live workers already report. A reload that does nothing must then read unverified, a forged writer
@@ -1753,7 +1861,7 @@ $([ "$(record $NG_TREES)" = "$after" ] || printf '     the record differs: %s' "
     ng_master() { ps -eo pid=,args= | awk '$2 == "nginx:" && $3 == "master" { print $1; exit }'; }
     ng_workers() { ps -eo pid=,ppid=,args= | awk -v m="$(ng_master)" '$2 == m && $3 == "nginx:" && $4 == "worker" { print $1 }' | tr '\n' ' '; }
     ng_inert() { # reloads that do nothing, by the wrapper and by the unit
-      shim nginx "case \" \$* \" in *' -s reload '*) echo nginx >> '$RLC'; exit 0 ;; esac; exec /usr/sbin/nginx \"\$@\""
+      shim nginx "case \" \$* \" in *' -s reload '*) echo nginx shim >> '$RLC'; exit 0 ;; esac; exec /usr/sbin/nginx \"\$@\""
       if [ "$SYSD" = 1 ]; then mkdir -p /etc/systemd/system/nginx.service.d; printf '[Service]\nExecReload=\nExecReload=/bin/true\n' > /etc/systemd/system/nginx.service.d/zz-installer-gate-inert.conf; systemctl daemon-reload; fi
     }
     ng_live() { rm -f /etc/systemd/system/nginx.service.d/zz-installer-gate-inert.conf; daemon_reload; srv_shims; }
@@ -1949,7 +2057,7 @@ PY
       && says "$out" 'nginx: the configuration test refused it: .*emerg' && says "$out" 'the previous configuration is unchanged' \
       && says "$out" 'test hooks active (a disposable box): WHISPER_EDGE_INSTALL_TEST_RULE=bad-level'; } \
       && neg nginx-apply "nginx: a rule only the module refuses: nginx's own test refused it (its emerg line), the writes taken back, no reload, the record unchanged" \
-      || fail "nginx: reload only on a pass" "rc=$rc reloads=$(reloads nginx) $(printf '%s' "$out" | grep -E 'nginx:' | head -4 | cut -c1-200) $(printf '%s\n' "$before" > "$W/rec.b"; record $NG_TREES > "$W/rec.a"; diff "$W/rec.b" "$W/rec.a" | head -6)"
+      || fail "nginx: reload only on a pass" "rc=$rc reloads=$(reloads nginx)$(reload_by nginx) $(printf '%s' "$out" | grep -E 'nginx:' | head -4 | cut -c1-200) $(printf '%s\n' "$before" > "$W/rec.b"; record $NG_TREES > "$W/rec.a"; diff "$W/rec.b" "$W/rec.a" | head -6)"
     # a configuration that fails its own test before the run is the operator's, said so, nothing written
     printf 'this is not nginx;\n' > /etc/nginx/conf.d/zz-broken.conf; before=$(record $NG_TREES)
     out=$(keep srv_run) && rc=0 || rc=$?
@@ -1970,7 +2078,7 @@ PY
     { [ "$rc" = 1 ] && says "$out" "nginx: nothing was applied: the module's own probe of /var/lib/w25/edge, run as $NGU" \
       && [ "$(record $NG_TREES)" = "$before" ] && [ "$(reloads nginx)" = 0 ] && [ -f /var/lib/w25/edge/reputation.bin ]; } \
       && neg nginx-apply "W25: a plane root reads but the worker cannot reach: the module's own probe, as www-data, refuses it (as $NGU); nothing written, nothing reloaded" \
-      || fail "W25: the binding probe before any write" "rc=$rc reloads=$(reloads nginx) record $([ "$(record $NG_TREES)" = "$before" ] && echo unchanged || echo CHANGED) plane $([ -f /var/lib/w25/edge/reputation.bin ] && echo present || echo absent)
+      || fail "W25: the binding probe before any write" "rc=$rc reloads=$(reloads nginx)$(reload_by nginx) record $([ "$(record $NG_TREES)" = "$before" ] && echo unchanged || echo CHANGED) plane $([ -f /var/lib/w25/edge/reputation.bin ] && echo present || echo absent)
 $(printf '%s\n' "$out" | grep -E 'nginx:|install\.sh:|nothing was|not root|could not|refus' | head -6 | cut -c1-300 | sed 's/^/     /')
      the path: $(ls -ld / /var /var/lib /var/lib/w25 2>&1 | awk '{ print $1, $3, $4, $NF }' | tr '\n' ';')$(command -v getfacl >/dev/null 2>&1 && getfacl -pc /var/lib 2>/dev/null | grep -v '^$' | tr '\n' ' ')"
     chattr -R -i /var/lib/w25 2>/dev/null || :; rm -rf /var/lib/w25
@@ -1995,7 +2103,7 @@ $(printf '%s\n' "$out" | grep -E 'nginx:|install\.sh:|nothing was|not root|could
     out=$(keep srv_run) && rc=0 || rc=$?
     { [ "$rc" = 0 ] && says "$out" 'recovered an interrupted run' && [ "$(reloads nginx)" = 1 ]; } \
       && pass "and the next run sweeps it first, then applies, tests and reloads once" \
-      || fail "nginx: the sweep after a kill" "rc=$rc reloads=$(reloads nginx) $(printf '%s' "$out" | grep -E 'recover|nginx:' | head -3)"
+      || fail "nginx: the sweep after a kill" "rc=$rc reloads=$(reloads nginx)$(reload_by nginx) $(printf '%s' "$out" | grep -E 'recover|nginx:' | head -3)"
     u=$(undo_of "$out" nginx); [ -n "$u" ] && eval "sh -c $u" >/dev/null 2>&1 || :
     # INT inside the open window: taken back, said, exit 130
     : > "$RLC"; before=$(record $NG_TREES)
@@ -2072,7 +2180,7 @@ $(printf '%s\n' "$out" | grep -E 'nginx:|install\.sh:|nothing was|not root|could
     { [ "$rc" = 0 ] && says "$out" 'nginx: the running master reads /var/lib/w33/nginx.conf (its -c)' && [ -f /var/lib/w33/conf.d/whisper-edge.conf ] \
       && [ "$(record /etc/nginx)" = "$before" ] && [ "$(reloads nginx)" = 1 ] && says "$out" 'nginx: reloaded (nginx -c /var/lib/w33/nginx.conf -p /var/lib/w33/ -s reload)'; } \
       && neg nginx-apply "W33: a hand-started nginx (-c /var/lib/w33/nginx.conf -p /var/lib/w33/): its own configuration applied, tested and reloaded with its -c and -p, /etc/nginx untouched" \
-      || fail "W33: the hand-started master" "rc=$rc reloads=$(reloads nginx) $(printf '%s' "$out" | grep -E 'nginx:' | head -4 | cut -c1-220)"
+      || fail "W33: the hand-started master" "rc=$rc reloads=$(reloads nginx)$(reload_by nginx) $(printf '%s' "$out" | grep -E 'nginx:' | head -4 | cut -c1-220)"
     /usr/sbin/nginx -c /var/lib/w33/nginx.conf -p /var/lib/w33/ -s quit 2>/dev/null || :
     wait_until 60 sh -c '! ps -eo args= | grep -q "^nginx: master"' || :; rm -rf /var/lib/w33
     unit_do stop nginx; /usr/sbin/nginx -s quit 2>/dev/null || :
@@ -2204,7 +2312,7 @@ $(printf '%s\n' "$out" | grep -E 'nginx:|install\.sh:|nothing was|not root|could
       && [ "$(record $AP_TREES)" != "$before" ] && [ "$(reloads apache)" = 1 ] && says "$out" 'Apache: the configuration test passed' \
       && says "$out" 'Apache: confirmed by the module: worker pid .*, new since the reload'; } \
       && pos_pass apache-apply "Apache: conf-available written, then a2enconf, configtest passed, exactly one graceful, and the module confirms the new program (the positive control)" \
-      || fail "Apache: apply, test, reload" "rc=$rc reloads=$(reloads apache)
+      || fail "Apache: apply, test, reload" "rc=$rc reloads=$(reloads apache)$(reload_by apache)
 $(printf '%s\n' "$out" | sed -n '/^== applied/,$p' | head -40)"
     # W34 for Apache: a re-run with nothing to change. On Debian a2enconf's conf-enabled/whisper-edge.conf is
     # a link to the installer's own file, and Apache lists the file by that name; read as the operator's, it
@@ -2215,7 +2323,7 @@ $(printf '%s\n' "$out" | sed -n '/^== applied/,$p' | head -40)"
       && says "$out" 'Apache: nothing changed in its configuration, so it was not reloaded' \
       && ! says "$out" 'Apache: kept your\|Apache: your policy'; } \
       && neg apache-apply "Apache: a second run with nothing to change: its own file (read through a2enconf's link) is not taken for the operator's, no byte changed, no graceful (the count stays 1)" \
-      || fail "Apache: the zero-change re-run" "rc=$rc reloads=$(reloads apache) $(printf '%s' "$out" | grep -E 'Apache: (kept|your policy|nothing|applied)|default policy' | head -6 | cut -c1-250)
+      || fail "Apache: the zero-change re-run" "rc=$rc reloads=$(reloads apache)$(reload_by apache) $(printf '%s' "$out" | grep -E 'Apache: (kept|your policy|nothing|applied)|default policy' | head -6 | cut -c1-250)
 $([ "$(record $AP_TREES)" = "$after" ] || printf '     the record differs: %s' "$(printf '%s\n' "$after" > "$W/aprec.$$"; record $AP_TREES | diff -- "$W/aprec.$$" - 2>/dev/null | head -6 | tr '\n' ';')")"
     # a re-run whose rewrite of the installer's own drop-in is refused must leave the drop-in that was
     # serving, byte for byte: taken back as "created", it was removed, and Apache was left with no module
@@ -2225,7 +2333,7 @@ $([ "$(record $AP_TREES)" = "$after" ] || printf '     the record differs: %s' "
       && says "$out" 'Apache: the configuration test refused it' && says "$out" 'its previous bytes restored' \
       && /usr/sbin/$APCTL -t >/dev/null 2>&1 && [ -z "$(find "$REAL_ETC/undo" -name 'prev.*' 2>/dev/null)" ]; } \
       && neg apache-apply "Apache: a re-run whose rewrite of the drop-in is refused puts the serving drop-in back byte for byte (not removed), no graceful, no kept copy left behind" \
-      || fail "Apache: a refused rewrite of the drop-in" "rc=$rc reloads=$(reloads apache) drop-in: $([ -f "$APDROP" ] && { [ "$(sha256sum < "$APDROP")" = "$psum" ] && echo same || echo changed; } || echo gone) $(printf '%s' "$out" | grep -E 'Apache: (the conf|removed|wrote|interrupted)' | head -4 | cut -c1-250); copies: $(find "$REAL_ETC/undo" -name 'prev.*' 2>/dev/null | tr '\n' ' ')"
+      || fail "Apache: a refused rewrite of the drop-in" "rc=$rc reloads=$(reloads apache)$(reload_by apache) drop-in: $([ -f "$APDROP" ] && { [ "$(sha256sum < "$APDROP")" = "$psum" ] && echo same || echo changed; } || echo gone) $(printf '%s' "$out" | grep -E 'Apache: (the conf|removed|wrote|interrupted)' | head -4 | cut -c1-250); copies: $(find "$REAL_ETC/undo" -name 'prev.*' 2>/dev/null | tr '\n' ' ')"
     # killed after its rewrite of the drop-in landed and before the test: the next run's sweep puts the
     # previous bytes back, and with them the run has nothing to change
     srv_run INSTALLER_GATE_DISPOSABLE=1 WHISPER_EDGE_INSTALL_TEST_RULE=bad-level WHISPER_EDGE_INSTALL_TEST_KILL="after-rename:$APDROP" >/dev/null 2>&1 || true
@@ -2236,7 +2344,7 @@ $([ "$(record $AP_TREES)" = "$after" ] || printf '     the record differs: %s' "
       && says "$out" 'Apache: nothing changed in its configuration, so it was not reloaded' \
       && [ -z "$(find "$REAL_ETC/undo" -name 'prev.*' 2>/dev/null)" ]; } \
       && neg apache-apply "Apache: a re-run killed after replacing the drop-in: the next run's sweep restores the previous bytes, then has nothing to change (no graceful)" \
-      || fail "Apache: the sweep of a replaced drop-in" "killed run left $([ "$k1" = "$psum" ] && echo 'the old bytes (the kill point was not reached)' || echo "$k1"); rc=$rc reloads=$(reloads apache) $(printf '%s' "$out" | grep -E 'recovered|restored|kept|Apache: (nothing|wrote)' | head -4 | cut -c1-250)"
+      || fail "Apache: the sweep of a replaced drop-in" "killed run left $([ "$k1" = "$psum" ] && echo 'the old bytes (the kill point was not reached)' || echo "$k1"); rc=$rc reloads=$(reloads apache)$(reload_by apache) $(printf '%s' "$out" | grep -E 'recovered|restored|kept|Apache: (nothing|wrote)' | head -4 | cut -c1-250)"
     # the server's own mod_remoteip trust, read in the server config only: advised, never written; a
     # virtual host's own list is that site's
     rmd=""; for d in /usr/lib/apache2/modules /usr/lib64/httpd/modules /usr/lib/httpd/modules; do [ -f "$d/mod_remoteip.so" ] && { rmd=$d; break; }; done
@@ -2251,7 +2359,7 @@ $([ "$(record $AP_TREES)" = "$after" ] || printf '     the record differs: %s' "
         && printf '%s\n' "$out" | grep_any -x '     WhisperEdgeTrustedProxy 127.0.0.1 ::1' && printf '%s\n' "$out" | grep_any -x '     WhisperEdgeTrustedHeader X-Forwarded-For' \
         && ! grep -rqi 'whisperedgetrusted' "$APDROP"; } \
         && pass "Apache: a server-config mod_remoteip trust is advised with its own addresses and header (WhisperEdgeTrustedProxy 127.0.0.1 ::1, WhisperEdgeTrustedHeader X-Forwarded-For), and nothing is written" \
-        || fail "Apache: the remoteip advice" "rc=$rc reloads=$(reloads apache) $(printf '%s\n' "$out" | grep -E 'RemoteIP|Trusted' | head -4 | cut -c1-250)"
+        || fail "Apache: the remoteip advice" "rc=$rc reloads=$(reloads apache)$(reload_by apache) $(printf '%s\n' "$out" | grep -E 'RemoteIP|Trusted' | head -4 | cut -c1-250)"
       printf '%s<VirtualHost 127.0.0.1:8099>\n  RemoteIPHeader X-Forwarded-For\n  RemoteIPInternalProxy 127.0.0.1\n</VirtualHost>\n' "$rl" > "$ren/zz-realip.conf"
       out=$(keep srv_run) && rc=0 || rc=$?
       { [ "$rc" = 0 ] && ! says "$out" 'RemoteIPHeader with' && ! printf '%s\n' "$out" | grep_any 'WhisperEdgeTrusted'; } \
@@ -2270,6 +2378,7 @@ $([ "$(record $AP_TREES)" = "$after" ] || printf '     the record differs: %s' "
         && neg apache-apply "Apache: the printed undo line (a2disconf, the file, configtest, graceful) restores the record exactly, the effective configuration (its includes, $eff0) and the unit's state ($us0)" \
         || fail "Apache: the undo line" "rc=$urc $uo"
     else fail "Apache: the undo line" "no 'undo, Apache' line"; fi
+    mode_rows apache "$APDROP" 'WhisperEdgeMode log' 'WhisperEdgeMode deny' "$AP_TREES"
     # W18 for Apache, the per-plane form: the operator's own LoadModule and WhisperEdgeData reputation <file>
     # at a newer generation; kept, verified against that file, exit 0; Apache started afresh after
     plane_at 497785 /var/lib/w18p/rep.bin; se_operator_label /var/lib/w18p/rep.bin
@@ -2291,18 +2400,33 @@ $([ "$(record $AP_TREES)" = "$after" ] || printf '     the record differs: %s' "
     if [ "$APX" = apache2 ] && [ -x /usr/sbin/nginx ] && [ -f "$NGX_SO" ]; then
       printf '# the operator'"'"'s own file\n' > /etc/apache2/conf-enabled/whisper-edge.conf; osum=$(sha256sum < /etc/apache2/conf-enabled/whisper-edge.conf)
       wait_until 60 sh -c '! ps -eo args= | grep -q "^nginx: master"' || :
+      # nginx must be up beside a running Apache, and the stock site of both listens on *:80: Apache holds it
+      # here, so the stock nginx site is set aside for this row and one on a port of its own stands in. Without
+      # it nginx never started on 26.04 (*:80 held by apache2, unit inactive) and the arm read "not running"
+      ngx_site=""
+      if [ -L /etc/nginx/sites-enabled/default ]; then
+        ngx_site=$(readlink /etc/nginx/sites-enabled/default); rm -f /etc/nginx/sites-enabled/default
+        printf 'server {\n    listen 127.0.0.1:8097;\n    root /var/www/html;\n}\n' > /etc/nginx/sites-enabled/zz-gate-w20
+      fi
       srv_start nginx.service nginx /usr/sbin/nginx
+      # what the nginx arm meets, kept for the row's evidence: its master (or none), and who holds the ports
+      ngx_pre="master: $(ps -eo pid=,args= | grep -m1 '[n]ginx: master' | tr -s ' ' || echo none); unit: $(systemctl is-active nginx.service 2>/dev/null || :); ports: $(ss -Hltnp 2>/dev/null | grep -E ':(80|443) ' | sed 's/  */ /g' | cut -c1-120 | tr '\n' ';')"
       : > "$RLC"
       out=$(SRVSEL=nginx,apache keep srv_run) && rc=0 || rc=$?
-      { [ "$rc" = 1 ] && says "$out" "Apache: /etc/apache2/conf-enabled/whisper-edge.conf exists and is not the installer's link; move it aside and run again; removed what this run wrote ($APDROP)" \
-        && [ ! -e "$APDROP" ] && [ "$(sha256sum < /etc/apache2/conf-enabled/whisper-edge.conf)" = "$osum" ] && [ "$(reloads apache)" = 0 ] \
+      # what the arm took back: its conf-available file, and on a unit whose sandbox hides the boot id (Ubuntu
+      # 26.04's apache2.service) the boot-id drop-in it wrote in the same window, which must be gone too
+      apunit_drop=/etc/systemd/system/$APU.d/whisper-edge.conf; aptook=$APDROP
+      says "$out" "removed what this run wrote ($APDROP $apunit_drop)" && aptook="$APDROP $apunit_drop"
+      { [ "$rc" = 1 ] && says "$out" "Apache: /etc/apache2/conf-enabled/whisper-edge.conf exists and is not the installer's link; move it aside and run again; removed what this run wrote ($aptook)" \
+        && [ ! -e "$APDROP" ] && { [ "$aptook" = "$APDROP" ] || [ ! -e "$apunit_drop" ]; } && [ "$(sha256sum < /etc/apache2/conf-enabled/whisper-edge.conf)" = "$osum" ] && [ "$(reloads apache)" = 0 ] \
         && { says "$out" 'nginx: confirmed by the module: worker pid' || says "$out" 'nginx: the configuration test passed'; } \
         && says "$out" 'undo, the shared parts (after every server line): sh -c'; } \
         && neg apache-apply "an arm-local refusal (an operator's conf-enabled/whisper-edge.conf): Apache's drop-in taken back, no graceful, the operator's file unchanged; nginx in the same run applied, and the run went on to its shared parts (their undo line printed); exit 1, not 4" \
-        || fail "an arm-local refusal ends only its arm" "rc=$rc reloads=$(reloads apache) $(printf '%s' "$out" | grep -E 'Apache: [^n]|nginx: (confirmed|applied|nothing|the server)' | grep -v LimitMEMLOCK | head -8 | cut -c1-300)"
+        || fail "an arm-local refusal ends only its arm" "rc=$rc reloads=$(reloads apache)$(reload_by apache) before the run: $ngx_pre; took back: $aptook (left: $(ls -d $aptook 2>/dev/null | tr '\n' ' ')); shared undo line: $(says "$out" 'undo, the shared parts (after every server line): sh -c' && echo yes || echo no); $(printf '%s' "$out" | grep -E 'Apache: [^n]|nginx: (confirmed|applied|nothing|the server)' | grep -v LimitMEMLOCK | head -8 | cut -c1-300)"
       rm -f /etc/apache2/conf-enabled/whisper-edge.conf
       un=$(undo_of "$out" nginx); [ -n "$un" ] && eval "PATH=\"$SH:/usr/sbin:/usr/bin:/sbin:/bin\" sh -c $un" >/dev/null 2>&1 || :
       /usr/sbin/nginx -s quit 2>/dev/null || :; [ "$SYSD" = 1 ] && systemctl stop nginx >/dev/null 2>&1 || :
+      if [ -n "$ngx_site" ]; then rm -f /etc/nginx/sites-enabled/zz-gate-w20; ln -sfn "$ngx_site" /etc/nginx/sites-enabled/default; fi
     fi
     # W27: an operator's <IfModule whisper_edge_module> holding a status the module refuses; skipped until the
     # installer's LoadModule loads the module, so the pre-test passes and the server's own test refuses
@@ -2313,7 +2437,7 @@ $([ "$(record $AP_TREES)" = "$after" ] || printf '     the record differs: %s' "
     { [ "$rc" = 1 ] && [ "$(reloads apache)" = 0 ] && [ "$(record $AP_TREES)" = "$before" ] \
       && says "$out" 'Apache: the configuration test refused it: .*401' && ! says "$out" 'before any change'; } \
       && neg apache-apply "W27: an operator's <IfModule> block the installer's LoadModule awakens (status 401): the pre-test passed, Apache's own test refused it, the files taken back, no graceful, the record unchanged" \
-      || fail "W27: the hook-free refusal" "rc=$rc reloads=$(reloads apache) $(printf '%s' "$out" | grep -E 'Apache:' | head -3)"
+      || fail "W27: the hook-free refusal" "rc=$rc reloads=$(reloads apache)$(reload_by apache) $(printf '%s' "$out" | grep -E 'Apache:' | head -3)"
     rm -f /etc/apache2/conf-enabled/zz-operator.conf "$APOP"
     # W29: a fault Apache's configtest cannot see, planted after the probe and before the graceful (the
     # plane made unreadable to the worker at the pause in the open window): the graceful runs, the parent
@@ -2379,7 +2503,7 @@ $([ "$(record $AP_TREES)" = "$after" ] || printf '     the record differs: %s' "
     { [ "$rc" = 0 ] && says "$out" 'Apache: the running parent reads /var/lib/w33a/main.conf (its -f)' && [ "$(reloads apache)" = 1 ] \
       && says "$out" "Apache: reloaded ($APDRV -f /var/lib/w33a/main.conf -k graceful)"; } \
       && neg apache-apply "O5: a hand-started Apache (-f /var/lib/w33a/main.conf) whose configuration includes the layout's directory: applied, tested and reloaded with its -f" \
-      || fail "O5: a hand-started Apache with -f" "rc=$rc reloads=$(reloads apache) $(printf '%s' "$out" | grep -E 'Apache:' | head -4 | cut -c1-220)"
+      || fail "O5: a hand-started Apache with -f" "rc=$rc reloads=$(reloads apache)$(reload_by apache) $(printf '%s' "$out" | grep -E 'Apache:' | head -4 | cut -c1-220)"
     u=$(undo_of "$out" Apache); [ -n "$u" ] && eval "PATH=\"$SH:/usr/sbin:/usr/bin:/sbin:/bin\" sh -c $u" >/dev/null 2>&1 || :
     ap_hand -f /var/lib/w33a/main.conf -k stop >/dev/null 2>&1 || :
     wait_until 60 sh -c '! ps -eo args= | grep -Eq "^/usr/sbin/(apache2|httpd)"' || :
@@ -2596,9 +2720,9 @@ $(ps -eo pid=,ppid=,args= | awk '$3 == "openlitespeed" || ($3 == "litespeed" && 
   { grep -qx '    whisper_edge_mode deny' "$LSD/conf/whisper-edge.conf" && [ "$(ols_pid)" = "$m1" ]; } \
     && neg ols-apply "a plain re-run after --arm-deny keeps deny and restarts nothing" \
     || fail "a re-run keeps the armed mode" "$(grep mode "$LSD/conf/whisper-edge.conf")"
-  out=$(env WHISPER_EDGE_SERVER=nginx WHISPER_EDGE_ARM_DENY=1 sh "$INSTALL" --base "$FEED" 2>&1) && rc=0 || rc=$?
-  { [ "$rc" = 2 ] && says "$out" 'is for OpenLiteSpeed alone'; } && neg ols-apply "--arm-deny with nginx named: a usage error, exit 2" \
-    || fail "--arm-deny with nginx is refused" "rc=$rc $(printf '%s' "$out" | head -1)"
+  out=$(env WHISPER_EDGE_SERVER=nginx WHISPER_EDGE_ARM_DENY=1 WHISPER_EDGE_LOG_ONLY=1 sh "$INSTALL" --base "$FEED" 2>&1) && rc=0 || rc=$?
+  { [ "$rc" = 2 ] && says "$out" '--log-only and --arm-deny ask for opposite modes'; } && neg ols-apply "--arm-deny with --log-only: a usage error, exit 2" \
+    || fail "--arm-deny with --log-only is refused" "rc=$rc $(printf '%s' "$out" | head -1)"
   runuser -u "$OU" -- sh -c "sed -i 's/    whisper_edge_mode deny/    whisper_edge_mode log/' '$LSD/conf/whisper-edge.conf'; printf '    whisper_edge_allow_inferred on\n' >> '$LSD/conf/whisper-edge.conf'"
   fsum=$(sha256sum < "$LSD/conf/whisper-edge.conf")
   out=$(keep srv_run WHISPER_EDGE_LSWS_ROOT="$LSD" WHISPER_EDGE_ARM_DENY=1) && rc=0 || rc=$?

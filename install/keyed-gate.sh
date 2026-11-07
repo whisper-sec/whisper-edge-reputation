@@ -1402,9 +1402,14 @@ M=$(mutant field-alone '        if v is None and tg is not None and rst in ("abs
 tomb_case yes "$M"
 [ "$(sent_val "$out" hw)" = "$G" ] && pass "row 74 control: the field-alone wording for a present-but-malformed record names G1" \
                                   || fail "row 74 control: the unreadable-record skip is visible" "$out"
-# a clock two days behind over files near true now: the clock line first, the value only on its condition
+# a clock two days behind over files near true now: the clock line first, the value only on its condition.
+# The feed serves a generation under the files' mark, set here: the content left by the rows before is the
+# day's slot plus a few seconds, which is ABOVE now - 1800 for the first half hour after UTC midnight, and then
+# the run with the clock restored installed it and raised the mark, failing "the band follows the clock" on
+# the time of day alone (measured: that content served 17 min after midnight fails exactly this row)
 clock_case() { # <script>
   fresh_box; place_key; GN=$(( $(date +%s) - 1800 )); set_state "$HWF" "$GN\n"; set_state "$RECF" "$GN\n"
+  content a "$((GN - 3600))" "$REV0"
   echo $(( $(date +%s) - 172800 )) > "$W/clock"; run_with "$1" --quiet --keyed-set; rm -f "$W/clock"
 }
 clock_case "$REFRESH"
@@ -1859,10 +1864,14 @@ ctl_case "$M"
 # Row 105: the keyed path on a host with jq and no python3.
 row105() {
 NP="$W/nopy"; rm -rf "$NP"; mkdir -p "$NP"
+# First name wins, as on PATH. The test is -e OR -L: -e follows the link, so a name already linked to a
+# dangling symlink (26.04 ships /usr/bin/grub-ntldr-img as one) reads as absent, and with /bin the same
+# directory as /usr/bin on a merged-/usr host the second ln met its own first link and stopped the gate.
 for d in /usr/local/bin /usr/bin /bin; do
   for c in "$d"/*; do
+    [ -e "$c" ] || [ -L "$c" ] || continue   # an empty directory's unexpanded glob
     b=$(basename "$c"); case "$b" in python*) continue ;; esac
-    [ -e "$NP/$b" ] || ln -s "$c" "$NP/$b"
+    [ -e "$NP/$b" ] || [ -L "$NP/$b" ] || ln -s "$c" "$NP/$b"
   done
 done
 for c in getent date curl systemctl; do rm -f "$NP/$c"; ln -s "$S/$c" "$NP/$c"; done

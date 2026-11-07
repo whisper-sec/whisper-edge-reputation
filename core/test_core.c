@@ -55,7 +55,7 @@ __attribute__((unused)) static int ts_counted_stat(const char *path, struct stat
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+#include <time.h>          /* clock_gettime: the C12 sweep reports its own run time */
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -288,13 +288,6 @@ static const char *tmppath(const char *name)
     pathslot = (pathslot + 1) % TMPPATH_SLOTS;
     snprintf(b, 512, "%s/%s", TMPDIR_, name);
     return b;
-}
-
-static uint64_t now_ns(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
 /*
@@ -2060,7 +2053,7 @@ static void p_radix14(uint8_t *b, size_t l, const f2_t *x)
     HDR(b)->flags |= WE_H_V4_INDEXED;
 }
 static void p_rank5(uint8_t *b, size_t l, const f2_t *x) { (void)l; (void)x; HDR(b)->schema.v6_index_param = 5u; }
-static void p_reserved(uint8_t *b, size_t l, const f2_t *x) { (void)l; (void)x; HDR(b)->schema.reserved[15] = 1u; }
+static void p_reserved(uint8_t *b, size_t l, const f2_t *x) { (void)l; (void)x; HDR(b)->schema.reserved[13] = 1u; }
 static void p_plane9(uint8_t *b, size_t l, const f2_t *x) { (void)l; (void)x; HDR(b)->schema.plane_id = 9u; }
 static void p_schema2(uint8_t *b, size_t l, const f2_t *x) { (void)l; (void)x; HDR(b)->schema.schema_id = 2u; }
 static void p_keybits(uint8_t *b, size_t l, const f2_t *x) { (void)l; (void)x; HDR(b)->schema.v6_key_bits = 128u; }
@@ -2287,6 +2280,430 @@ static void p_radix_off4(uint8_t *b, size_t l, const f2_t *x) { (void)l; (void)x
 static void p_m1_sample(uint8_t *b, size_t l, const f2_t *x) { (void)l; (void)x; HDR(b)->schema.v4_sample_off = 64u; }
 
 /* FORMAT.md §5: the radix table is 64-byte aligned, and a one-window rank family has sample_off 0. */
+/* =================== per-family coverage (FORMAT.md section 2, bytes 176 and 177) =================== */
+
+/* a file's bytes in a 64-byte aligned buffer, read whatever its mode (git's umask can make a checked-in
+ * fixture 0664, which the file loader rightly refuses; the buffer entry point checks the bytes alone) */
+static uint8_t *cov_read(const char *path, size_t *len)
+{
+    FILE *f = fopen(path, "rb");
+    uint8_t *buf;
+    long n;
+
+    if (f == NULL) {
+        return NULL;
+    }
+    fseek(f, 0, SEEK_END);
+    n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    buf = (uint8_t *)aligned_alloc(64, ((size_t)n + 63u) & ~(size_t)63u);
+    if (buf != NULL && fread(buf, 1, (size_t)n, f) != (size_t)n) {
+        free(buf);
+        buf = NULL;
+    }
+    fclose(f);
+    *len = (size_t)n;
+    return buf;
+}
+
+/* load a buffer in place: the view points into it, so it is never closed here (the caller frees the buffer) */
+static int cov_load(const uint8_t *buf, size_t len, we_map_t *m, we_load_detail_t *d)
+{
+    return we_map_from_buffer(buf, len, "coverage-cell", m, d);
+}
+
+#define COV_DIR "testdata/coverage"
+
+/* C5: every file of the shared corpus refused with exactly the code and message MANIFEST.tsv states */
+static void test_coverage_corpus(void)
+{
+    FILE *f = fopen(COV_DIR "/MANIFEST.tsv", "r");
+    char line[512];
+    int rows = 0, by_rule[6] = { 0 };
+
+    SECTION("C5: the coverage refusal corpus, every file its rule's code and message");
+    CHECK(f != NULL, "[C5] " COV_DIR "/MANIFEST.tsv is readable (run from the core directory)");
+    if (f == NULL) {
+        return;
+    }
+    while (fgets(line, sizeof line, f) != NULL) {
+        char *file, *base, *code, *msg, *rule, path[600];
+        uint8_t *buf;
+        size_t len = 0;
+        we_map_t m;
+        we_load_detail_t d;
+        int rc;
+
+        if (line[0] == '#' || line[0] == '\n') {
+            continue;
+        }
+        line[strcspn(line, "\n")] = '\0';
+        file = strtok(line, "\t");
+        base = strtok(NULL, "\t");
+        code = strtok(NULL, "\t");
+        msg = strtok(NULL, "\t");
+        rule = strtok(NULL, "\t");
+        if (file == NULL || base == NULL || code == NULL || msg == NULL || rule == NULL) {
+            CHECK(0, "[C5] a MANIFEST.tsv row has five fields");
+            continue;
+        }
+        snprintf(path, sizeof path, COV_DIR "/%s", file);
+        buf = cov_read(path, &len);
+        CHECK(buf != NULL, "[C5] %s is readable", path);
+        if (buf == NULL) {
+            continue;
+        }
+        rc = cov_load(buf, len, &m, &d);
+#ifdef WE_TEST_ALLOW_V4_UNCOVERED
+        if (strcmp(file, "c4-tor-v4.bin") == 0) {
+            /* the one corpus row this build's widened table turns into a legal file */
+            CHECK(rc == WE_OK, "[C5v4] %s is accepted by the table that allows tor IPv4", file);
+            free(buf);
+            rows++;
+            by_rule[4]++;
+            continue;
+        }
+#endif
+        CHECK(strcmp(code, "WE_ERR_FORMAT") == 0 && rc == WE_ERR_FORMAT && d.what != NULL && strcmp(d.what, msg) == 0,
+              "[C5] %s (rule %s, baseline %s): want %s \"%s\", got %s \"%s\"", file, rule, base, code, msg,
+              we_strerror(rc), d.what != NULL ? d.what : "-");
+        free(buf);
+        snprintf(path, sizeof path, COV_DIR "/baseline-%s.bin", base);
+        buf = cov_read(path, &len);
+        CHECK(buf != NULL && cov_load(buf, len, &m, &d) == WE_OK, "[C5] %s's baseline %s loads: the row has one defect",
+              file, base);
+        free(buf);
+        rows++;
+        by_rule[rule[0] == '1' ? 1 : rule[0] == '3' ? 3 : rule[0] == '4' ? 4 : rule[0] == '5' ? 5 : 0]++;
+    }
+    fclose(f);
+    CHECK(by_rule[1] >= 2 && by_rule[3] >= 1 && by_rule[4] >= 3 && by_rule[5] >= 13 && rows >= 38,
+          "[C5] the corpus covers rules 1, 3, 4 (tor IPv4, routing IPv6, tenant) and every field of 5: %d rows", rows);
+    printf("  %d corpus files, each refused with its rule's message\n", rows);
+}
+
+/* C5b: two defects at once, the first rule in the stated order wins */
+static void test_coverage_order(void)
+{
+    static const struct {
+        const char *base;
+        size_t at[2];
+        uint8_t v[2];
+        const char *want, *why;
+    } rows[] = {
+        { "tenant-v6empty", { 177, 177 }, { 2, 2 }, "a coverage byte outside stated and not-covered", "1 before 4" },
+        { "tor-v4only", { 176, 48 }, { 1, 1 }, "a plane that covers no family", "3 before 5 (IPv6 n = 1)" },
+        { "tor-v4only", { 178, 48 }, { 1, 1 }, "a reserved byte of the schema tail is not zero",
+          "the reserved loop before the coverage rules" },
+        { "reputation-schema", { 176, 176 }, { 2, 2 }, "a reserved byte of the schema tail is not zero",
+          "format 1: the reserved loop, never rule 1" },
+        { "tor-v4only", { 177, 146 }, { 2, 24 }, "a record stride is not the schema's",
+          "the stride check before the coverage rules" },
+        { "tor-v4only", { 142, 12 }, { 1, 0 }, "a not-covered family carries data",
+          "rule 5 before check_kind: a radix kind with the INDEXED flag clear" },
+#ifndef WE_TEST_ALLOW_V4_UNCOVERED
+        { "tor-v4only", { 176, 177 }, { 1, 0 }, "plane tor may not leave IPv4 not covered",
+          "4 before 5: tor's IPv4 not covered while it carries records" },
+#endif
+    };
+    size_t i;
+
+    SECTION("C5b: the coverage rules' order, two defects at once");
+    for (i = 0; i < sizeof rows / sizeof rows[0]; i++) {
+        char path[256];
+        uint8_t *buf;
+        size_t len = 0;
+        we_map_t m;
+        we_load_detail_t d;
+        int rc, k;
+
+        snprintf(path, sizeof path, COV_DIR "/baseline-%s.bin", rows[i].base);
+        buf = cov_read(path, &len);
+        CHECK(buf != NULL, "[C5b] %s", path);
+        if (buf == NULL) {
+            continue;
+        }
+        for (k = 0; k < 2; k++) {
+            if (rows[i].at[k] == 12) {
+                continue;                       /* the flags word is already clear: one defect is enough there */
+            }
+            buf[rows[i].at[k]] = rows[i].v[k];      /* 48 and 146 are little-endian: the low byte */
+        }
+        ww_sign(buf, len);
+        rc = cov_load(buf, len, &m, &d);
+        CHECK(rc == WE_ERR_FORMAT && d.what != NULL && strcmp(d.what, rows[i].want) == 0,
+              "[C5b] %s, %s: want \"%s\", got %s \"%s\"", rows[i].base, rows[i].why, rows[i].want, we_strerror(rc),
+              d.what != NULL ? d.what : "-");
+        free(buf);
+    }
+}
+
+/* C6 and the arm-time copy: every two-family fixture reads uncovered 0; the one-family one reads bit 6 */
+static void test_coverage_compat(void)
+{
+    static const char *const two[] = { "routing", "tor", "tenant", "tenant-w1", "tenant-w64", "tenant-w65",
+                                       "tenant-empty", "names" };
+    size_t i;
+    char path[256];
+    uint8_t *buf;
+    size_t len = 0;
+    we_map_t m;
+    we_load_detail_t d;
+
+    SECTION("C6: the existing planes read compatibly; the copy into the armed map");
+    for (i = 0; i < sizeof two / sizeof two[0]; i++) {
+        snprintf(path, sizeof path, "testdata/format2/%s.bin", two[i]);
+        buf = cov_read(path, &len);
+        CHECK(buf != NULL && cov_load(buf, len, &m, &d) == WE_OK && m.uncovered == 0u && we_family_covered(&m, 4)
+              && we_family_covered(&m, 6), "[C6] %s loads with both families stated", two[i]);
+        free(buf);
+    }
+    buf = cov_read("testdata/interop.snap", &len);
+    CHECK(buf != NULL && we_map_from_buffer(buf, len, "snapshot.bin", &m, &d) == WE_OK && m.uncovered == 0u,
+          "[C6] the format-1 snapshot reads uncovered 0");
+    free(buf);
+    buf = cov_read("testdata/format2/tor-v4only.bin", &len);
+    CHECK(buf != NULL && cov_load(buf, len, &m, &d) == WE_OK && m.uncovered == WE_UNCOVERED_V6
+          && we_family_covered(&m, 4) && !we_family_covered(&m, 6) && m.f6.n == 0u,
+          "[C6] tor-v4only arms with uncovered = bit 6 (%02x), IPv4 stated, IPv6 not covered", buf != NULL ? m.uncovered : 0u);
+    free(buf);
+    CHECK(!we_family_covered(NULL, 4) && !we_family_covered(NULL, 6), "a NULL map states nothing");
+    CHECK(we_coverage_allowed(WE_PLANE_TOR, 6) && !we_coverage_allowed(WE_PLANE_TENANT, 4)
+          && !we_coverage_allowed(WE_PLANE_TENANT, 6) && !we_coverage_allowed(WE_PLANE_ROUTING, 6)
+          && !we_coverage_allowed(0u, 6) && !we_coverage_allowed(9u, 6) && !we_coverage_allowed(WE_PLANE_TOR, 5),
+          "the allowance table: tor IPv6 allowed; tenant, routing and out-of-range cells refused");
+    {
+        uint32_t p, cells = 0u;
+
+        for (p = 1u; p <= WE_PLANE_MAX; p++) {
+            cells += (uint32_t)we_coverage_allowed(p, 4) + (uint32_t)we_coverage_allowed(p, 6);
+        }
+#ifdef WE_TEST_ALLOW_V4_UNCOVERED
+        CHECK(cells == 2u && we_coverage_allowed(WE_PLANE_TOR, 4), "[C5v4] the test table adds exactly tor IPv4");
+#else
+        CHECK(cells == 1u && !we_coverage_allowed(WE_PLANE_TOR, 4), "the production table has exactly one cell");
+#endif
+    }
+    {
+        we_handle_t h;
+        we_map_t *rev = we_map_new_revoked();
+
+        memset(&h, 0, sizeof h);
+        CHECK(rev != NULL, "a revoked map");
+        if (rev != NULL) {
+            rev->uncovered = (uint8_t)(WE_UNCOVERED_V4 | WE_UNCOVERED_V6);
+            CHECK(we_handle_publish_map(&h, rev, 1u) == WE_ERR_FORMAT,
+                  "[C14] we_handle_publish_map refuses a map with a coverage bit set");
+            rev->uncovered = 0u;
+            CHECK(we_handle_publish_map(&h, rev, 1u) == WE_OK, "[C14] and publishes it with the byte at 0");
+            we_handle_retire(&h, 10u * WE_DEFAULT_GRACE_MS);
+            free(h.current);
+        }
+    }
+}
+
+/*
+ * C12: every (176, 177) pair on the smallest legal baseline of each plane, IPv6 n in {0, 1}, held to the
+ * rules as written here, independently of the loader. A refused cell is refused in the FORMAT stage,
+ * before the digest, so only the accepted cells and a fixed sample of refused ones are re-signed.
+ */
+static const char *cov_expect(uint32_t plane, uint32_t n6, uint32_t a, uint32_t b)
+{
+    static const char *const names[9] = { "", "reputation", "tor", "rpki-unreachable", "routing", "anonymizer",
+                                          "threat", "registry", "tenant" };
+    static char msg[96];
+
+    if (plane == WE_PLANE_REPUTATION) {
+        return (a | b) == 0u ? NULL : "a reserved byte of the schema tail is not zero";
+    }
+    if (a > 1u || b > 1u) {
+        return "a coverage byte outside stated and not-covered";
+    }
+    if (a == 1u && b == 1u) {
+        return "a plane that covers no family";
+    }
+    if (a == 1u || b == 1u) {
+        int fam = a == 1u ? 4 : 6;
+        int allowed = plane == WE_PLANE_TOR && (fam == 6
+#ifdef WE_TEST_ALLOW_V4_UNCOVERED
+                                                || fam == 4
+#endif
+                                                );
+
+        if (plane == WE_PLANE_TENANT) {
+            return "the tenant plane covers both families";
+        }
+        if (!allowed) {
+            snprintf(msg, sizeof msg, "plane %s may not leave IPv%d not covered", names[plane], fam);
+            return msg;
+        }
+        if (fam == 4 || n6 != 0u) {
+            return "a not-covered family carries data";     /* the baseline's IPv4 family always has a range */
+        }
+    }
+    return NULL;
+}
+
+static void test_coverage_sweep(void)
+{
+    uint32_t plane, n6, a, b, accepted = 0u, refused = 0u, resigned = 0u, bad = 0u, sample = 0u;
+    struct timespec t0, t1;
+
+    SECTION("C12: every coverage pair on every plane's smallest legal baseline");
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (plane = 1u; plane <= WE_PLANE_MAX; plane++) {
+        for (n6 = 0u; n6 <= 1u; n6++) {
+            static __uint128_t s4[1] = { 0x0a000000u }, e4[1] = { 0x0a0000ffu }, s6[1], e6[1];
+            static uint8_t r4[16], r6[32], sev[1] = { WE_SEV_HIGH };
+            ww_plane_t p;
+            uint8_t *base, *buf;
+            size_t len = 0;
+            we_map_t m;
+            we_load_detail_t d;
+
+            memset(&p, 0, sizeof p);
+            p.format = plane == WE_PLANE_REPUTATION ? WE_FORMAT_1 : WE_FORMAT_2;
+            p.schema = 1;
+            p.plane = plane;
+            p.generation = 7u;
+            p.country_version = (plane == WE_PLANE_ROUTING || plane == WE_PLANE_REGISTRY) ? 5704u : 0u;
+            s6[0] = (__uint128_t)0x20010db8u << (ww_key_bytes(&p, 6) == 8u ? 32 : 96);
+            e6[0] = s6[0] + 255u;
+            memset(r4, 0, sizeof r4);
+            memset(r6, 0, sizeof r6);
+            if (plane != WE_PLANE_REPUTATION && plane != WE_PLANE_ROUTING && plane != WE_PLANE_REGISTRY) {
+                r4[4] = 1u;                      /* a membership record's flags: bit 0, defined on every plane */
+                r6[16] = 1u;
+            }
+            p.v4.n = 1u;
+            p.v4.start = s4;
+            p.v4.end = e4;
+            p.v4.kind = WE_KIND_NONE;
+            p.v6.n = n6;
+            p.v6.start = s6;
+            p.v6.end = e6;
+            p.v6.kind = WE_KIND_NONE;
+            if (p.format == WE_FORMAT_1) {
+                p.v4.sev = sev;
+                p.v6.sev = sev;
+            } else {
+                p.v4.rec = r4;
+                p.v6.rec = r6;
+            }
+            base = ww_build(&p, &len);
+            buf = base != NULL ? (uint8_t *)aligned_alloc(64, (len + 63u) & ~(size_t)63u) : NULL;
+            CHECK(buf != NULL && (memcpy(buf, base, len), cov_load(buf, len, &m, &d) == WE_OK),
+                  "[C12] plane %u, IPv6 n %u: the baseline loads (%s)", plane, n6, d.what != NULL ? d.what : "-");
+            if (buf == NULL) {
+                free(base);
+                continue;
+            }
+            for (a = 0u; a < 256u; a++) {
+                for (b = 0u; b < 256u; b++) {
+                    const char *want = cov_expect(plane, n6, a, b);
+                    int rc;
+
+                    memcpy(buf, base, sizeof(we_header_t));
+                    buf[176] = (uint8_t)a;
+                    buf[177] = (uint8_t)b;
+                    /* every accepted cell, and every 251st refused one (a fixed sample), is re-signed */
+                    if (want == NULL || ((a * 256u + b) % 251u) == 0u) {
+                        ww_sign(buf, len);
+                        resigned++;
+                        sample += want != NULL;
+                    }
+                    rc = cov_load(buf, len, &m, &d);
+                    if (want == NULL) {
+                        uint8_t unc = (uint8_t)((a ? WE_UNCOVERED_V4 : 0u) | (b ? WE_UNCOVERED_V6 : 0u));
+
+                        accepted++;
+                        if (rc != WE_OK || m.uncovered != unc) {
+                            bad++;
+                            CHECK(0, "[C12] plane %u n6 %u (%u,%u): want accepted with uncovered %02x, got %s \"%s\"",
+                                  plane, n6, a, b, unc, we_strerror(rc), d.what != NULL ? d.what : "-");
+                        }
+                    } else {
+                        refused++;
+                        if (rc != WE_ERR_FORMAT || d.what == NULL || strcmp(d.what, want) != 0) {
+                            bad++;
+                            if (bad < 20u) {
+                                CHECK(0, "[C12] plane %u n6 %u (%u,%u): want \"%s\", got %s \"%s\"", plane, n6, a, b,
+                                      want, we_strerror(rc), d.what != NULL ? d.what : "-");
+                            }
+                        }
+                    }
+                }
+            }
+            free(buf);
+            free(base);
+        }
+    }
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    checks++;
+    if (bad != 0u) {
+        failures++;
+        printf("  FAIL [C12] %u cells disagree with the rules as written\n", bad);
+    }
+    CHECK(accepted == 8u * 2u + 1u,
+          "[C12] accepted exactly at (0,0) on every plane and (0,1) on tor with IPv6 n = 0: %u cells", accepted);
+    /* the digest was recomputed for every accepted cell and the fixed sample of refused ones, and no other */
+    CHECK(resigned == accepted + sample && sample > 0u,
+          "[C12] re-signed %u cells: every accepted one and the %u-cell refused sample", resigned, sample);
+    printf("  %u cells: %u accepted, %u refused (%u of them re-signed), %u disagreements, %.2f s\n",
+           accepted + refused, accepted, refused, sample, bad,
+           (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9);
+}
+
+#ifdef WE_TEST_ALLOW_V4_UNCOVERED
+/*
+ * C5v4: rule 5's IPv4 half. Unreachable in production (rule 4 refuses every IPv4 cell first), so it is
+ * proved in this build alone, whose table adds tor IPv4: on a tor plane with an empty IPv4 family marked
+ * not covered, each IPv4 field, one at a time, is refused with rule 5's message.
+ */
+static void test_coverage_v4_half(void)
+{
+    static const struct { size_t at; uint32_t v; int wide; const char *field; } f[] = {
+        { 44, 1u, 4, "v4_count" }, { 52, 64u, 4, "v4_index_off" }, { 56, 64u, 4, "v4_start_off" },
+        { 60, 64u, 4, "v4_end_off" }, { 64, 64u, 4, "v4_sev_off" }, { 68, 64u, 4, "v4_meta_off" },
+        { 12, WE_H_V4_INDEXED | WE_H_SCHEMA, 4, "the V4_INDEXED flag" }, { 140, 1u, 1, "v4_index_kind" },
+        { 141, 12u, 1, "v4_index_param" }, { 148, 64u, 4, "v4_record_off" }, { 156, 64u, 4, "v4_sample_off" },
+        { 164, 1u, 4, "v4_sample_count" }, { 174, 1u, 1, "v4_depth" },
+    };
+    size_t i, len = 0;
+    uint8_t *buf = cov_read(COV_DIR "/baseline-tor-v4empty.bin", &len);
+    we_map_t m;
+    we_load_detail_t d;
+
+    SECTION("C5v4: rule 5's IPv4 half, in the test build whose table allows tor IPv4");
+    CHECK(buf != NULL, "[C5v4] the tor baseline with an empty IPv4 family");
+    if (buf == NULL) {
+        return;
+    }
+    buf[176] = 1u;
+    ww_sign(buf, len);
+    CHECK(cov_load(buf, len, &m, &d) == WE_OK && m.uncovered == WE_UNCOVERED_V4,
+          "[C5v4] tor with IPv4 not covered and empty arms in this build (%s)", d.what != NULL ? d.what : "-");
+    for (i = 0; i < sizeof f / sizeof f[0]; i++) {
+        uint8_t *b = (uint8_t *)aligned_alloc(64, (len + 63u) & ~(size_t)63u);
+        int rc;
+
+        memcpy(b, buf, len);
+        if (f[i].wide == 4) {
+            memcpy(b + f[i].at, &f[i].v, 4);
+        } else {
+            b[f[i].at] = (uint8_t)f[i].v;
+        }
+        ww_sign(b, len);
+        rc = cov_load(b, len, &m, &d);
+        CHECK(rc == WE_ERR_FORMAT && d.what != NULL && strcmp(d.what, "a not-covered family carries data") == 0
+              && d.family == 4, "[C5v4] %s set on a not-covered IPv4 family: got %s \"%s\"", f[i].field,
+              we_strerror(rc), d.what != NULL ? d.what : "-");
+        free(b);
+    }
+    free(buf);
+}
+#endif
+
 static void test_format2_layout_pins(void)
 {
     static f2_t x;
@@ -2469,12 +2886,6 @@ static void test_clamp_under_a_rewritten_mapping(void)
 }
 
 /* ---- the performance criteria this core holds itself to ---- */
-static int cmp_u64(const void *a, const void *b)
-{
-    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
-    return (x < y) ? -1 : (x > y);
-}
-
 static void test_performance(void)
 {
     const uint32_t N = 120000u;   /* Tier 3 scale: the WORST case we would ever ship */
@@ -2483,7 +2894,7 @@ static void test_performance(void)
     uint32_t cur = 1000u;
     int mode;
 
-    SECTION("performance: p99 lookup, cold start, resident size");
+    SECTION("performance: load+verify work and resident size, counted, never timed");
 
     for (i = 0; i < N; i++) {
         r[i].start = cur;
@@ -2497,90 +2908,37 @@ static void test_performance(void)
     for (mode = 0; mode < 2; mode++) {
         we_map_t m;
         int rc;
-        uint64_t t0, t1;
         struct stat st;
 
         CHECK(write_snapshot(tmppath("perf.snap"), r, n, NULL, 0, mode, 1, 0, NULL, 0, NULL) == 0, "write");
         stat(tmppath("perf.snap"), &st);
 
         /*
-         * LOAD TIME, not "cold start". The comment here used to say it dropped the page cache
-         * influence and the code did nothing of the kind - it just timed we_map_open on a file that
-         * had been written moments earlier, so every figure ever quoted as a cold start was a
-         * warm-cache number, mislabelled. Measuring a genuinely cold start needs either root
-         * (drop_caches) or posix_fadvise(DONTNEED) and a separate fd; until one of those is here, this
-         * is load-and-verify time on a warm page cache and is labelled as such.
-         */
-        /*
          * The claim is the work, not the time: load+verify digests the file in ONE pass, so it runs
          * exactly the compression blocks one SHA-256 of `size` bytes needs, ceil((size + 9) / 64), and
          * the rest of the verification is the structure walk, linear in the ranges and gated by the
-         * trace build's per-read model. A wall-clock budget asserted here failed on a loaded box with
-         * nothing wrong (75 ms against 50, the same row 8 to 29 ms re-run), so the time is printed and
-         * never asserted. WE_TEST_EXTRA_VERIFY_PASS, a second digest pass, is this row's control.
+         * trace build's per-read model. WE_TEST_EXTRA_VERIFY_PASS, a second digest pass, is this row's
+         * control.
+         *
+         * NO CLOCK IS READ IN THIS SUITE. A wall-clock budget here failed on a loaded box with
+         * nothing wrong (52.97 and 75 ms against 50, the same row 8 to 29 ms re-run), and even a printed
+         * figure made `make check` look as though it measured the machine. Elapsed time lives in
+         * bench_core, which prints a lookup mean per layout as information, beside the bounds.
+         * The lookup's cost is gated deterministically elsewhere: the probe bound, the trace build's
+         * model of every memory read (whose extra-window mutant, test_mutant, must fail), and the
+         * cachegrind gate's per-lookup instruction and data-reference rows on both architectures.
          */
         we_sha256_blocks = 0u;
-        t0 = now_ns();
         rc = we_map_open(tmppath("perf.snap"), &m);
-        t1 = now_ns();
         CHECK(rc == WE_OK, "open: %s", we_strerror(rc));
         if (rc != WE_OK) { continue; }
-        printf("  %-12s file %6.1f KB   load+verify (warm cache) %6.2f ms, %llu digest blocks (printed, not asserted)\n",
+        printf("  %-12s file %6.1f KB   load+verify %llu digest blocks\n",
                mode ? "WITH index" : "no index", (double)st.st_size / 1024.0,
-               (double)(t1 - t0) / 1e6, (unsigned long long)we_sha256_blocks);
+               (unsigned long long)we_sha256_blocks);
         CHECK(we_sha256_blocks == ((uint64_t)st.st_size + 9u + 63u) / 64u,
               "load+verify: %llu digest blocks for a %lld-byte file, not the one pass's %llu",
               (unsigned long long)we_sha256_blocks, (long long)st.st_size,
               (unsigned long long)(((uint64_t)st.st_size + 9u + 63u) / 64u));
-
-        /* throughput and tail latency. Batched, because a clock_gettime per lookup costs more than
-         * the lookup does; the batch size is stated so the number cannot be read as more precise
-         * than it is. */
-        {
-            const int BATCH = 32;
-            const int ROUNDS = 40000;
-            uint64_t *samples = (uint64_t *)malloc(sizeof(uint64_t) * (size_t)ROUNDS);
-            volatile uint8_t sink = 0;
-            int k, j;
-            uint64_t sum = 0;
-
-            /* warm the cache the way real traffic would */
-            for (k = 0; k < 200000; k++) { sink = (uint8_t)(sink + we_lookup4(&m, rnd32())); }
-
-            for (k = 0; k < ROUNDS; k++) {
-                uint32_t a[32];
-                for (j = 0; j < BATCH; j++) { a[j] = rnd32(); }
-                t0 = now_ns();
-                for (j = 0; j < BATCH; j++) { sink = (uint8_t)(sink + we_lookup4(&m, a[j])); }
-                t1 = now_ns();
-                samples[k] = (t1 - t0) / (uint64_t)BATCH;
-                sum += samples[k];
-            }
-            qsort(samples, (size_t)ROUNDS, sizeof(uint64_t), cmp_u64);
-            /*
-             * These are per-lookup figures derived from BATCH means, and that is a real limitation
-             * rather than a footnote: a p99 of batch means is structurally blind to a tail. Injecting
-             * a stall into 2% of lookups put the true p99 at 576 ns and this harness reported 57 and
-             * passed. The number below is therefore a sound MEAN and an unsound p99, and the
-             * assertion that follows is kept only as a mean gate. The claim that actually holds is
-             * the structural probe bound asserted above.
-             */
-            printf("  %-12s mean %3" PRIu64 " ns   p50 %3" PRIu64 "   p90 %3" PRIu64
-                   "   p99 %3" PRIu64 "   p99.9 %4" PRIu64 " ns  (per-lookup figures derived from"
-                   " batches of %d: a sound mean, NOT a sound p99)\n",
-                   mode ? "WITH index" : "no index",
-                   sum / (uint64_t)ROUNDS, samples[ROUNDS / 2], samples[(ROUNDS * 9) / 10],
-                   samples[(ROUNDS * 99) / 100], samples[(ROUNDS * 999) / 1000], BATCH);
-            /*
-             * Printed, never asserted: a wall-clock mean reds a loaded box with nothing wrong. The
-             * lookup's cost is gated deterministically elsewhere: the probe bound above, the trace
-             * build's model of every memory read (whose extra-window mutant, test_mutant, must fail),
-             * and the cachegrind gate's per-lookup instruction and data-reference rows on both
-             * architectures.
-             */
-            free(samples);
-            (void)sink;
-        }
         /* resident cost: the mapping is read-only and file-backed, so N workers share one copy */
         CHECK((uint64_t)st.st_size < 16ull * 1024ull * 1024ull,
               "snapshot %.1f MB exceeds the 16 MB budget", (double)st.st_size / 1048576.0);
@@ -2758,6 +3116,177 @@ static void test_rebase_moves_every_pointer(void)
     CHECK(m.country_known == outside, "rebase: a pointer outside the buffer was moved");
 }
 
+/*
+ * The writer's boot id: the kernel's file, then WHISPER_EDGE_BOOT_ID (systemd's %b, for a unit whose sandbox
+ * hides /proc/sys), then "unknown"; either spelling taken, the kernel's written. Its controls:
+ * WE_TEST_BOOT_ENV_FIRST (the variable before the kernel) must fail the order row, and WE_TEST_BOOT_HIDDEN
+ * (the kernel's file absent, as ProcSubset=pid makes it) runs the identity's rows without it.
+ */
+static void ts_put_text(const char *path, const char *body)
+{
+    FILE *f = fopen(path, "wb");
+
+    if (f == NULL || fwrite(body, 1, strlen(body), f) != strlen(body)) {
+        printf("test_core: cannot write %s\n", path);
+        exit(2);
+    }
+    fclose(f);
+}
+
+static void test_boot_id_sources(void)
+{
+    static const struct { const char *in, *want; } ok[] = {
+        { "0b3f6a1e-5c2d-4e8f-9a7b-1c2d3e4f5a6b", "0b3f6a1e-5c2d-4e8f-9a7b-1c2d3e4f5a6b" },     /* the kernel's */
+        { "0b3f6a1e-5c2d-4e8f-9a7b-1c2d3e4f5a6b\n", "0b3f6a1e-5c2d-4e8f-9a7b-1c2d3e4f5a6b" },   /* as read */
+        { "0B3F6A1E-5C2D-4E8F-9A7B-1C2D3E4F5A6B", "0b3f6a1e-5c2d-4e8f-9a7b-1c2d3e4f5a6b" },     /* any case */
+        { "0b3f6a1e5c2d4e8f9a7b1c2d3e4f5a6b", "0b3f6a1e-5c2d-4e8f-9a7b-1c2d3e4f5a6b" },         /* systemd's %b */
+        { "0B3F6A1E5C2D4E8F9A7B1C2D3E4F5A6B \r\n\t", "0b3f6a1e-5c2d-4e8f-9a7b-1c2d3e4f5a6b" },  /* white space */
+    };
+    static const char *const bad[] = {
+        "", "unknown", "\n", "0b3f6a1e-5c2d-4e8f-9a7b-1c2d3e4f5a6", "0b3f6a1e-5c2d-4e8f-9a7b-1c2d3e4f5a6bc",
+        "0b3f6a1e5c2d4e8f9a7b1c2d3e4f5a6", "0b3f6a1e5c2d4e8f9a7b1c2d3e4f5a6b0", "0b3f6a1e-5c2d-4e8f-9a7b1-c2d3e4f5a6b",
+        "0b3f6a1e_5c2d_4e8f_9a7b_1c2d3e4f5a6b", "0g3f6a1e-5c2d-4e8f-9a7b-1c2d3e4f5a6b", " 0b3f6a1e5c2d4e8f9a7b1c2d3e4f5a6b",
+        "0b3f6a1e5c2d4e8f 9a7b1c2d3e4f5a6b", "00000000-0000-0000-0000-000000000000", "00000000000000000000000000000000",
+        "0b3f6a1e-5c2d-4e8f-9a7b-1c2d3e4f5a6b-", "0b3f6a1e5c2d4e8f9a7b1c2d3e4f5a6b\nx",
+    };
+    const char *ka = "0b3f6a1e-5c2d-4e8f-9a7b-1c2d3e4f5a6b", *kb = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    char kern[1100], junk[1100], none[1100], out[40], longenv[80];
+    we_procid_t id;
+    size_t i;
+    int src;
+
+    printf("== the writer's boot id: the kernel's file, then WHISPER_EDGE_BOOT_ID, then unknown ==\n");
+    for (i = 0; i < sizeof ok / sizeof ok[0]; i++) {
+        char c[37];
+
+        CHECK(we_proc_boot_canon(ok[i].in, strlen(ok[i].in), c) == 0 && strcmp(c, ok[i].want) == 0,
+              "boot id: \"%s\" was not read as %s", ok[i].in, ok[i].want);
+    }
+    for (i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        char c[37] = "untouched";
+
+        CHECK(we_proc_boot_canon(bad[i], strlen(bad[i]), c) == -1,
+              "boot id: the malformed \"%s\" was read as a boot id (%s)", bad[i], c);
+    }
+    snprintf(kern, sizeof kern, "%s/boot_id.kernel", TMPDIR_);
+    snprintf(junk, sizeof junk, "%s/boot_id.junk", TMPDIR_);
+    snprintf(none, sizeof none, "%s/boot_id.absent", TMPDIR_);
+    ts_put_text(kern, "0b3f6a1e-5c2d-4e8f-9a7b-1c2d3e4f5a6b\n");
+    ts_put_text(junk, "not a boot id\n");
+    unlink(none);
+    /* the order: the kernel's file first, even when the variable names another boot */
+    src = we_proc_boot_from(kern, "aaaaaaaabbbb4ccc8dddeeeeeeeeeeee", out);
+    CHECK(src == WE_PROC_BOOT_FROM_PROC && strcmp(out, ka) == 0,
+          "boot id order: with the kernel's file readable the variable was taken (source %d, %s)", src, out);
+    src = we_proc_boot_from(kern, NULL, out);
+    CHECK(src == WE_PROC_BOOT_FROM_PROC && strcmp(out, ka) == 0, "boot id: the kernel's file alone (source %d, %s)", src, out);
+    /* the file hidden (ProcSubset=pid gives ENOENT) or not a boot id: the variable, in either spelling */
+    src = we_proc_boot_from(none, "AAAAAAAABBBB4CCC8DDDEEEEEEEEEEEE", out);
+    CHECK(src == WE_PROC_BOOT_FROM_ENV && strcmp(out, kb) == 0,
+          "boot id: with the kernel's file hidden, systemd's %%b spelling was not taken (source %d, %s)", src, out);
+    src = we_proc_boot_from(junk, kb, out);
+    CHECK(src == WE_PROC_BOOT_FROM_ENV && strcmp(out, kb) == 0,
+          "boot id: with the kernel's file unreadable as a boot id, the variable was not taken (source %d, %s)", src, out);
+    src = we_proc_boot_from(NULL, kb, out);
+    CHECK(src == WE_PROC_BOOT_FROM_ENV && strcmp(out, kb) == 0, "boot id: the variable alone (source %d, %s)", src, out);
+    /* neither: "unknown", said plainly, never an empty field */
+    src = we_proc_boot_from(none, NULL, out);
+    CHECK(src == WE_PROC_BOOT_NONE && strcmp(out, WE_PROC_BOOT_UNKNOWN) == 0, "boot id: no source gave %s (source %d)", out, src);
+    src = we_proc_boot_from(none, "garbage", out);
+    CHECK(src == WE_PROC_BOOT_NONE && strcmp(out, WE_PROC_BOOT_UNKNOWN) == 0,
+          "boot id: a variable that is no boot id gave %s (source %d)", out, src);
+    memset(longenv, 'a', sizeof longenv - 1u);
+    longenv[sizeof longenv - 1u] = '\0';
+    src = we_proc_boot_from(none, longenv, out);
+    CHECK(src == WE_PROC_BOOT_NONE && strcmp(out, WE_PROC_BOOT_UNKNOWN) == 0,
+          "boot id: a variable of %zu hex digits gave %s (source %d)", strlen(longenv), out, src);
+    src = we_proc_boot_from(junk, NULL, out);
+    CHECK(src == WE_PROC_BOOT_NONE && strcmp(out, WE_PROC_BOOT_UNKNOWN) == 0, "boot id: a junk file alone gave %s", out);
+    unlink(kern);
+    unlink(junk);
+    strcpy(id.boot, "unknown");
+    CHECK(!we_proc_boot_known(&id), "boot id: \"unknown\" read as known");
+    id.boot[0] = '\0';
+    CHECK(!we_proc_boot_known(&id), "boot id: an empty field read as known");
+    strcpy(id.boot, ka);
+    CHECK(we_proc_boot_known(&id), "boot id: %s read as unknown", ka);
+#ifndef WE_TEST_BOOT_HIDDEN
+    /* the real process: the kernel's file names this boot, in the kernel's spelling */
+    {
+        char raw[64] = "";
+        FILE *f = fopen(WE_PROC_BOOT_PATH, "r");
+
+        if (f != NULL) {
+            if (fgets(raw, sizeof raw, f) == NULL) {
+                raw[0] = '\0';
+            }
+            fclose(f);
+        }
+        raw[strcspn(raw, "\n")] = '\0';
+        CHECK(we_proc_id(&id) == 0 && strcmp(id.boot, raw) == 0 && strlen(id.id16) == 16u,
+              "boot id: the identity carries \"%s\", and the kernel says \"%s\"", id.boot, raw);
+    }
+#else
+    /* the unit's sandbox hides the kernel's file: an identity without a boot id is still whole, says
+     * "unknown", and its files are named; the variable then names it, and the cache keeps what a master read
+     * for the workers it forks after their environment is cleared (nginx keeps only TZ and its env lines) */
+    unsetenv(WE_PROC_BOOT_ENV);
+    CHECK(we_proc_id(&id) == 0 && strcmp(id.boot, WE_PROC_BOOT_UNKNOWN) == 0 && strlen(id.id16) == 16u
+          && id.pid == (uint64_t)getpid() && id.starttime != 0u,
+          "boot hidden: the identity is not whole with boot unknown (boot \"%s\", id16 \"%s\")", id.boot, id.id16);
+    {
+        char unknown16[17];
+
+        memcpy(unknown16, id.id16, sizeof unknown16);
+        setenv(WE_PROC_BOOT_ENV, "AAAAAAAABBBB4CCC8DDDEEEEEEEEEEEE", 1);
+        CHECK(we_proc_boot_prime() == WE_PROC_BOOT_FROM_ENV, "boot hidden: the prime did not read the variable");
+        unsetenv(WE_PROC_BOOT_ENV);             /* a worker's cleared environment, after the master's prime */
+        CHECK(we_proc_id(&id) == 0 && strcmp(id.boot, kb) == 0 && strcmp(id.id16, unknown16) != 0,
+              "boot hidden: after the prime and a cleared environment the identity carries \"%s\", not %s", id.boot, kb);
+        /* and the per-range counters writer, another translation unit, names the same process: the file is
+         * <pid>-<id16>.cnt under the identity the prime gave, not under the boot-less one. Its cache was a
+         * second copy once (a static inline function's statics are one per unit), and a 26.04 nginx under
+         * ProcSubset=pid wrote .cnt as boot unknown beside a .status naming the boot */
+        {
+            rng_t r = { 0x0a000000u, 0x0a0000ffu, WE_SEV_HIGH };
+            uint32_t meta = 1u;
+            const char blob[] = "\0scanner";
+            char want[1200], other[1200];
+            we_map_t m;
+            we_counters_t *c = NULL;
+            int rc;
+
+            CHECK(write_snapshot(tmppath("boot.snap"), &r, 1, NULL, 0, 0, 9, 0, blob, (uint32_t)sizeof blob, &meta) == 0,
+                  "boot hidden: the counters snapshot was not written");
+            rc = we_map_open(tmppath("boot.snap"), &m);
+            CHECK(rc == WE_OK, "boot hidden: open: %s", we_strerror(rc));
+            if (rc == WE_OK) {
+                c = we_counters_new(&m, 1760000000000ull);
+                we_counters_count4(c, &m, 0x0a000005u);
+                snprintf(want, sizeof want, "%s/%llu-%s.cnt", TMPDIR_, (unsigned long long)id.pid, id.id16);
+                snprintf(other, sizeof other, "%s/%llu-%s.cnt", TMPDIR_, (unsigned long long)id.pid, unknown16);
+                unlink(want);
+                unlink(other);
+                CHECK(c != NULL && we_counters_write(c, &m, TMPDIR_, 1760000600000ull) == WE_OK,
+                      "boot hidden: the counters were not written");
+                CHECK(access(want, F_OK) == 0 && access(other, F_OK) != 0,
+                      "boot hidden: the counters file is not named by the primed identity (%s %s, the boot-less %s %s)",
+                      want, access(want, F_OK) == 0 ? "present" : "absent", other,
+                      access(other, F_OK) == 0 ? "present" : "absent");
+                if (access(want, F_OK) == 0 && access(other, F_OK) != 0) {
+                    printf("  (the counters writer, another unit, named the boot the prime read: one cache per process)\n");
+                }
+                unlink(want);
+                unlink(other);
+                we_counters_free(c);
+                we_map_close(&m);
+            }
+        }
+    }
+    printf("  (the kernel's file hidden: the identity said unknown, then named the boot from the variable)\n");
+#endif
+}
+
 /* the writer's pid namespace: the stat, and the link's text when the stat is refused; a malformed text
  * gives nothing, never a garbage inode */
 static void test_pidns_from_the_link(void)
@@ -2855,10 +3384,18 @@ int main(int argc, char **argv)
     test_format2_refusals();
     test_format2_feed_table();
     test_format2_layout_pins();
+    test_coverage_corpus();
+    test_coverage_order();
+    test_coverage_compat();
+    test_coverage_sweep();
+#ifdef WE_TEST_ALLOW_V4_UNCOVERED
+    test_coverage_v4_half();
+#endif
     test_rebase_moves_every_pointer();
     test_clamp_under_a_rewritten_mapping();
     test_performance();
     test_pidns_from_the_link();
+    test_boot_id_sources();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

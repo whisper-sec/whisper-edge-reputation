@@ -229,7 +229,7 @@ def build_stree(starts, s, kb):
 
 
 def write_plane(path, plane, fmt, schema, kinds, ranges, generation=1, valid_until_ms=0, expect=None,
-                records=None):
+                records=None, coverage=(0, 0)):
     """kinds: {4: ('radix', k) | ('rank', None) | ('none', None), 6: ...}; ranges: {4: [(s, e)], 6: ...},
     a range (s, e) taking the synthetic record of its index, or (s, e, record) its own (--records; unnamed
     fields are zero, format 1's record is {'sev': byte}); records: None, else {4: [...], 6: [...]} with one
@@ -311,6 +311,10 @@ def write_plane(path, plane, fmt, schema, kinds, ranges, generation=1, valid_unt
                          lay[4].get("m", 0), lay[6].get("m", 0))
         struct.pack_into('<HBB', h, 172, COUNTRY_TABLE_VERSION if schema_id == 1 else 0,
                          lay[4].get("depth", 0), lay[6].get("depth", 0))
+        if fmt == 2:
+            # FORMAT.md section 2: bytes 176 and 177, 0 stated and 1 not-covered; a not-covered family is
+            # empty and unindexed, which the caller states (main_plane refuses anything else)
+            struct.pack_into('<BB', h, 176, coverage[0], coverage[1])
 
     lines = []
     packed_by_fam = {4: [], 6: []}
@@ -436,7 +440,8 @@ def read_records(path, plane, fmt):
 
 
 VALUED = ("--plane", "--out", "--format", "--v4-index", "--v6-index", "--records", "--generation",
-          "--valid-until", "--expect")
+          "--valid-until", "--expect", "--v4-coverage", "--v6-coverage")
+COVERAGE = {"stated": 0, "not-covered": 1}
 
 
 def usage_error(msg):
@@ -498,8 +503,21 @@ def main_plane(argv):
         ranges = records
     else:
         ranges = {4: synthetic_ranges(synth[0], 4), 6: synthetic_ranges(synth[1], key_bytes(plane, fmt, 6))}
+    cov = {}
+    for fam in (4, 6):
+        word = opts.get("--v%d-coverage" % fam, "stated")
+        if word not in COVERAGE:
+            usage_error("--v%d-coverage is stated or not-covered, not %r" % (fam, word))
+        cov[fam] = COVERAGE[word]
+        if cov[fam]:
+            if fmt != 2:
+                usage_error("coverage is a format-2 field; format 1 keeps bytes 176 and 177 reserved")
+            # a not-covered family carries nothing (FORMAT.md section 2 rule 5): no ranges, kind none
+            ranges[fam] = []
+            kinds[fam] = ("none", None)
     write_plane(opts["--out"], plane, fmt, "--schema" in flags, kinds, ranges,
-                int(opts["--generation"], 0), int(opts["--valid-until"], 0), opts.get("--expect"))
+                int(opts["--generation"], 0), int(opts["--valid-until"], 0), opts.get("--expect"),
+                coverage=(cov[4], cov[6]))
 
 
 # ---- the domain sweep: every in-domain value of every record field, and each field's refused edges ----
@@ -613,12 +631,216 @@ def main_sweep(argv):
           % (out, totals[4], totals[6], len(refused)))
 
 
+# ---- per-family coverage: a one-family plane from a builder's plane, and the shared refusal corpus ----
+
+def read_plane(path):
+    """A format-2 plane's families as the builder wrote them: keys, records, kinds, blob and the header
+    times, so it can be laid out again by this writer's own rules."""
+    b = open(path, 'rb').read()
+    magic, fmt, flags, gen, built, vu, tier = struct.unpack_from('<QIIQQQI', b, 0)
+    if magic != MAGIC or fmt != 2:
+        raise SystemExit("%s is not a format-2 plane" % path)
+    n4, n6 = struct.unpack_from('<II', b, 44)
+    blob_off, blob_len = struct.unpack_from('<II', b, 92)
+    pid, sid, _, kb6bits, k4, p4, k6, p6 = struct.unpack_from('<BBBBBBBB', b, 136)
+    st4, st6 = struct.unpack_from('<HH', b, 144)
+    r4, r6 = struct.unpack_from('<II', b, 148)
+    fams = {}
+    for fam, n, base, kind, param, stride, rec in ((4, n4, 52, k4, p4, st4, r4), (6, n6, 72, k6, p6, st6, r6)):
+        kb = 4 if fam == 4 else kb6bits // 8
+        start = struct.unpack_from('<I', b, base + 4)[0]
+        keys = [int.from_bytes(b[start + i * kb:start + (i + 1) * kb], 'little') for i in range(n)]
+        recs = [bytes(b[rec + i * stride:rec + (i + 1) * stride]) for i in range(n)]
+        fams[fam] = {"kb": kb, "kind": kind, "param": param, "stride": stride, "keys": keys, "recs": recs}
+    name = [k for k, v in PLANES.items() if v == pid][0]
+    return {"plane": name, "flags": flags, "gen": gen, "built": built, "vu": vu, "tier": tier,
+            "fams": fams, "blob": bytes(b[blob_off:blob_off + blob_len])}
+
+
+def lay_plane(path, P, coverage):
+    """Lay a plane read by read_plane out again, by the rules write_plane follows (which are the builder's,
+    FORMAT.md section 5), with a family dropped to not-covered where `coverage` says 1."""
+    fams = {f: dict(P["fams"][f]) for f in (4, 6)}
+    for i, fam in enumerate((4, 6)):
+        if coverage[i]:
+            fams[fam].update(kind=0, param=0, keys=[], recs=[])
+    off = HDR
+    for fam in (4, 6):
+        F = fams[fam]
+        n = len(F["keys"])
+        if n == 0:
+            continue
+        if F["kind"] == 1:
+            off = up(off, 64)
+            F["idx"] = off
+            off += ((1 << F["param"]) + 1) * 4
+        off = up(off, 64)
+        F["start"] = off
+        off += n * F["kb"]
+        off = up(off, 64)
+        F["rec"] = off
+        off += n * F["stride"]
+        if F["kind"] == 2:
+            tree, m, d = build_stree(F["keys"], 1 << F["param"], F["kb"])
+            F["tree"], F["m"], F["depth"] = tree, m, d
+            if tree:
+                off = up(off, 64)
+                F["sample"] = off
+                off += len(tree)
+    blob_off = off if P["blob"] else 0
+    off += len(P["blob"])
+    h = bytearray(off)
+    h[blob_off:blob_off + len(P["blob"])] = P["blob"]
+    flags = H_SCHEMA | (H_V4_INDEXED if fams[4]["kind"] == 1 and fams[4]["keys"] else 0) \
+        | (H_V6_INDEXED if fams[6]["kind"] == 1 and fams[6]["keys"] else 0)
+    struct.pack_into('<QIIQQQI', h, 0, MAGIC, 2, flags, P["gen"], P["built"], P["vu"], P["tier"])
+    struct.pack_into('<II', h, 44, len(fams[4]["keys"]), len(fams[6]["keys"]))
+    for fam, base in ((4, 52), (6, 72)):
+        struct.pack_into('<IIIII', h, base, fams[fam].get("idx", 0), fams[fam].get("start", 0), 0, 0, 0)
+    struct.pack_into('<III', h, 92, blob_off, len(P["blob"]), off)
+    plane = P["plane"]
+    schema_id = 1 if plane in ("routing", "registry") else 2
+    struct.pack_into('<BBBBBBBB', h, 136, PLANES[plane], schema_id, 32, fams[6]["kb"] * 8,
+                     fams[4]["kind"], fams[4]["param"], fams[6]["kind"], fams[6]["param"])
+    struct.pack_into('<HH', h, 144, fams[4]["stride"], fams[6]["stride"])
+    struct.pack_into('<IIIIII', h, 148, fams[4].get("rec", 0), fams[6].get("rec", 0), fams[4].get("sample", 0),
+                     fams[6].get("sample", 0), fams[4].get("m", 0), fams[6].get("m", 0))
+    struct.pack_into('<HBB', h, 172, COUNTRY_TABLE_VERSION if schema_id == 1 else 0,
+                     fams[4].get("depth", 0), fams[6].get("depth", 0))
+    struct.pack_into('<BB', h, 176, coverage[0], coverage[1])
+    for fam in (4, 6):
+        F = fams[fam]
+        for i, k in enumerate(F["keys"]):
+            h[F["start"] + i * F["kb"]:F["start"] + (i + 1) * F["kb"]] = k.to_bytes(F["kb"], 'little')
+            h[F["rec"] + i * F["stride"]:F["rec"] + (i + 1) * F["stride"]] = F["recs"][i]
+        if F["kind"] == 1 and F["keys"]:
+            k = F["param"]
+            cur = 0
+            for bk in range(1 << k):
+                while cur < len(F["keys"]) and F["keys"][cur] >> (8 * F["kb"] - k) < bk:
+                    cur += 1
+                struct.pack_into('<I', h, F["idx"] + 4 * bk, cur)
+            struct.pack_into('<I', h, F["idx"] + 4 * (1 << k), len(F["keys"]))
+        if F.get("tree"):
+            h[F["sample"]:F["sample"] + len(F["tree"])] = F["tree"]
+    save(path, sign(h))
+
+
+def main_one_family(argv):
+    """--one-family <src.bin> <dst.bin> [v4|v6]: the plane laid out again with that family (default v6)
+    not covered. With `same` instead it is laid out unchanged, which must reproduce the source byte for
+    byte: the check that this writer's layout is the builder's."""
+    if len(argv) not in (2, 3):
+        usage_error("--one-family takes <src.bin> <dst.bin> [v4|v6|same]")
+    which = argv[2] if len(argv) == 3 else "v6"
+    cov = {"v4": (1, 0), "v6": (0, 1), "same": (0, 0)}.get(which)
+    if cov is None:
+        usage_error("--one-family drops v4 or v6, or lays out the `same` plane")
+    lay_plane(out_path(argv[1]), read_plane(argv[0]), cov)
+
+
+# The shared refusal corpus, FORMAT.md section 2: every file a single-field sabotage of a legal baseline,
+# re-signed so only the structure check can refuse it, and MANIFEST.tsv the one table every checker
+# reads: file, baseline, the expected error code and message, and the rule.
+RESERVED = "a reserved byte of the schema tail is not zero"
+NOT_COVERED_DATA = "a not-covered family carries data"
+
+
+def main_coverage_corpus(argv):
+    if len(argv) != 1:
+        usage_error("--coverage-corpus takes <dir>")
+    out = argv[0]
+    os.makedirs(out, exist_ok=True)
+    tmp = os.path.join(out, ".baseline.bin")
+    member = lambda n, kb, fam, plane: [(s, e, synthetic_fields(plane, fam, i))
+                                        for i, (s, e) in enumerate(synthetic_ranges(n, kb))]
+    baselines = {
+        # tor, IPv4 stated (radix-12, 3 ranges), IPv6 not covered: the allowed one-family shape
+        "tor-v4only": ("tor", 2, {4: ("radix", 12), 6: ("none", None)}, (3, 0), (0, 1)),
+        # tor, both stated, IPv4 empty: a not-covered IPv4 here is rule 4's tor cell
+        "tor-v4empty": ("tor", 2, {4: ("none", None), 6: ("rank", None)}, (0, 3), (0, 0)),
+        "routing-v6empty": ("routing", 2, {4: ("radix", 12), 6: ("none", None)}, (3, 0), (0, 0)),
+        "tenant-v6empty": ("tenant", 2, {4: ("radix", 12), 6: ("none", None)}, (3, 0), (0, 0)),
+        "reputation-schema": ("reputation", 1, {4: ("radix", 16), 6: ("none", None)}, (3, 0), (0, 0)),
+        "reputation-preschema": ("reputation", 1, {4: ("radix", 16), 6: ("none", None)}, (3, 0), (0, 0)),
+    }
+    base_bytes = {}
+    for name, (plane, fmt, kinds, (n4, n6), cov) in baselines.items():
+        ranges = {4: member(n4, 4, 4, plane) if plane != "reputation" else
+                  [(s, e, {"sev": 3}) for s, e in synthetic_ranges(n4, 4)],
+                  6: member(n6, key_bytes(plane, fmt, 6), 6, plane)}
+        if plane in ("routing", "registry"):
+            ranges = {4: [(s, e) for s, e, _ in ranges[4]], 6: [(s, e) for s, e, _ in ranges[6]]}
+        write_plane(tmp, plane, fmt, name != "reputation-preschema", kinds, ranges, 7, 0, None, None, cov)
+        base_bytes[name] = bytes(open(tmp, 'rb').read())
+    os.unlink(tmp)
+
+    def u8(at, v):
+        return lambda h: h.__setitem__(at, v)
+
+    def u32(at, v):
+        return lambda h: struct.pack_into('<I', h, at, v)
+
+    def orflag(bit):
+        return lambda h: struct.pack_into('<I', h, 12, struct.unpack_from('<I', h, 12)[0] | bit)
+
+    F = "WE_ERR_FORMAT"
+    rows = [
+        ("c1-v4-2", "tor-v4only", u8(176, 2), "a coverage byte outside stated and not-covered", "1"),
+        ("c1-v6-2", "tor-v4only", u8(177, 2), "a coverage byte outside stated and not-covered", "1"),
+        ("c1-v6-255", "tor-v4only", u8(177, 255), "a coverage byte outside stated and not-covered", "1"),
+        ("c3-both", "tor-v4only", u8(176, 1), "a plane that covers no family", "3"),
+        ("c4-tor-v4", "tor-v4empty", u8(176, 1), "plane tor may not leave IPv4 not covered", "4"),
+        ("c4-routing-v6", "routing-v6empty", u8(177, 1), "plane routing may not leave IPv6 not covered", "4"),
+        ("c4-tenant-v6", "tenant-v6empty", u8(177, 1), "the tenant plane covers both families", "4"),
+        ("c5-count", "tor-v4only", u32(48, 1), NOT_COVERED_DATA, "5"),
+        ("c5-index-off", "tor-v4only", u32(72, 64), NOT_COVERED_DATA, "5"),
+        ("c5-start-off", "tor-v4only", u32(76, 64), NOT_COVERED_DATA, "5"),
+        ("c5-end-off", "tor-v4only", u32(80, 64), NOT_COVERED_DATA, "5"),
+        ("c5-sev-off", "tor-v4only", u32(84, 64), NOT_COVERED_DATA, "5"),
+        ("c5-meta-off", "tor-v4only", u32(88, 64), NOT_COVERED_DATA, "5"),
+        ("c5-indexed-flag", "tor-v4only", orflag(H_V6_INDEXED), NOT_COVERED_DATA, "5"),
+        ("c5-kind", "tor-v4only", u8(142, 2), NOT_COVERED_DATA, "5"),
+        ("c5-param", "tor-v4only", u8(143, 5), NOT_COVERED_DATA, "5"),
+        ("c5-record-off", "tor-v4only", u32(152, 64), NOT_COVERED_DATA, "5"),
+        ("c5-sample-off", "tor-v4only", u32(160, 64), NOT_COVERED_DATA, "5"),
+        ("c5-sample-count", "tor-v4only", u32(168, 1), NOT_COVERED_DATA, "5"),
+        ("c5-depth", "tor-v4only", u8(175, 1), NOT_COVERED_DATA, "5"),
+        ("stride", "tor-v4only", lambda h: struct.pack_into('<H', h, 146, 24), "a record stride is not the schema's",
+         "stride"),
+    ]
+    rows += [("reserved-%d" % at, "tor-v4only", u8(at, 1), RESERVED, "reserved") for at in range(178, 192)]
+    rows += [("f1-schema-176", "reputation-schema", u8(176, 1), RESERVED, "reserved"),
+             ("f1-schema-177", "reputation-schema", u8(177, 1), RESERVED, "reserved"),
+             ("f1-preschema-176", "reputation-preschema", u8(176, 1),
+              "the tail of a pre-schema format-1 file is reserved and must be zero", "pre-schema")]
+    lines = ["# file\tbaseline\tcode\tmessage\trule"]
+    for name, base, patch, msg, rule in rows:
+        h = bytearray(base_bytes[base])
+        patch(h)
+        if bytes(h) == base_bytes[base]:
+            raise SystemExit("corpus row %s changes nothing in %s" % (name, base))
+        save(os.path.join(out, name + ".bin"), sign(h))
+        lines.append("\t".join((name + ".bin", base, F, msg, rule)))
+    for name, data in base_bytes.items():
+        save(os.path.join(out, "baseline-" + name + ".bin"), bytearray(data))
+    with open(os.path.join(out, "MANIFEST.tsv"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print("coverage corpus %s: %d refused files over %d legal baselines" % (out, len(rows), len(base_bytes)))
+
+
 if __name__ == '__main__':
     if any(a in ("-h", "--help") for a in sys.argv[1:]):
         print(__doc__.strip())
         sys.exit(0)
     if len(sys.argv) >= 3 and sys.argv[1] == '--sweep':
         main_sweep(sys.argv[2:])
+        sys.exit(0)
+    if len(sys.argv) >= 2 and sys.argv[1] == '--one-family':
+        main_one_family(sys.argv[2:])
+        sys.exit(0)
+    if len(sys.argv) >= 2 and sys.argv[1] == '--coverage-corpus':
+        main_coverage_corpus(sys.argv[2:])
         sys.exit(0)
     # `--evidence` prints the evidence string this generator writes, so a gate asserting that a deny
     # log line carries it can ASK rather than hold a second copy of the literal. Two copies is how

@@ -53,6 +53,11 @@ THE CASE FILE (input) is line based. A program block is followed by the cases th
   plane <name> <fresh|stale|gen0>  the seven non-tenant planes (absent lines mean fresh); gen0 is a
                                    map armed at generation 0, "nothing armed", which reads UNKNOWN
                                    exactly as a stale non-tenant plane does (D-ae)
+  plane <name> <state> uncovered-v4|uncovered-v6
+                                   the plane does not cover that family (FORMAT.md section 2): a
+                                   request whose canonical address is in it reads every attribute of
+                                   the plane UNKNOWN, POLICY.md's fifth case; only the reader's allowed
+                                   cell (tor, IPv6) arms, and any other is a refused load, read as stale
   tenant <fresh|stale|null|revoked> <now_ms> <valid_until_ms>
                                    fresh needs valid_until 0 (no bound) or now <= valid_until, and stale
                                    needs 0 < valid_until < now; a word its times contradict is a
@@ -103,6 +108,10 @@ Each format line is followed by an example from a real run.
     unbounded <plane>,...                      TRUE only through an ISUNK on that plane, or for the
                                                tenant plane a capture under LAPSED
       report ctx http/server:a 2 unbounded tenant
+    uncovered-family <plane>,ipv<4|6>          the plane may leave that family not covered (the reader's
+                                               allowance table) and the allow captures it, a deny or log
+                                               below, or reaches TRUE only through its ISUNK
+      report ctx http/server:a 1 uncovered-family tor,ipv6
     adds-nothing                               an allow on a positive tenant_allow (D-s)
       report ctx http/server:a 6 adds-nothing
   case <id>
@@ -278,6 +287,8 @@ import time
 PLANES = ('reputation', 'tor', 'rpki-unreachable', 'routing', 'anonymizer', 'threat', 'registry', 'tenant')
 PLANE_ID = {p: i + 1 for i, p in enumerate(PLANES)}
 TENANT = 8
+# FORMAT.md section 2's allowance table, the reader's: (plane id, family) cells a plane may leave not covered
+COVERAGE_ALLOWED = {(2, 6)}
 KEYED = {'routing', 'anonymizer', 'threat', 'registry', 'tenant'}
 SCHEMA = {1: 'f1', 2: 'member', 3: 'member', 4: 'routing', 5: 'member', 6: 'member', 7: 'routing', 8: 'member'}
 MEMBER_MASK = {2: 0x01, 3: 0x01, 5: 0x03, 6: 0x3F, 8: 0x03}
@@ -2062,6 +2073,16 @@ def make_reports(cfg):
                         tag, r.n, ','.join(PLANES[x - 1] + ('(keyed)' if PLANES[x - 1] in KEYED else '') for x in cap)))
                 if unb:
                     reps.append('report %s %d unbounded %s' % (tag, r.n, ','.join(PLANES[x - 1] for x in unb)))
+                # the families a plane may leave not covered (FORMAT.md section 2's allowance table): for every
+                # request of that family the plane is out for good, so a capture there is permanent
+                later_deny_or_log = any(q.action != 'allow' for q in p.rules[i + 1:])
+                for pl in sorted(r.dep):
+                    for fam in (4, 6):
+                        if (pl, fam) not in COVERAGE_ALLOWED:
+                            continue
+                        if (later_deny_or_log and U in value_set(r.expr, {pl}, 'fresh')) \
+                                or isunk_only(r, {pl}, 'fresh', pl):
+                            reps.append('report %s %d uncovered-family %s,ipv%d' % (tag, r.n, PLANES[pl - 1], fam))
                 fa = flat_and(r.expr)
                 if fa is not None and any(x is not None and x.form == 'bool' and x.attr == 'tenant_allow'
                                           and x.bounded for x in fa):
@@ -2210,7 +2231,7 @@ def definite(a, block, allow_inferred):
 
 class Request(object):
     __slots__ = ('floor_conf', 'ctx_conf', 'states', 'tenant', 'now', 'vu', 'addrs', 'keys', 'records',
-                 'hh_eligible', 'acme', 'tstate')
+                 'hh_eligible', 'acme', 'tstate', 'unc')
 
 
 def conf_of(raw):
@@ -2259,16 +2280,22 @@ class Eval(object):
     def slot(self, addr_idx):
         return 0 if (addr_idx == 0 or self.alias) else 1
 
-    def readable(self, p):
+    def out(self, p, s):
+        """A non-tenant plane reads UNKNOWN for this slot: stale, refused or generation 0, or (the fifth case,
+        FORMAT.md section 2) the slot's canonical address is in a family the plane does not cover."""
+        fam = self.req.keys[0 if self.alias else s].version
+        return self.req.states[p] != 'fresh' or (p, fam) in (getattr(self.req, 'unc', None) or ())
+
+    def readable(self, p, s):
         if p == TENANT:
             return self.ts in ('fresh', 'grace', 'lapsed')
-        return self.req.states[p] == 'fresh'
+        return not self.out(p, s)
 
     def fill(self, s, p):
         m = self.memo[s]
         if p in m and MUTANT != 'NO_MEMO_HIT':
             return m[p]
-        if self.readable(p):
+        if self.readable(p, s):
             self.lookups[s][p - 1] += 1
             rec = self.req.records[s][p] if not self.alias else self.req.records[0][p]
             b = normalise(p, rec, self.clamps)
@@ -2277,15 +2304,17 @@ class Eval(object):
         m[p] = b
         return b
 
-    def plane_state(self, p):
+    def plane_state(self, p, s):
+        """The plane's state for the coverage matrix: its state alone, as test_policy --cases keys it."""
+        del s
         if p == TENANT:
             return self.ts
         return 'fresh' if self.req.states[p] == 'fresh' else 'unknown'
 
-    def isunk(self, p):
+    def isunk(self, p, s):
         if p == TENANT:
             return T if self.ts in ('grace', 'lapsed', 'null') else F
-        return F if self.req.states[p] == 'fresh' else T
+        return T if self.out(p, s) else F
 
     def atom(self, a, s, ai, uniform=False):
         p = a.plane
@@ -2304,7 +2333,7 @@ class Eval(object):
             if bounded and MUTANT != 'TENANT_ATOM_U':
                 return definite(a, b, ai) if ts == 'grace' else F
             return U
-        if self.req.states[p] != 'fresh':
+        if self.out(p, s):
             return U
         b = self.fill(s, p)
         return definite(a, b, ai)
@@ -2321,7 +2350,7 @@ class Eval(object):
                 return stack[-1]
             if a is not None:
                 if op == 'ISUNK':
-                    v = self.isunk(a.plane)
+                    v = self.isunk(a.plane, s)
                     if cov is not None:
                         kk = ('polarity', r.action, 'positive' if isunk_polarity(a, a.pol) else 'negative')
                         cov[kk] = cov.get(kk, 0) + 1
@@ -2332,7 +2361,7 @@ class Eval(object):
                     elif op == 'INSET_ASN':
                         self.probes[pi] += splus_levels(len(a.resolved[1]))
                 if cov is not None:
-                    k = ('plane-state', op, PLANES[a.plane - 1], self.plane_state(a.plane))
+                    k = ('plane-state', op, PLANES[a.plane - 1], self.plane_state(a.plane, s))
                     cov[k] = cov.get(k, 0) + 1
                 stack.append(v)
             elif op == 'NOT':
@@ -2395,7 +2424,7 @@ class Eval(object):
                 if v == T:
                     return ('allow', r.n, '-'), logs
                 if v == U and MUTANT != 'ALLOW_U_FALLTHROUGH':
-                    unk = [p for p in sorted(r.dep) if self.isunk(p) == T]
+                    unk = [p for p in sorted(r.dep) if self.isunk(p, s) == T]
                     return ('allow', r.n, 'allow-by-unknown:%s' % (PLANES[unk[0] - 1] if unk else '-')), logs
         return None, logs
 
@@ -2537,12 +2566,13 @@ def invariant(cfg, prog_ctx, req):
                     probe.keys = req.keys
                     probe.records = req.records
                     probe.tstate = req.tstate
+                    probe.unc = getattr(req, 'unc', set())
                     if a.plane == TENANT:
                         probe.tstate = st
                     else:
                         probe.states[a.plane] = st
                     ev = Eval(probe, None)
-                    isu = ev.isunk(a.plane)
+                    isu = ev.isunk(a.plane, 0)
                     k3 = ev.atom(a, 0, 0, uniform=True)
                     checked += 1
                     if (isu == T) != (k3 == U):
@@ -2609,10 +2639,15 @@ def parse_cases(path):
                 w, m, ai = rest.split()
                 case['conf'][w] = (int(m), int(ai))
             elif head == 'plane':
-                n, st = rest.split()
+                w = rest.split()
+                n, st = w[0], w[1]
                 if st not in ('fresh', 'stale', 'gen0'):
                     raise ValueError('plane state %r is not fresh, stale or gen0' % st)
+                if len(w) > 3 or (len(w) == 3 and w[2] not in ('uncovered-v4', 'uncovered-v6')):
+                    raise ValueError('a plane line is `plane <name> <state> [uncovered-v4|uncovered-v6]`')
                 case['planes'][PLANE_ID[n]] = st
+                if len(w) == 3:
+                    case.setdefault('unc', {})[PLANE_ID[n]] = int(w[2][-1])
             elif head == 'tenant':
                 st, now, vu = rest.split()
                 case['tenant'] = (st, int(now), int(vu))
@@ -2658,6 +2693,14 @@ def make_request(c):
     req.states = {p: 'fresh' for p in range(1, 8)}
     for p, st in c['planes'].items():
         req.states[p] = 'fresh' if st == 'fresh' else 'stale'     # gen0 reads as stale does (D-ae)
+    # a not-covered family: on an allowed cell the plane arms and that family reads UNKNOWN; any other
+    # cell is a refused load (the old armed plane, then absent), which reads as stale does
+    req.unc = set()
+    for p, fam in c.get('unc', {}).items():
+        if (p, fam) in COVERAGE_ALLOWED:
+            req.unc.add((p, fam))
+        else:
+            req.states[p] = 'stale'
     req.tenant, req.now, req.vu = c['tenant']
     req.tstate = tenant_state(req)
     fa = c['addr'].get('floor', '192.0.2.1')
@@ -2741,7 +2784,7 @@ def attr_lines(absent, req):
                 out.append('attr %s UNKNOWN bounded=%s' % (a, b))
             else:
                 out.append('attr %s UNKNOWN' % a)
-        elif req.states[p] != 'fresh':
+        elif req.states[p] != 'fresh' or (p, req.keys[0].version) in (getattr(req, 'unc', None) or ()):
             out.append('attr %s UNKNOWN' % a)
         else:
             out.append('attr %s %s' % (a, attr_text(a, normalise(p, rec, None))))
@@ -3188,8 +3231,8 @@ def country_header_codes():
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, 'we_country_table.h')) as f:
         text = f.read()
-    body = text.split('we_country_known_table[125] = {', 1)[1].split('};', 1)[0]
-    bits = [int(x, 16) for x in body.replace(',', ' ').split()]
+    body = text.split('#define WE_COUNTRY_KNOWN_BITS {', 1)[1].split('}', 1)[0]
+    bits = [int(x, 16) for x in body.replace('\\', ' ').replace(',', ' ').split()]
     return {c for c in range(1000) if (bits[c >> 3] >> (c & 7)) & 1}
 
 

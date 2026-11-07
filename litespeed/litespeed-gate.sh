@@ -48,6 +48,7 @@ cd "$(dirname "$0")" || exit 1
 # ROOT is the EDGE TREE's own root, one level up from this script, NOT two: two levels up is the monorepo
 # root in our tree and the PARENT OF THE CLONE in the published repository.
 ROOT=$(cd .. && pwd)
+. "$ROOT/curl-asis.sh"   # every request goes out as the row writes it, whatever curl release
 LSWS=${LSWS:-/usr/local/lsws}
 # the first of thirteen consecutive ports this gate binds (one listener per host); the default range is clear of the
 # nginx gate (8098) and the Apache gate (8099 to 8101), which bind theirs on the same box
@@ -1261,16 +1262,40 @@ status_field() { # status_field <plane> <field regex capture> -> the value every
 }
 status_state() { status_field "$1" '([a-z-]+)'; }
 status_gen()   { status_field "$1" '.* generation ([0-9]+)'; }
+# The state a REQUEST meets. The thread writes a transition into the status file when it POSTS it, and the
+# loop applies it on its poll: until then the plane's line carries "posted N pending-ticks M", and the
+# request path may still serve the old view. A CI run read every worker disarmed and was denied by the armed
+# generation 0.8 s later; and the line keeps its pending words until the next tick rewrites it (measured: up
+# to one interval after the apply). So the state word alone proves nothing about a request, and a row that
+# sends one after a transition waits until every live worker's line says the state with nothing pending,
+# which is a status file written after the apply.
+status_served() { # status_served <plane> -> the state every live worker serves, or PENDING while one has it in flight
+    local p f
+    for p in $(workers); do
+        f=$($SUDO find "$D/counters" -maxdepth 1 -name "$p-*.status" 2>/dev/null | head -1)
+        [ -n "$f" ] && $SUDO grep -E "^plane $1 " "$f" | hit ' pending-ticks ' && { echo PENDING; return; }
+    done
+    status_state "$1"
+}
 python3 "$GEN" --plane reputation --out "$W/rep2.bin" --format 1 --v4-index radix-16 --v6-index none --synthetic 4 4 --generation 2 >/dev/null
 $SUDO install -o root -g root -m 0444 "$W/rep2.bin" "$D/planes/.reputation.new" && $SUDO mv "$D/planes/.reputation.new" "$D/planes/reputation.bin"
 FROM_LIFE=$(( $(elog_lines) + 1 ))
-await "[ \"\$(status_gen reputation)\" = 2 ]" $((2 * REFRESH_S + 8)) && ok "M5: a new generation renamed into place is verified off the loop and armed in every worker within the interval (generation 2), no restart" \
+await "[ \"\$(status_gen reputation)\" = 2 ] && [ \"\$(status_served reputation)\" = armed ]" $((2 * REFRESH_S + 8)) && ok "M5: a new generation renamed into place is verified off the loop and armed in every worker within the interval (generation 2), no restart" \
     || bad "M5: generation 2 was not armed in $((2 * REFRESH_S + 8)) s (status says $(status_state reputation) $(status_gen reputation))"
 req WhisperDeny "$(u $PDENY /index.html)" -H "X-Forwarded-For: $LLOW"
 want 403 "M5: and the new generation is served (a LOW client is still denied)" "the new generation does not serve"
 case "$(field "$LINE" gen)" in reputation:2.*) ok "M5: and the record names it: $(field "$LINE" gen | awk '{print $1}')" ;; *) bad "the generations token after the arm: $(field "$LINE" gen)" ;; esac
 $SUDO chmod 0644 "$D/planes/reputation.bin"
-await "[ \"\$(status_state reputation)\" = disarmed ]" $((2 * REFRESH_S + 8)) && ok "M5: a ctime-only change that admits another writer (chmod 0644) disarms the plane within a tick, every worker reporting disarmed" \
+# the control for the wait below: the state word alone reads disarmed while a line still has it in flight
+PT0=$(now_ms); PWORD=""
+while [ $(( $(now_ms) - PT0 )) -lt $(( (2 * REFRESH_S + 8) * 1000 )) ]; do
+    if [ "$(status_state reputation)" = disarmed ] && [ "$(status_served reputation)" = PENDING ]; then PWORD=$(( $(now_ms) - PT0 )); break; fi
+    [ "$(status_served reputation)" = disarmed ] && break
+    sleep 0.05
+done
+[ -n "$PWORD" ] && ok "the control: $PWORD ms after the chmod every worker's state word read disarmed while a line still had the disarm in flight, which the old wait took as served" \
+    || bad "the control: the state word never read disarmed while a line was pending, so the served-state wait below proves nothing"
+await "[ \"\$(status_served reputation)\" = disarmed ]" $((2 * REFRESH_S + 8)) && ok "M5: a ctime-only change that admits another writer (chmod 0644) disarms the plane within a tick, every worker reporting disarmed" \
     || bad "M5: after chmod 0644 the status reads $(status_state reputation)"
 STAT=$($SUDO "$SUMMARY_BIN" --status "$D/counters" 2>&1); SRC=$?
 [ "$SRC" = 1 ] && ok "S2: and --status exits 1 on a disarmed plane" || bad "S2: --status exits $SRC on a disarmed plane"
@@ -1282,7 +1307,7 @@ else
     bad "the disarmed rendering: $LINE"
 fi
 $SUDO chmod 0444 "$D/planes/reputation.bin"
-await "[ \"\$(status_state reputation)\" = armed ]" $((2 * REFRESH_S + 8)) && ok "M5: chmod 0444 back re-arms it (the bytes still carry the arm-time digest)" || bad "M5: after chmod 0444 the status reads $(status_state reputation)"
+await "[ \"\$(status_served reputation)\" = armed ]" $((2 * REFRESH_S + 8)) && ok "M5: chmod 0444 back re-arms it (the bytes still carry the arm-time digest)" || bad "M5: after chmod 0444 the status reads $(status_state reputation)"
 req WhisperDeny "$(u $PDENY /index.html)" -H "X-Forwarded-For: $LLOW"
 want 403 "M5: and it denies again" "the re-armed plane does not serve"
 $SUDO install -o root -g root -m 0444 "$W/rep.bin" "$D/planes/.reputation.new" && $SUDO mv "$D/planes/.reputation.new" "$D/planes/reputation.bin"

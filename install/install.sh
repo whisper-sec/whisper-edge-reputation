@@ -20,7 +20,7 @@
 # /etc/whisper-edge/policy.conf to read and edit.
 #
 # Usage: sudo ./install.sh [--dir DIR] [--base URL --key-sha256 HEX] [--server nginx|apache|litespeed]
-#                          [--no-apply] [--named-conf FILE] [--no-timer] [--dry-run] [--arm-deny]
+#                          [--no-apply] [--named-conf FILE] [--no-timer] [--dry-run] [--log-only|--arm-deny]
 #
 #   --dir DIR      where the planes live (default /var/lib/whisper-edge)
 #   --base URL     the feed (default https://whisper.online/edge)
@@ -31,9 +31,12 @@
 #   --named-conf F the named.conf the resolver half reads (default: the one named-checkconf reads)
 #   --no-timer     schedule nothing
 #   --dry-run      fetch and verify, say what it would do, and write nothing anywhere (no root needed)
-#   --arm-deny     OpenLiteSpeed only: turn the installer's policy there from log to deny, after the module
-#                  has confirmed it in log mode (nginx and Apache deny from the start; their configuration
-#                  test proves it first)
+#   --log-only     write the same policy in log mode on every server: it denies nothing and logs what it
+#                  would deny, so you can read that first; a plain re-run keeps the mode each server has
+#   --arm-deny     turn the installer's policy from log to deny, after you have read what it logs. nginx and
+#                  Apache prove it with their configuration test and a reload; OpenLiteSpeed, which has no
+#                  configuration test, only after the module has confirmed the policy in log mode. Without
+#                  either option nginx and Apache deny from the first run, and OpenLiteSpeed starts in log
 #   -h, --help     this text
 #
 # Exit codes:
@@ -52,7 +55,7 @@
 #
 # Each option has an environment twin: WHISPER_EDGE_DIR, WHISPER_EDGE_BASE, WHISPER_EDGE_SERVER,
 # WHISPER_EDGE_NO_APPLY=1, WHISPER_EDGE_NAMED_CONF, WHISPER_EDGE_NO_TIMER=1, WHISPER_EDGE_DRY_RUN=1,
-# WHISPER_EDGE_KEY_SHA256, WHISPER_EDGE_ARM_DENY=1.
+# WHISPER_EDGE_KEY_SHA256, WHISPER_EDGE_LOG_ONLY=1, WHISPER_EDGE_ARM_DENY=1.
 # Functions reached only through the EXIT trap or passed by name to write_artifact read as unreachable
 # to shellcheck, and the word splitting of `set -- $(cadence_of ...)` and `set -- $verdict` is meant.
 # shellcheck disable=SC2317,SC2046,SC2086
@@ -77,6 +80,7 @@ DRY=0;   [ "${WHISPER_EDGE_DRY_RUN:-0}" = 1 ] && DRY=1
 DRY_FAIL=0
 NOAPPLY=0; [ "${WHISPER_EDGE_NO_APPLY:-0}" = 1 ] && NOAPPLY=1
 ARM_DENY=0; [ "${WHISPER_EDGE_ARM_DENY:-0}" = 1 ] && ARM_DENY=1
+LOG_ONLY=0; [ "${WHISPER_EDGE_LOG_ONLY:-0}" = 1 ] && LOG_ONLY=1
 NAMED_CONF="${WHISPER_EDGE_NAMED_CONF:-}"
 SCOPE="${WHISPER_EDGE_SERVER:-}"
 KEY_SHA="${WHISPER_EDGE_KEY_SHA256:-}"
@@ -105,6 +109,7 @@ while [ $# -gt 0 ]; do
     --named-conf=*) NAMED_CONF="${1#--named-conf=}" ;;
     --no-apply)   NOAPPLY=1 ;;
     --arm-deny)   ARM_DENY=1 ;;
+    --log-only)   LOG_ONLY=1 ;;
     --no-timer)   TIMER=0 ;;
     --dry-run)    DRY=1 ;;
     -h|--help)    sed -n '2,/^set -eu/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -134,10 +139,10 @@ for s in $(printf '%s' "$SCOPE" | tr ',' ' '); do
     *) bad "--server takes nginx, apache or litespeed, not $s" ;;
   esac
 done
-if [ "$ARM_DENY" = 1 ]; then
-  case " $WANT " in *" nginx "*|*" apache "*) bad "--arm-deny is for OpenLiteSpeed alone: nginx and Apache deny from the start, after their own configuration test" ;; esac
-  WANT="litespeed"
-fi
+[ "$ARM_DENY" = 1 ] && [ "$LOG_ONLY" = 1 ] && bad "--log-only and --arm-deny ask for opposite modes; name one"
+# the mode nginx's and Apache's drop-ins are written in: set per server where it is applied (the drop-in's
+# own mode survives a re-run), and for a block that is only printed, log under --log-only, else the pinned deny
+SRV_MODE=""; [ "$LOG_ONLY" = 1 ] && SRV_MODE=log
 wanted() { [ -z "$WANT" ] && return 0; case " $WANT " in *" $1 "*) return 0 ;; esac; return 1; }
 
 # ---- the default policy, pinned ----------------------------------------------------------------------
@@ -167,10 +172,11 @@ plane_rule() { # <plane> -> the rules that read it, as the policy writes them
 }
 plane_denies() { [ "$1" = reputation ]; }
 
-# translate <nginx|apache|litespeed>: the pinned text in that server's idiom. A comment rides above its
-# rule, the standalone comment keeps its place after the mode line, and a rule is one directive.
+# translate <nginx|apache|litespeed> [log|deny]: the pinned text in that server's idiom. A comment rides
+# above its rule, the standalone comment keeps its place after the mode line, and a rule is one directive.
+# The mode is the pinned text's (deny) for nginx and Apache and log for OpenLiteSpeed, unless one is named.
 translate() {
-  policy_text | WE_AWK_idiom="$1" awk 'BEGIN { idiom = ENVIRON["WE_AWK_idiom"] }
+  policy_text | WE_AWK_idiom="$1" WE_AWK_mode="${2:-}" awk 'BEGIN { idiom = ENVIRON["WE_AWK_idiom"]; mode = ENVIRON["WE_AWK_mode"] }
     function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
     function squash(s) { gsub(/[ \t]+/, " ", s); return trim(s) }
     function rule(r,   q) {
@@ -186,9 +192,10 @@ translate() {
     function comment(c) { return (idiom == "litespeed" ? "    " : "") c }
     NR == 1 {
       m = squash($0); sub(/;$/, "", m); split(m, w, " ")
-      if (idiom == "nginx") print "whisper_edge_mode " w[2] ";"
-      else if (idiom == "apache") print "WhisperEdgeMode " w[2]
-      else print "    whisper_edge_mode log"
+      if (mode == "") mode = (idiom == "litespeed" ? "log" : w[2])
+      if (idiom == "nginx") print "whisper_edge_mode " mode ";"
+      else if (idiom == "apache") print "WhisperEdgeMode " mode
+      else print "    whisper_edge_mode " mode
       next
     }
     /^[ \t]*#/ { print comment(trim($0)); next }
@@ -249,6 +256,8 @@ prov_wrap() { # <what the file is>; the body on stdin -> the file on stdout
   printf '# Whisper edge: %s, written by the installer; sha256 %s of the lines below proves it wrote them.\n%s' \
     "$1" "$(printf '%s' "$_b" | sha256_of)" "$_b"
 }
+# An SELinux context's shape, user:role:type and an optional range, nothing else: what an undo may set back
+se_ctx_ok() { case "$1" in ""|*[!A-Za-z0-9_.:,-]*) return 1 ;; *:*:*) return 0 ;; esac; return 1; }
 is_ours() { # <file>: its first line is the mark, and the digest holds over the rest
   [ -f "$1" ] || return 1
   _h=$(sed -n '1s/^# Whisper edge: .*, written by the installer; sha256 \([0-9a-f]\{64\}\) of the lines below proves it wrote them\.$/\1/p' "$1")
@@ -283,10 +292,18 @@ cadence_of() { # <plane> -> "<OnCalendar> <RandomizedDelaySec> <what it reads as
 # next install can come a timer period plus the timer's own delays later:
 #   T + RandomizedDelaySec (300) + AccuracySec (60) + the refresh's worst run (1300) <= 3c - d - lag
 # d is the latest measured data lag, 4740 s (79 minutes, measured 2026-10-12T05:00:02Z); the lag is
-# unmeasured, so the supply below is an upper bound by it. The period is 30 minutes, or the largest
+# measured as A_LAG below but not yet subtracted, so the supply below is an upper bound by it.
+# The period is 30 minutes, or the largest
 # whole minute the bound allows below that, and when not even one minute fits there is no period: no
 # schedule is written, the instance is not enabled, and the plane's rules are inert.
 D_LAG=4740; T_DELAYS=1660
+# A, the publication lag: from the build (the manifest's generation) to every instance a host can reach
+# serving it (both unicast nodes, each address of whisper.online's A set, the anycast AAAA, the name).
+# Measured live over the 17:00, 18:00 and 19:00 UTC builds of 2026-11-04 from two vantages, at 30 s
+# resolution: the slowest node served each build 180 s after it at worst. One earlier build (16:00) was
+# seen by hand with a node still on the previous build 308 s after it. A value is a measurement, never a
+# bound filled in.
+A_LAG=180; A_LAG_NOTE="180 s, the slowest node at worst over 3 builds from 2 vantages, measured 2026-11-04"
 cadence_bound() { # <plane> <cadenceSeconds>: sets period_<plane>, or REFUSED_<plane> with the numbers
   _v=$(printf '%s' "$1" | tr -c 'A-Za-z0-9' _)
   case "$2" in ''|*[!0-9]*) return 0 ;; esac
@@ -307,20 +324,30 @@ render_memlock() { # <unit> <value>
   printf '[Service]\n# Twice the armed plane bytes: a plane swap locks the old image and the new one at once.\nLimitMEMLOCK=%s\n' "$2" \
     | prov_wrap "the memory lock $1 needs for the planes it serves"
 }
+# The unit's one drop-in: the boot id when its sandbox hides the kernel's, the memory lock when it is
+# short, or both. With the memory lock alone it is render_memlock's bytes exactly, so a drop-in an earlier
+# release wrote still reads as the installer's own.
+render_unit_dropin() { # <unit> <memlock value, or empty> <1 when the boot id is passed, or empty>
+  if [ -z "${3:-}" ]; then render_memlock "$1" "$2"; return; fi
+  { printf '[Service]\n# The boot id, from systemd (%%b): the unit hides /proc/sys/kernel/random/boot_id, so the module reads\n'
+    printf '# it here, and whisper-edge-summary tells the workers of this boot from those of an earlier one.\nEnvironment=WHISPER_EDGE_BOOT_ID=%%b\n'
+    [ -n "$2" ] && printf '# Twice the armed plane bytes: a plane swap locks the old image and the new one at once.\nLimitMEMLOCK=%s\n' "$2"
+    :; } | prov_wrap "$(if [ -n "$2" ]; then echo "the boot id and the memory lock $1 needs"; else echo "the boot id $1 hides from its workers"; fi)"
+}
 memlock_dropin() { printf '%s/%s.d/whisper-edge.conf' "$UNITDIR" "$1"; }
 
 # The drop-ins each server reads, from the pinned text. The data line binds the directory by name, so
 # every plane the policy reads is bound from the files present when the configuration is read.
 render_nginx_body() {
   printf 'whisper_edge_data %s;\nwhisper_edge_summary %s;\n' "$(cf_word "$DIR")" "$(cf_word "$DIR/counters")"
-  translate nginx
+  translate nginx "${SRV_MODE:-}"
 }
 render_nginx() { render_nginx_body | prov_wrap "the default policy for nginx"; }
 render_nginx_load() { printf 'load_module %s;\n' "$(cf_word "$1")" | prov_wrap "the Whisper edge module for nginx"; }
 render_apache_body() { # [the module path, when it is not loaded yet]
   [ -n "${1:-}" ] && printf 'LoadModule whisper_edge_module %s\n' "$(cf_word "$1")"
   printf 'WhisperEdgeData %s\nWhisperEdgeSummary %s\n' "$(cf_word "$DIR")" "$(cf_word "$DIR/counters")"
-  translate apache
+  translate apache "${SRV_MODE:-}"
 }
 render_apache() { render_apache_body "${1:-}" | prov_wrap "the default policy for Apache"; }
 # The module trusts only an explicit useIpInProxyHeader 0. Where no file of the operator's names the key,
@@ -394,6 +421,8 @@ if [ -n "${WHISPER_EDGE_INSTALL_TEST_RENDER:-}" ]; then
     template-timer) render_template_timer ;;
     cadence-*) render_cadence "${WHISPER_EDGE_INSTALL_TEST_RENDER#cadence-}" ;;
     memlock) render_memlock nginx.service "${WHISPER_EDGE_INSTALL_TEST_MEMLOCK:-16777216}" ;;
+    unit-dropin) render_unit_dropin nginx.service "${WHISPER_EDGE_INSTALL_TEST_MEMLOCK:-}" "${WHISPER_EDGE_INSTALL_TEST_BOOTID:-}" ;;
+    se-ctx) se_ctx_ok "${WHISPER_EDGE_INSTALL_TEST_CTX:-}" && echo context || echo none ;;
     is-ours) is_ours "${WHISPER_EDGE_INSTALL_TEST_FILE:?}" && echo ours || echo foreign ;;
     *) echo "install.sh: no rendering named $WHISPER_EDGE_INSTALL_TEST_RENDER" >&2; exit 2 ;;
   esac
@@ -551,13 +580,18 @@ sync -- "$d" 2>/dev/null || :
 [ "$(stat -c %i -- "$1")" = "$i" ] || exit 5'
 # The kept copy's reader, run as the directory's owner: refuses a link, reads the file through a descriptor
 # whose inode must be the one it stat'ed, and refuses when the file changed while it was read. Its
-# "dev:ino:size:mtime context" goes out on fd 3.
+# "dev:ino:size:mtime context" goes out on fd 3. The context is what stat prints only when it has the
+# shape of one (user:role:type, an optional range; no space): GNU stat prints "?" for a file with none, and
+# uutils' (Ubuntu 26.04's coreutils) prints "unsupported for this operating system" and exits 0, which a
+# restore once wrote back as the file's security.selinux. Anything else is "-", and nothing is set back.
 OWNER_READ='[ -L "$1" ] && exit 4; [ -f "$1" ] || exit 4
 a=$(stat -c %d:%i:%s:%.9Y -- "$1"); exec 4< "$1" || exit 4
 [ "$(stat -L -c %d:%i -- /proc/self/fd/4)" = "${a%:*:*}" ] || exit 5
 cat <&4 || exit 4
 [ "$(stat -c %d:%i:%s:%.9Y -- "$1")" = "$a" ] || exit 5
-printf "%s %s\n" "$a" "$(stat -c %C -- "$1" 2>/dev/null || echo -)" >&3'
+c=$(stat -c %C -- "$1" 2>/dev/null) || c=-
+case "$c" in ""|*[!A-Za-z0-9_.:,-]*) c=- ;; *:*:*) ;; *) c=- ;; esac
+printf "%s %s\n" "$a" "$c" >&3'
 # shellcheck disable=SC2034 # OWNER_INODE and OWNER_FACTS are read by the OpenLiteSpeed arm's edit and restore
 # The same writer in two steps for the run itself, so the stamp names the temp before it is renamed and a
 # kill can land between the two: the temp written and flushed, then (checked by its inode) renamed.
@@ -592,7 +626,7 @@ owner_rm() { as_user "$1" "$2" rm -f -- "$3"; }        # unlinks the name, never
 # The SELinux context back on a restored file, through a descriptor: only when the inode at the path is the
 # one the writer reported and has exactly one link, so a link or a hard link swapped in is never relabelled.
 fd_chcon() { # <path> <inode> <context>
-  case "${3:--}" in -|'?') return 0 ;; esac
+  se_ctx_ok "${3:-}" || return 0             # "-", "?", or a tool's message recorded as one: nothing set back
   have chcon || return 0
   exec 6< "$1" || return 1
   if [ "$(stat -L -c '%i %h' -- /proc/self/fd/6)" != "$2 1" ]; then exec 6<&-; return 1; fi
@@ -721,7 +755,8 @@ render_for() { # <target>, in a subshell whose inputs are the interrupted run's 
     "$UNITDIR"/*.d/whisper-edge.conf)
       _u=${1#"$UNITDIR/"}; _u=${_u%.d/whisper-edge.conf}
       eval "_v=\${memlock_$(printf '%s' "$_u" | tr -c 'A-Za-z0-9' _):-}"
-      [ -n "$_v" ] && render_memlock "$_u" "${_v%%,*}" ;;
+      eval "_bi=\${bootid_$(printf '%s' "$_u" | tr -c 'A-Za-z0-9' _):-}"
+      [ -n "$_v$_bi" ] && render_unit_dropin "$_u" "${_v%%,*}" "$_bi" ;;
     "$ETC/policy.conf") policy_text ;;
     *) return 1 ;;
   esac
@@ -732,7 +767,7 @@ sweep_inputs() { # <the stamp's inputs>: the interrupted run's own, in place of 
     _v=${_kv#*=}
     case "${_kv%%=*}" in
       dir) DIR=$_v ;; base) BASE=$_v ;; sbin) SBIN=$_v ;; unitdir) UNITDIR=$_v ;; etc) ETC=$_v ;;
-      lsws) LSWS=$_v ;; memlock_*|period_*) eval "${_kv%%=*}=\$_v" ;;
+      lsws) LSWS=$_v ;; memlock_*|bootid_*|period_*) eval "${_kv%%=*}=\$_v" ;;
     esac
   done
 }
@@ -1519,10 +1554,38 @@ memlock_line() { # <server> <unit> -> sets ML_V, ML_E, ML_NEED; adds the line
   if [ "$ML_NEED" -gt "$ML_E" ]; then
     ML_V=$ML_NEED
     MEMLOCK_INPUTS="${MEMLOCK_INPUTS:-} memlock_$(pv "$2")=$ML_V,$ML_E,$ARMED_BYTES"
+    # the stamp opened before this was known: the input goes in as a line of its own, as the kept parts do
+    [ -n "$STAMPF" ] && stamp_line input "memlock_$(pv "$2")=$ML_V,$ML_E,$ARMED_BYTES"
     rep applied "LimitMEMLOCK: $ML_E is $2's effective limit; twice the armed plane bytes (2 x (${_d:-nothing})) is $ML_NEED, above it, so the drop-in sets $ML_V; it takes effect at the service's next full start, not at this reload, and until then the planes run under the previous limit"
   else
     rep applied "LimitMEMLOCK: $ML_E is $2's effective limit; twice the armed plane bytes (2 x (${_d:-nothing})) is $ML_NEED, below it, so no drop-in is written (a drop-in takes effect at the service's next full start)"
   fi
+}
+
+# The boot id the module names its files by, and whisper-edge-summary tells this boot's workers from an
+# earlier boot's by, is /proc/sys/kernel/random/boot_id. A unit's sandbox can hide it: Ubuntu 26.04's
+# apache2.service sets ProcSubset=pid, and inside it the read gives ENOENT. Then the unit's drop-in passes
+# systemd's own %b as WHISPER_EDGE_BOOT_ID, which the module reads next. Asked of the running server's
+# own mount namespace (nsenter, as root), which is exact whatever hides the file; for a unit that is not
+# running, read from its properties: ProcSubset=pid, or /proc or /proc/sys made inaccessible.
+boot_line() { # <server> <unit> -> sets BI_V (1 when the drop-in passes the boot id); adds the line
+  BI_V=""; BI_WHY=""
+  [ "$SYSTEMD" = 1 ] || return 0
+  _bp=$(systemctl show "$2" -p MainPID --value 2>/dev/null || :)
+  case "$_bp" in ''|0|*[!0-9]*) _bp="" ;; esac
+  if [ -n "$_bp" ] && have nsenter && nsenter -t "$_bp" -m -- true >/dev/null 2>&1; then
+    nsenter -t "$_bp" -m -- cat /proc/sys/kernel/random/boot_id >/dev/null 2>&1 \
+      || BI_WHY="its running main process (pid $_bp) cannot read /proc/sys/kernel/random/boot_id"
+  else
+    [ "$(systemctl show "$2" -p ProcSubset --value 2>/dev/null || :)" = pid ] && BI_WHY="it sets ProcSubset=pid, which hides /proc/sys"
+    for _bx in $(systemctl show "$2" -p InaccessiblePaths --value 2>/dev/null || :); do
+      case "${_bx#-}" in /proc|/proc/|/proc/sys|/proc/sys/|/proc/sys/kernel|/proc/sys/kernel/*) BI_WHY="it sets InaccessiblePaths=$_bx" ;; esac
+    done
+  fi
+  [ -n "$BI_WHY" ] || return 0
+  BI_V=1
+  [ -n "$STAMPF" ] && stamp_line input "bootid_$(pv "$2")=1"
+  rep applied "boot id: $2's sandbox hides the kernel's ($BI_WHY), so its drop-in sets Environment=WHISPER_EDGE_BOOT_ID=%b; it takes effect at the service's next full start, not at this reload, and until then whisper-edge-summary places $1's workers by their pid and start time (boot-by=start-time)"
 }
 
 # The per-plane refresh: one instance of the template per plane the policy reads, each with its own
@@ -1981,14 +2044,14 @@ render_nginx_keep() { # K_* from the stamp or the scan
   [ -n "${K_DATA:-}" ] || printf 'whisper_edge_data %s;\n' "$(cf_word "$DIR")"
   [ -n "${K_SUMMARY:-}" ] || printf 'whisper_edge_summary %s;\n' "$(cf_word "$DIR/counters")"
   if [ -n "${K_POLICY:-}" ]; then return 0; fi
-  if [ -n "${K_MODE:-}" ]; then translate nginx | sed 1d; else translate nginx; fi
+  if [ -n "${K_MODE:-}" ]; then translate nginx | sed 1d; else translate nginx "${SRV_MODE:-}"; fi
 }
 render_apache_keep() { # [module path]
   [ -n "${1:-}" ] && printf 'LoadModule whisper_edge_module %s\n' "$(cf_word "$1")"
   [ -n "${K_DATA:-}" ] || printf 'WhisperEdgeData %s\n' "$(cf_word "$DIR")"
   [ -n "${K_SUMMARY:-}" ] || printf 'WhisperEdgeSummary %s\n' "$(cf_word "$DIR/counters")"
   if [ -n "${K_POLICY:-}" ]; then return 0; fi
-  if [ -n "${K_MODE:-}" ]; then translate apache | sed 1d; else translate apache; fi
+  if [ -n "${K_MODE:-}" ]; then translate apache | sed 1d; else translate apache "${SRV_MODE:-}"; fi
 }
 # the gate's fixed invalid rule, in place of the last rule of a rendering, only where it is honoured
 with_test_rule() { # <idiom>
@@ -2285,9 +2348,10 @@ apply_litespeed() {
     return 0
   fi
   C7_PROG=$(c7_program "$(policy_text | sed -n '3,$p' | sed 's/#.*//; s/[[:space:]]\{1,\}/ /g; s/^ //; s/ $//')")
-  # the mode the installer's own file already carries survives a plain re-run; only --arm-deny changes it
+  # the mode the installer's own file already carries survives a plain re-run; --arm-deny and --log-only change it
   OLS_MODE=log
   if is_ours "$_f" && grep -q '^    whisper_edge_mode deny$' "$_f"; then OLS_MODE=deny; fi
+  [ "${LOG_ONLY:-0}" = 1 ] && OLS_MODE=log
   if [ "${ARM_DENY:-0}" = 1 ]; then
     # never creates the block, acts only on the installer's own file, and only after the module has
     # confirmed the policy in log mode; every check above (layer 1) has already run again
@@ -2502,6 +2566,21 @@ apply_arm() { # <server>
       apache) keep_scan apache "$(ap_main_lines "$_drop")"; realip_advice apache "$_drop" ;;
     esac
   fi
+  # the mode: what the installer's own drop-in already carries survives a plain re-run, so a host the
+  # admin put in log stays in log; --log-only writes log and --arm-deny deny; a first install denies, as the
+  # pinned text does, after the server's own configuration test has proved every rule
+  SRV_MODE=deny
+  if is_ours "$_drop"; then
+    case "$_s" in
+      nginx) rd_file "$_drop" | grep_any -x 'whisper_edge_mode log;' && SRV_MODE=log ;;
+      apache) rd_file "$_drop" | grep_any -x 'WhisperEdgeMode log' && SRV_MODE=log ;;
+    esac
+  fi
+  [ "$LOG_ONLY" = 1 ] && SRV_MODE=log
+  [ "$ARM_DENY" = 1 ] && SRV_MODE=deny
+  if [ -z "$_stop" ] && [ -n "$K_MODE" ] && { [ "$LOG_ONLY" = 1 ] || [ "$ARM_DENY" = 1 ]; }; then
+    rep applied "$(display "$_s"): your own mode line ($K_MODE) is kept and decides the mode, so $(if [ "$LOG_ONLY" = 1 ]; then echo --log-only; else echo --arm-deny; fi) changes nothing there; edit that line to change it"
+  fi
   if [ -z "$_stop" ]; then
     case "$_s" in nginx) _wu=${NGINX_USER:-www-data} ;; *) _wu=${APACHE_USER:-www-data} ;; esac
     if [ -n "$K_REPF" ]; then
@@ -2531,7 +2610,7 @@ apply_arm() { # <server>
   [ -n "$STAMPF" ] && stamp_line input "$STAMP_KEEP"
   if [ -n "$K_POLICY" ]; then
     rep applied "$(display "$_s"): your policy ($K_POLICY) is kept; the default's four rules were not written; to adopt them, put these in place of yours:"
-    case "$_s" in nginx) translate nginx | sed 's/^/     /' >> "$RT/applied" ;; apache) translate apache | sed 's/^/     /' >> "$RT/applied" ;; esac
+    case "$_s" in nginx) translate nginx "${SRV_MODE:-}" | sed 's/^/     /' >> "$RT/applied" ;; apache) translate apache "${SRV_MODE:-}" | sed 's/^/     /' >> "$RT/applied" ;; esac
   fi
   # what the module must name after the reload: the program of the http-level rules, from the pinned
   # text or the operator's kept lines, compiled before anything is written; the counters it writes to
@@ -2563,7 +2642,7 @@ apply_arm() { # <server>
   win_open "$_s"
   case "$_s" in
     nginx)
-      if [ -n "$ML_V" ]; then render_memlock "$NGX_UNIT" "$ML_V" > "$RT/new"; srv_put "$(memlock_dropin "$NGX_UNIT")" "the memory lock" 0644 || [ -z "$ARM_REFUSED" ] || return 0; fi
+      if [ -n "$ML_V$BI_V" ]; then render_unit_dropin "$NGX_UNIT" "$ML_V" "$BI_V" > "$RT/new"; srv_put "$(memlock_dropin "$NGX_UNIT")" "$(if [ -n "$BI_V" ]; then echo "the boot id${ML_V:+ and the memory lock}"; else echo "the memory lock"; fi)" 0644 || [ -z "$ARM_REFUSED" ] || return 0; sd_reload; fi
       if [ "$NGX_LOADED" != yes ]; then
         render_nginx_load "$NGX_MOD" > "$RT/new"; srv_put "$NGX_MAIN_INC/50-whisper-edge.conf" "the module's load line" 0644 || [ -z "$ARM_REFUSED" ] || return 0
       fi
@@ -2571,7 +2650,7 @@ apply_arm() { # <server>
       srv_put "$_drop" "the default policy" 0644 || [ -z "$ARM_REFUSED" ] || return 0
       test_pause in-window ;;
     apache)
-      if [ -n "$ML_V" ]; then render_memlock "$AP_UNIT" "$ML_V" > "$RT/new"; srv_put "$(memlock_dropin "$AP_UNIT")" "the memory lock" 0644 || [ -z "$ARM_REFUSED" ] || return 0; fi
+      if [ -n "$ML_V$BI_V" ]; then render_unit_dropin "$AP_UNIT" "$ML_V" "$BI_V" > "$RT/new"; srv_put "$(memlock_dropin "$AP_UNIT")" "$(if [ -n "$BI_V" ]; then echo "the boot id${ML_V:+ and the memory lock}"; else echo "the memory lock"; fi)" 0644 || [ -z "$ARM_REFUSED" ] || return 0; sd_reload; fi
       _lm=""; [ "$AP_LOADED" = yes ] || _lm=$AP_MOD
       render_apache_keep "$_lm" | prov_wrap "the default policy for Apache" | with_test_rule apache > "$RT/new"
       srv_put "$_drop" "the default policy" 0644 || [ -z "$ARM_REFUSED" ] || return 0
@@ -2629,6 +2708,7 @@ apply_arm() { # <server>
       c7_verdict "$_s" "$C7_CNT" "$C7_UID" "$C7_PROG" fresh || :
     fi
     stale_module "$_s"
+    srv_log_note "$_s"
     return 0
   else
     _rr=$?
@@ -2640,6 +2720,11 @@ apply_arm() { # <server>
     ARM_UNCONFIRMED="$ARM_UNCONFIRMED $_s"
   fi
   test_kill after-reload-before-status
+}
+# in log mode the policy denies nothing: say so, with the one line that turns it to deny
+srv_log_note() { # <server>
+  [ "${SRV_MODE:-deny}" = log ] && [ -z "${K_MODE:-}" ] && [ -z "${K_POLICY:-}" ] || return 0
+  rep proved "$(display "$1"): the policy is in log mode, which denies nothing; to deny, after reading what it logs: sudo $HERE/install.sh --server $1 --arm-deny"
 }
 # the rollback after a refused test, quietly: sets ROLLED to what it removed
 win_rollback_quiet() {
@@ -2689,9 +2774,9 @@ ARM_FAILED=""; ARM_UNCONFIRMED=""; RELOADED=""
 if [ "$AP_LOADED" = yes ] && [ -n "$AP_INC" ] && ! ap_loaded_elsewhere "$AP_INC/whisper-edge.conf"; then AP_LOADED=no; fi
 for s in $ARMS; do
   case "$s" in
-    nginx) memlock_line nginx "$NGX_UNIT" ;;
-    apache) memlock_line Apache "$AP_UNIT" ;;
-    litespeed) memlock_line OpenLiteSpeed "${OLS_UNIT:-lshttpd.service}" ;;
+    nginx) memlock_line nginx "$NGX_UNIT"; boot_line nginx "$NGX_UNIT" ;;
+    apache) memlock_line Apache "$AP_UNIT"; boot_line Apache "$AP_UNIT" ;;
+    litespeed) memlock_line OpenLiteSpeed "${OLS_UNIT:-lshttpd.service}"; BI_V="" ;;
   esac
   if [ "$NOAPPLY" = 1 ]; then
     print_arm "$s" "--no-apply: nothing of this was written; the deny arms after your own configuration test passes"
@@ -2705,6 +2790,10 @@ for s in $ARMS; do
     rep proved "$(display "$s"): a dry run applies nothing, so there is no configuration test to run and nothing was reloaded"
   else
     apply_arm "$s"
+    # the unit drop-in reaches systemd only through a daemon-reload, made as it is written (so the reload
+    # that follows runs under no "changed on disk" warning) and again here, after a refused test took it
+    # back: without one, the next start would run the unit as systemd loaded it before
+    if [ -n "$ML_V$BI_V" ] && { [ "$s" = nginx ] || [ "$s" = apache ]; }; then sd_reload; fi
   fi
 done
 # The policy itself, as a file to read and edit, once a server applies it: the pinned bytes, never
@@ -2919,7 +3008,7 @@ ols_undo_line() {
     # "temp inode" line goes to a file, and the kept copy is removed only after an exit 0 with an inode
     _b="$_b o=\$(mktemp) || exit 1; \$AS sh -c $(sh_word "$(printf '%s' "$OWNER_PUT" | tr '\n' ';')") sh $(sh_word "$_fp") $_fm $(sh_word "$_ft") < $(sh_word "$_fk") 3> \"\$o\" >/dev/null; r=\$?; i=\$(cut -d' ' -f2 \"\$o\"); rm -f \"\$o\";"
     _b="$_b if [ \"\$r\" != 0 ] || [ -z \"\$i\" ]; then echo $(sh_word "the restore did not complete (its writer ended") \"\$r)\"$(sh_word "; the bytes before the install are still at $_fk; compare: diff $_fk $_fp"); exit 1; fi;"
-    [ "${_fc:--}" != - ] && [ "$_fc" != '?' ] && _b="$_b if command -v chcon >/dev/null 2>&1; then exec 6< $(sh_word "$_fp"); [ \"\$(stat -L -c '%i %h' /proc/self/fd/6)\" = \"\$i 1\" ] && chcon -- $(sh_word "$_fc") /proc/self/fd/6; exec 6<&-; fi;"
+    se_ctx_ok "${_fc:-}" && _b="$_b if command -v chcon >/dev/null 2>&1; then exec 6< $(sh_word "$_fp"); [ \"\$(stat -L -c '%i %h' /proc/self/fd/6)\" = \"\$i 1\" ] && chcon -- $(sh_word "$_fc") /proc/self/fd/6; exec 6<&-; fi;"
     # the server's copy of the file, when it is exactly the installer's edit (see ols_copy_back)
     _b="$_b c=$(sh_word "${_fp}0"); if [ -f \"\$c\" ] && [ ! -L \"\$c\" ] && [ \"\$(\$AS sha256sum -- \"\$c\" | cut -c1-64)\" = $_fa ]; then o=\$(mktemp) || exit 1; \$AS sh -c $(sh_word "$(printf '%s' "$OWNER_PUT" | tr '\n' ';')") sh \"\$c\" \$(stat -c %a -- \"\$c\") $(sh_word "$_ft") < $(sh_word "$_fk") 3> \"\$o\" >/dev/null; rm -f \"\$o\"; fi;"
     _b="$_b rm -f $(sh_word "$_fk") $(sh_word "$_ff"); fi;"
@@ -2990,8 +3079,9 @@ rep undo "by hand, if you want the data gone too: systemctl disable --now whispe
 #
 # Recorded values only: what each timer was set to, and each plane's state as this run measured it, with
 # the arguments of the refresh cycle each plane runs on (T the timer period, D the cadence the signed
-# manifest states, A the publication lag, F the refresh's own fetch budget). A value this run did not
-# measure is said to be unmeasured, never filled in.
+# manifest states, A the publication lag, F the refresh's own fetch budget). A is the recorded
+# measurement (A_LAG above, with its date), never a bound filled in; a value nobody measured is said to be
+# unmeasured.
 _m="watch:"
 for p in $PLANES; do
   set -- $(cadence_of "$p"); _T=$4
@@ -3004,9 +3094,9 @@ for p in $PLANES; do
       else _s="generation $(le_u64 "$_f" 16), digest $(sha256_of < "$_f" | cut -c1-16), valid until $(utc_ms "$(le_u64 "$_f" 32)")"; fi ;;
     *) case " $INERT " in *" $p "*) _s="inert" ;; *) _s="not fetched" ;; esac ;;
   esac
-  _m="$_m $p $_s, --cycle $p=$_T,$_D,unmeasured,1300;"
+  _m="$_m $p $_s, --cycle $p=$_T,$_D,$A_LAG,1300;"
 done
-printf '%s the cycle is T the timer period in s, D the signed cadenceSeconds, A the publication lag (not measured by this run), F the refresh fetch budget in s\n' "$_m" > "$RT/monitor"
+printf '%s the cycle is T the timer period in s, D the signed cadenceSeconds, A the publication lag (measured, not by this run: %s), F the refresh fetch budget in s\n' "$_m" "$A_LAG_NOTE" > "$RT/monitor"
 
 # A dry run that could not fetch or verify what it was asked to preview says so above, and fails: a
 # preview that could not see the feed is not a preview of a run that would succeed.

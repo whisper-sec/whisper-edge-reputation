@@ -370,6 +370,9 @@ uint8_t *ww_build(const ww_plane_t *p, size_t *len)
             t->v4_depth = (uint8_t)l4.depth;
             t->v6_depth = (uint8_t)l6.depth;
             t->country_table_version = schema_of(p) == WE_SCHEMA_ROUTING ? p->country_version : 0u;
+            /* the per-family coverage; a not-covered family must be empty, kind none, which the caller states */
+            t->v4_coverage = p->v4_coverage;
+            t->v6_coverage = p->v6_coverage;
             /* An empty family's rank fields: m = ceil(0 / s) = 0 and depth 0, which lay_family_f2 left. */
         }
     }

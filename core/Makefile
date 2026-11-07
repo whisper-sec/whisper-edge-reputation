@@ -49,6 +49,13 @@ TEST_HDR = we_writer.h
 test_core: test_core.c $(TEST_SRC) $(CORE_SRC) $(CORE_HDR) $(TEST_HDR) we_map_fields.h
 	$(CC) $(CFLAGS) -DWE_COUNT_DIGEST -o $@ test_core.c $(TEST_SRC) $(CORE_SRC)
 
+# Rule 5's IPv4 half of the coverage rules (FORMAT.md section 2) is unreachable in production, because the
+# allowance table permits no IPv4 cell; this build adds tor IPv4 to the table so the half has rows. The define
+# is refused by whisper_edge.c's #error without WE_TEST_BUILD, and check-coverage-define holds it out of every
+# release compile line.
+test_core_v4unc: test_core.c $(TEST_SRC) $(CORE_SRC) $(CORE_HDR) $(TEST_HDR) we_map_fields.h
+	$(CC) $(CFLAGS) -DWE_COUNT_DIGEST -DWE_TEST_BUILD -DWE_TEST_ALLOW_V4_UNCOVERED -o $@ test_core.c $(TEST_SRC) $(CORE_SRC)
+
 # The deterministic bound tests (FORMAT.md §7): the SAME lookup source with WE_TRACE_READ recording
 # every load, compared per lookup with a data-free model. test_mutant is that build with a window one
 # entry longer, and it must fail the comparison; it exits non-zero if it does not.
@@ -88,11 +95,34 @@ test_module: test_module.c $(MODULE_SRC) $(CORE_SRC) $(POLICY_SRC) $(CORE_HDR) $
 # The fallback is sound only on the reader's own namespace's procfs: the procfs row runs the stat-refused
 # build in a pid namespace below its procfs's (unshare -p --fork, no --mount-proc), where a pidns-0 writer
 # must be refused, and its control WE_SUM_TEST_NO_PROCFS_CHECK must read it live.
+# A writer whose boot the reader cannot compare (`boot unknown`, under a unit that hides /proc/sys) is
+# placed by its pid, start time and pid namespace AND a file written after that process started; the
+# control WE_SUM_TEST_BOOT_PLACED_BY_PID drops the last test and must fail the earlier-boot row.
 test_summary: test_summary.c we_summary_cli.c we_summary_read.h we_sha256.c we_sha256.h
 	$(CC) $(CFLAGS) -o $@ test_summary.c we_sha256.c
 
 # Every defect POLICY.md §5.4 names, planted by a -D build of test_policy, each of which must fail
 # the row that claims to catch it (policy-mutants.sh). Part of `check`.
+# WE_TEST_ALLOW_V4_UNCOVERED never reaches a production build: refused without WE_TEST_BUILD (the control),
+# absent from every release compile line (the core's library and tools, and the three servers' build files),
+# and the object code with it equal to the object code without it (only the allowance table's data moves).
+check-coverage-define:
+	@mkdir -p $(TMPDIR_)/covdef
+	@set -e; n=0; f=0; chk() { n=$$((n + 1)); if eval "$$2" >/dev/null 2>&1; then :; else f=$$((f + 1)); echo "CHECK FAIL: $$1"; fi; }; \
+	chk "C5v4 control: the define without WE_TEST_BUILD stops at whisper_edge.c's #error" \
+	    "$(CC) $(CFLAGS) -DWE_TEST_ALLOW_V4_UNCOVERED -c -o $(TMPDIR_)/covdef/x.o whisper_edge.c 2>&1 | grep -q 'exists only in a test build'"; \
+	chk "C5v4: no release compile line of the core carries the define" \
+	    "! $(MAKE) -s -n -B lib tools 2>/dev/null | grep -q WE_TEST_ALLOW_V4_UNCOVERED"; \
+	chk "C5v4: no server module's build names the define" \
+	    "! grep -rlq WE_TEST_ALLOW_V4_UNCOVERED ../nginx ../apache ../litespeed ../install"; \
+	$(CC) $(CFLAGS) -c -o $(TMPDIR_)/covdef/plain.o whisper_edge.c; \
+	$(CC) $(CFLAGS) -DWE_TEST_BUILD -DWE_TEST_ALLOW_V4_UNCOVERED -c -o $(TMPDIR_)/covdef/test.o whisper_edge.c; \
+	objdump -d -r $(TMPDIR_)/covdef/plain.o | sed 1,3d > $(TMPDIR_)/covdef/plain.dis; \
+	objdump -d -r $(TMPDIR_)/covdef/test.o | sed 1,3d > $(TMPDIR_)/covdef/test.dis; \
+	chk "C5v4: the code is identical with and without the define; only the table's data differs" \
+	    "cmp -s $(TMPDIR_)/covdef/plain.dis $(TMPDIR_)/covdef/test.dis"; \
+	echo "check-coverage-define: $$n checks, $$f failures"; [ $$f -eq 0 ]
+
 policy-mutants: test_policy
 	@mkdir -p $(TMPDIR_)
 	@./policy-mutants.sh $(TMPDIR_) $(CC) $(CFLAGS)
@@ -239,10 +269,10 @@ hold-harmless:
 # before printing its summary, passed `make check` whenever the README's count still matched. The
 # output now goes to a file and the status is read from the binary itself.
 #
-check: test_core test_trace test_mutant test_policy test_module test_summary check-policy check-lookup fuzz-planes fuzz_walk_replay fuzz_summary_replay
+check: test_core test_core_v4unc test_trace test_mutant test_policy test_module test_summary check-policy check-lookup fuzz-planes fuzz_walk_replay fuzz_summary_replay check-coverage-define
 	@mkdir -p $(TMPDIR_)
 	@: > $(TMPDIR_)/check.out
-	@set -e; for t in test_core test_trace test_mutant test_policy test_module test_summary; do \
+	@set -e; for t in test_core test_core_v4unc test_trace test_mutant test_policy test_module test_summary; do \
 	  if ./$$t $(TMPDIR_) > $(TMPDIR_)/$$t.out 2>&1; then rc=0; else rc=$$?; fi; \
 	  cat $(TMPDIR_)/$$t.out; cat $(TMPDIR_)/$$t.out >> $(TMPDIR_)/check.out; \
 	  if [ $$rc -ne 0 ]; then echo "CHECK FAIL: $$t exited $$rc"; exit 1; fi; \
@@ -318,12 +348,30 @@ check: test_core test_trace test_mutant test_policy test_module test_summary che
 	   || ! grep -q 'naming the namespace made 1 stat() call(s) on /proc/self/ns/pid' $(TMPDIR_)/pidns-statfirst.out; then \
 	  echo "CHECK FAIL: the control WE_TEST_PIDNS_STAT_FIRST (the stat before the link) passed the no-stat row"; exit 1; fi; \
 	echo "ok   pidns control: the stat tried first makes 1 stat() of /proc/self/ns/pid, which the no-stat row names"; \
+	pc -DWE_TEST_BOOT_HIDDEN -o $(TMPDIR_)/test_core_boot_hidden; \
+	if ! $(TMPDIR_)/test_core_boot_hidden $(TMPDIR_) > $(TMPDIR_)/boot-hidden.out 2>&1 \
+	   || ! grep -q 'the kernel.s file hidden: the identity said unknown, then named the boot from the variable' $(TMPDIR_)/boot-hidden.out \
+	   || ! grep -q 'the counters writer, another unit, named the boot the prime read: one cache per process' $(TMPDIR_)/boot-hidden.out; then \
+	  grep FAIL $(TMPDIR_)/boot-hidden.out | head -5; \
+	  echo "CHECK FAIL: with the kernel's boot id hidden (WE_TEST_BOOT_HIDDEN, as ProcSubset=pid hides it) the identity was not whole, the variable did not name it, or the counters writer did not name the primed boot"; exit 1; fi; \
+	echo "ok   with the kernel's boot id hidden, the identity says unknown and the variable (systemd's %b) names it, through the prime, for the counters writer too"; \
+	echo "2 checks, 0 failures" >> $(TMPDIR_)/check.out; \
+	pc -DWE_TEST_BOOT_HIDDEN -DWE_TEST_BOOT_CACHE_PER_UNIT -o $(TMPDIR_)/test_core_boot_perunit; \
+	if $(TMPDIR_)/test_core_boot_perunit $(TMPDIR_) > $(TMPDIR_)/boot-perunit.out 2>&1 \
+	   || ! grep -q 'boot hidden: the counters file is not named by the primed identity' $(TMPDIR_)/boot-perunit.out; then \
+	  echo "CHECK FAIL: the control WE_TEST_BOOT_CACHE_PER_UNIT (a boot-id cache per translation unit) passed the counters writer's row"; exit 1; fi; \
+	echo "ok   boot id control: a cache per translation unit names the counters file by boot unknown, which the row refuses"; \
+	pc -DWE_TEST_BOOT_ENV_FIRST -o $(TMPDIR_)/test_core_boot_envfirst; \
+	if $(TMPDIR_)/test_core_boot_envfirst $(TMPDIR_) > $(TMPDIR_)/boot-envfirst.out 2>&1 \
+	   || ! grep -q 'boot id order: with the kernel.s file readable the variable was taken' $(TMPDIR_)/boot-envfirst.out; then \
+	  echo "CHECK FAIL: the control WE_TEST_BOOT_ENV_FIRST (the variable before the kernel) passed the order row"; exit 1; fi; \
+	echo "ok   boot id control: the variable read before the kernel fails the order row"; \
 	pc -DWE_TEST_PIDNS_LOOSE -o $(TMPDIR_)/test_core_pidns_loose; \
 	if $(TMPDIR_)/test_core_pidns_loose $(TMPDIR_) > $(TMPDIR_)/pidns-loose.out 2>&1 \
 	   || ! grep -q 'pidns link: the malformed "pid:\[18446744073709551616\]" read as an inode' $(TMPDIR_)/pidns-loose.out; then \
 	  echo "CHECK FAIL: the control WE_TEST_PIDNS_LOOSE (an overflowing or zero inode taken as read) passed the link rows"; exit 1; fi; \
 	echo "ok   pidns control: a parse without the bounds reads $$(grep -c 'pidns link: the malformed' $(TMPDIR_)/pidns-loose.out) malformed links as inodes"; \
-	echo "3 mutant checks, 0 failures" >> $(TMPDIR_)/check.out
+	echo "4 mutant checks, 0 failures" >> $(TMPDIR_)/check.out
 	@./snapshot-cli-selftest.sh $(TMPDIR_) > $(TMPDIR_)/snapshot-cli.out 2>&1 || { cat $(TMPDIR_)/snapshot-cli.out; echo "CHECK FAIL: snapshot-cli-selftest.sh"; exit 1; }; \
 	cat $(TMPDIR_)/snapshot-cli.out; grep -E '^[0-9]+ checks, ' $(TMPDIR_)/snapshot-cli.out >> $(TMPDIR_)/check.out
 	@set -e; \
@@ -364,6 +412,11 @@ check: test_core test_trace test_mutant test_policy test_module test_summary che
 	   || ! grep -q 'a writer in another pid namespace was read as live' $(TMPDIR_)/test_summary_pidns_trusted.out; then \
 	  echo "CHECK FAIL: the summary control WE_SUM_TEST_PIDNS_TRUSTED (a writer's pidns 0 read as this namespace) passed the other-namespace row"; exit 1; fi; \
 	echo "ok   the summary control WE_SUM_TEST_PIDNS_TRUSTED fails the other-namespace row: $$(grep -m1 'another pid namespace was read as live' $(TMPDIR_)/test_summary_pidns_trusted.out | sed 's/^ *FAIL //' | cut -c1-120)"; \
+	$(CC) $(CFLAGS) -DWE_SUM_TEST_BOOT_PLACED_BY_PID -o $(TMPDIR_)/test_summary_boot_by_pid test_summary.c we_sha256.c; \
+	if $(TMPDIR_)/test_summary_boot_by_pid $(TMPDIR_) > $(TMPDIR_)/test_summary_boot_by_pid.out 2>&1 \
+	   || ! grep -q 'a file written before the process with its pid started was not foreign' $(TMPDIR_)/test_summary_boot_by_pid.out; then \
+	  echo "CHECK FAIL: the summary control WE_SUM_TEST_BOOT_PLACED_BY_PID (a boot-less writer placed by pid and start time alone) passed the earlier-boot row"; exit 1; fi; \
+	echo "ok   the summary control WE_SUM_TEST_BOOT_PLACED_BY_PID fails the earlier-boot row: $$(grep -c 'written before the process with its pid started was not foreign' $(TMPDIR_)/test_summary_boot_by_pid.out) earlier-boot files read live"; \
 	run=; if [ "$$(id -u)" = 0 ]; then run=env; elif sudo -n true 2>/dev/null; then run="sudo -n"; fi; \
 	if [ -z "$$run" ]; then echo "CHECK FAIL: the procfs row needs root or passwordless sudo to make a pid namespace"; exit 1; fi; \
 	pf=$$(mktemp -d $(TMPDIR_)/procfs-row.XXXXXX); chmod 755 $$pf; \
@@ -378,7 +431,7 @@ check: test_core test_trace test_mutant test_policy test_module test_summary che
 	if [ $$crc -eq 0 ] || ! grep -q 'a pidns-0 writer was not refused as foreign' $(TMPDIR_)/test_summary_noprocfs.out; then \
 	  echo "CHECK FAIL: the summary control WE_SUM_TEST_NO_PROCFS_CHECK (any procfs taken as the reader's own) passed the procfs row"; exit 1; fi; \
 	echo "ok   the summary control WE_SUM_TEST_NO_PROCFS_CHECK fails the procfs row: $$(grep -m1 '^process pid' $(TMPDIR_)/test_summary_noprocfs.out) read live"; \
-	echo "4 mutant checks, 0 failures" >> $(TMPDIR_)/check.out
+	echo "5 mutant checks, 0 failures" >> $(TMPDIR_)/check.out
 	@set -e; \
 	$(CC) $(CFLAGS) -DWE_MOD_TEST_WRITER_UID_UNCHECKED -o $(TMPDIR_)/test_summary_uid test_summary.c we_sha256.c; \
 	if $(TMPDIR_)/test_summary_uid $(TMPDIR_) > $(TMPDIR_)/test_summary_uid.out 2>&1 \
@@ -625,7 +678,8 @@ fuzz:
 fuzz-planes:
 	@mkdir -p $(FUZZ_PLANES)
 	@set -e; \
-	cp testdata/format2/routing.bin testdata/format2/tor.bin $(FUZZ_PLANES)/; \
+	cp testdata/format2/routing.bin testdata/format2/tor.bin testdata/format2/tor-v4only.bin $(FUZZ_PLANES)/; \
+	chmod 644 $(FUZZ_PLANES)/*.bin; \
 	cp testdata/format2/routing-expected.txt $(FUZZ_PLANES)/routing.txt; \
 	cp testdata/format2/tor-expected.txt $(FUZZ_PLANES)/tor.txt; \
 	w() { python3 make-test-snapshot.py --plane $$1 --out $(FUZZ_PLANES)/$$1.bin --format $$2 --v4-index $$3 \
@@ -752,6 +806,17 @@ check-py: plane_check
 	run threat 2 none radix-16; \
 	run rpki-unreachable 2 radix-16 none; \
 	run tenant 2 rank rank; \
+	run tor 2 radix-12 none --v6-coverage\ not-covered; \
+	python3 make-test-snapshot.py --one-family testdata/format2/tor.bin $(TMPDIR_)/py/tor-same.bin same; \
+	cmp -s $(TMPDIR_)/py/tor-same.bin testdata/format2/tor.bin \
+	  || { echo "CHECK FAIL: the independent writer does not lay tor.bin out as the builder did"; exit 1; }; \
+	python3 make-test-snapshot.py --one-family testdata/format2/tor.bin $(TMPDIR_)/py/tor-v4only.bin v6; \
+	cmp -s $(TMPDIR_)/py/tor-v4only.bin testdata/format2/tor-v4only.bin \
+	  || { echo "CHECK FAIL: the independent writer's one-family tor plane is not testdata/format2/tor-v4only.bin"; exit 1; }; \
+	python3 make-test-snapshot.py --coverage-corpus $(TMPDIR_)/py/coverage > /dev/null; \
+	diff -r $(TMPDIR_)/py/coverage testdata/coverage > /dev/null \
+	  || { echo "CHECK FAIL: testdata/coverage is not what make-test-snapshot.py --coverage-corpus writes"; exit 1; }; \
+	echo "ok   the independent writer: tor.bin's layout, the one-family tor plane and the coverage corpus, byte for byte"; \
 	./xserver-cases.sh --selftest
 	@$(MAKE) --no-print-directory dump-full-san
 	@$(MAKE) --no-print-directory check-rpz-oracle
@@ -823,8 +888,8 @@ check-live: test_trace test_mutant fixtures
 # consequence, which is better, but a test only run under a sanitizer is a test most people never run.
 RACE_CFLAGS = -std=c11 -O1 -g -Wall -Wextra -Werror -pthread
 
-race_core: race_core.c $(CORE_SRC) $(CORE_HDR)
-	$(CC) $(RACE_CFLAGS) -o $@ race_core.c $(CORE_SRC)
+race_core: race_core.c $(CORE_SRC) $(CORE_HDR) we_policy.c $(POLICY_HDR) $(TEST_SRC) $(TEST_HDR)
+	$(CC) $(RACE_CFLAGS) -o $@ race_core.c $(CORE_SRC) we_policy.c $(TEST_SRC)
 
 race: race_core
 	@mkdir -p $(TMPDIR_)
@@ -833,7 +898,7 @@ race: race_core
 	    && $(CC) -fsanitize=thread -o $(TMPDIR_)/tsan $(TMPDIR_)/tsan.c 2>/dev/null \
 	    && $(TMPDIR_)/tsan; then \
 	    echo "  and again under ThreadSanitizer:"; \
-	    $(CC) $(RACE_CFLAGS) -fsanitize=thread -o race_core_tsan race_core.c $(CORE_SRC); \
+	    $(CC) $(RACE_CFLAGS) -fsanitize=thread -o race_core_tsan race_core.c $(CORE_SRC) we_policy.c $(TEST_SRC); \
 	    ./race_core_tsan $(TMPDIR_) testdata/interop.snap; \
 	else \
 	    echo "  (no ThreadSanitizer in this toolchain; the accounting and abort checks above ran)"; \
@@ -884,7 +949,7 @@ bench: bench_core
 	python3 bench/check-record.py $(TMPDIR_)/bench-record.json '$(WE_COMMIT)'
 
 clean:
-	rm -f *.o *.a test_core test_trace test_mutant test_policy test_module test_summary plane_check bench_core whisper-edge-lookup whisper-edge-summary race_core race_core_tsan
+	rm -f *.o *.a test_core test_core_v4unc test_trace test_mutant test_policy test_module test_summary plane_check bench_core whisper-edge-lookup whisper-edge-summary race_core race_core_tsan
 	rm -f fuzz_policy_replay fuzz_program_replay fuzz_walk_replay fuzz_summary_replay
 	rm -rf __pycache__ gate/__pycache__ bench/__pycache__
 	rm -rf $(TMPDIR_)

@@ -158,10 +158,10 @@ STACK_MAX_EVAL=256
 # with. Measured over the distribution and target sets below: under -mtune=znver3/znver4 clang spilled
 # in hpfloor, the fill rows and the lookup wrapper hpdeny until the evaluator's rank descent took an
 # unroll(disable) hint (0 since); under the Ubuntu and Fedora module sets clang 18 to 20 on x86_64 keep
-# a spill in hpeval and hpeval_ops (-fno-omit-frame-pointer takes %rbp from the allocator), and clang 20
-# under -march=x86-64-v3 packs the K3 bit stacks into an xmm register with constant-pool loads. Those
-# two are held EXACTLY by the expected-locals and expected-relocations tables below, and every other
-# leg must read 0 of both; gcc and every aarch64 build read 0 everywhere.
+# a spill in hpeval and hpeval_ops (-fno-omit-frame-pointer takes %rbp from the allocator), which the
+# expected-locals table below holds EXACTLY, and every other leg must read 0; gcc and every aarch64
+# build read 0 everywhere. No leg references .rodata (clang 20 under -march=x86-64-v3 packed the
+# K3 bit stacks into an xmm register with constant-pool loads until the evaluator pinned them).
 #
 SYMS=(
     "hpcur:hp.c:$STACK_MAX_CURRENT:2:15:acquire-one"
@@ -213,33 +213,55 @@ SYMS=(
 # for one level, which wins. The compiler may carry its target, <compiler>-<major>@<arch>, for a flag set
 # both architectures share (base); a key with the target wins over one without. Measured with this script against the evaluator at all four levels.
 #
+# The hpeval_ops entries were re-measured when the per-family coverage byte (FORMAT.md section 2) joined the
+# fill and the ISUNK peek: one byte load and a shift on the line the fill already reads. That load moves
+# clang's register allocation in the instruction loop on these legs and on no other: clang 18 from 8 to 16
+# at -O and from 12 to 4 at -O2 and -O3 (-Os stays 12), clang 19, 20 and 21 from 16 to 8 at -O. A bisect showed
+# any live read of the byte moves it, whatever the source form (a per-iteration volatile reload of the
+# family at either peek site, the stale test first, a logical form, a masked or unmasked shift: about ten
+# were measured), and with the read removed the old figures return. So the table moved to the measurement;
+# hpeval stayed 8 on every leg, no entry exceeds 16, and -fstack-usage stays 48.
+#
 declare -A EXPECT_LOCALS=(
     ["clang-18|ubuntu-x86_64|hpeval"]=8
-    ["clang-18|ubuntu-x86_64|hpeval_ops"]=12
-    ["clang-18|ubuntu-x86_64|-O|hpeval_ops"]=8
+    # clang 18 keys every level; the level-free key is the -O2 figure, which is where the table's own
+    # self-test looks a level-free key up
+    ["clang-18|ubuntu-x86_64|hpeval_ops"]=4
+    ["clang-18|ubuntu-x86_64|-O|hpeval_ops"]=16
+    ["clang-18|ubuntu-x86_64|-O2|hpeval_ops"]=4
+    ["clang-18|ubuntu-x86_64|-Os|hpeval_ops"]=12
+    ["clang-18|ubuntu-x86_64|-O3|hpeval_ops"]=4
     ["clang-19|ubuntu-x86_64|hpeval"]=8
     ["clang-19|ubuntu-x86_64|hpeval_ops"]=4
-    ["clang-19|ubuntu-x86_64|-O|hpeval_ops"]=16
+    ["clang-19|ubuntu-x86_64|-O|hpeval_ops"]=8
     ["clang-19|fedora-x86_64|hpeval"]=8
     ["clang-19|fedora-x86_64|hpeval_ops"]=4
-    ["clang-19|fedora-x86_64|-O|hpeval_ops"]=16
+    ["clang-19|fedora-x86_64|-O|hpeval_ops"]=8
     ["clang-20|ubuntu-x86_64|hpeval"]=8
     ["clang-20|ubuntu-x86_64|hpeval_ops"]=4
-    ["clang-20|ubuntu-x86_64|-O|hpeval_ops"]=16
+    ["clang-20|ubuntu-x86_64|-O|hpeval_ops"]=8
     ["clang-20|fedora-x86_64|hpeval"]=8
     ["clang-20|fedora-x86_64|hpeval_ops"]=4
-    ["clang-20|fedora-x86_64|-O|hpeval_ops"]=16
+    ["clang-20|fedora-x86_64|-O|hpeval_ops"]=8
+    # clang 21 (Ubuntu 26.04's default) keeps exactly clang 19 and 20's bytes on both sets, measured with
+    # this script's locals reading under clang 21.1.8, before and after the coverage byte joined the fill
+    ["clang-21|ubuntu-x86_64|hpeval"]=8
+    ["clang-21|ubuntu-x86_64|hpeval_ops"]=4
+    ["clang-21|ubuntu-x86_64|-O|hpeval_ops"]=8
+    ["clang-21|fedora-x86_64|hpeval"]=8
+    ["clang-21|fedora-x86_64|hpeval_ops"]=4
+    ["clang-21|fedora-x86_64|-O|hpeval_ops"]=8
     # THE MODULES' DECISION. hpmod keeps no local on aarch64 under either compiler and on x86_64 at -O2,
     # -Os and -O3, every operand parked in the scratch. Two x86_64 legs keep one, measured with this script:
     # gcc 13 at -O spills the verdict pointer once across the rule loop, on every flag set, where hpeval
     # holds the same pointer in its incoming argument slot (its ninth argument arrives on the stack, and an
     # argument slot is not a local); clang 18 under the Ubuntu set (-fno-omit-frame-pointer takes %rbp)
     # keeps 16 bytes, the leg the evaluator's own rows hold above. Held exactly, like those. The gcc keys
-    # name x86_64, because gcc 13 builds the base set for aarch64 too and keeps no local there.
+    # name x86_64, because gcc 13 builds the base set for aarch64 too and keeps no local there. Under
+    # -march=x86-64-v3 gcc 13 keeps none since the fill tests its coverage bit in place (measured).
     ["gcc-13@x86_64|base|-O|hpmod"]=8
     ["gcc-13@x86_64|ubuntu-x86_64|-O|hpmod"]=8
     ["gcc-13@x86_64|fedora-x86_64|-O|hpmod"]=8
-    ["gcc-13@x86_64|x86-64-v3|-O|hpmod"]=8
     ["gcc-13@x86_64|znver3|-O|hpmod"]=8
     ["gcc-13@x86_64|znver4|-O|hpmod"]=8
     # gcc 13 on the shims' own sets, which only the host's own gcc reads (apxs -q CFLAGS and nginx -V on
@@ -248,16 +270,24 @@ declare -A EXPECT_LOCALS=(
     ["gcc-13@x86_64|apxs|-O|hpmod"]=8
     ["gcc-13@x86_64|nginx|-O|hpmod"]=8
     # gcc 14 spills the same pointer under the same condition, on every x86_64 flag set and at no other
-    # level, measured with this script under gcc 14 on the same eight sets; on aarch64 gcc 14 keeps no
-    # local, so its keys name x86_64 like gcc 13's
+    # level, measured with this script under gcc 14 on the same eight sets but x86-64-v3, where it keeps
+    # none, as gcc 13 does; on aarch64 gcc 14 keeps no local, so its keys name x86_64 like gcc 13's
     ["gcc-14@x86_64|base|-O|hpmod"]=8
     ["gcc-14@x86_64|ubuntu-x86_64|-O|hpmod"]=8
     ["gcc-14@x86_64|fedora-x86_64|-O|hpmod"]=8
-    ["gcc-14@x86_64|x86-64-v3|-O|hpmod"]=8
     ["gcc-14@x86_64|znver3|-O|hpmod"]=8
     ["gcc-14@x86_64|znver4|-O|hpmod"]=8
     ["gcc-14@x86_64|apxs|-O|hpmod"]=8
     ["gcc-14@x86_64|nginx|-O|hpmod"]=8
+    # gcc 15 (Ubuntu 26.04's default) spills the same pointer at -O on the base, distribution and
+    # x86-64-v3 sets and keeps none under -mtune=znver3 or znver4, measured with this script under gcc 15.2
+    ["gcc-15@x86_64|base|-O|hpmod"]=8
+    ["gcc-15@x86_64|ubuntu-x86_64|-O|hpmod"]=8
+    ["gcc-15@x86_64|fedora-x86_64|-O|hpmod"]=8
+    ["gcc-15@x86_64|x86-64-v3|-O|hpmod"]=8
+    # and on the shims' own sets, which only the x86_64 host's native gcc reads (measured on that run)
+    ["gcc-15@x86_64|apxs|-O|hpmod"]=8
+    ["gcc-15@x86_64|nginx|-O|hpmod"]=8
     ["clang-18|ubuntu-x86_64|hpmod"]=16
     # clang 19 and 20 keep the same 16 bytes on both x86_64 distribution sets (each takes %rbp with
     # -fno-omit-frame-pointer), at every level; measured with this script under each, and the decision's
@@ -266,6 +296,8 @@ declare -A EXPECT_LOCALS=(
     ["clang-19|fedora-x86_64|hpmod"]=16
     ["clang-20|ubuntu-x86_64|hpmod"]=16
     ["clang-20|fedora-x86_64|hpmod"]=16
+    ["clang-21|ubuntu-x86_64|hpmod"]=16
+    ["clang-21|fedora-x86_64|hpmod"]=16
 )
 expected_locals_key() { # compiler-id[@arch] set level symbol -> the table key that applies, or nothing
     local k base=${1%@*}
@@ -288,24 +320,16 @@ locals_verdict() { # measured expected -> the failure's text, nothing when they 
 }
 declare -A LOCALS_HELD=()
 #
-# THE EXPECTED RELOCATIONS, the same way and for one leg: clang 20 at -march=x86-64-v3 packs the
-# evaluator's two 64-bit K3 bit stacks into one xmm register (the SLP vectoriser; no loop is vectorised)
-# and loads its lane masks from a constant pool, so hpeval and hpeval_ops carry relocations into .rodata
-# and its .LCPI entries at -O2, -Os and -O3 (none at -O; none on clang 18 or 19 or any other leg); hpmod,
-# which inlines the same evaluator, carries 14 at the same three levels, measured the same way. The
-# count per wrapper and level is held exactly, and every one of them must point into the constant pool:
-# one more, one fewer, or one anywhere else fails by name. Measured against the evaluator.
+# THE EXPECTED RELOCATIONS, the same way: a leg the table names carries exactly that many relocations, each
+# into the constant pool; one more, one fewer, or one anywhere else fails by name. The table is EMPTY, so
+# every leg must carry none. It held clang 20 and 21 at -march=x86-64-v3 (14 in hpeval and hpmod, 7 in
+# hpeval_ops, at -O2, -Os and -O3), where the SLP vectoriser packed the evaluator's two 64-bit K3 bit
+# stacks into one xmm register and loaded its lane masks from a constant pool. we_eval.h now keeps T and F
+# in general registers on that one case with an empty asm, and every other leg compiles to the
+# same bytes as before (measured over gcc 13 and 14 and clang 18, 19 and 20, both architectures, the four
+# levels and the x86_64 target sets).
 #
 declare -A EXPECT_RELOCS=(
-    ["clang-20|x86-64-v3|-O2|hpeval"]=14
-    ["clang-20|x86-64-v3|-O2|hpeval_ops"]=7
-    ["clang-20|x86-64-v3|-Os|hpeval"]=14
-    ["clang-20|x86-64-v3|-Os|hpeval_ops"]=7
-    ["clang-20|x86-64-v3|-O3|hpeval"]=14
-    ["clang-20|x86-64-v3|-O3|hpeval_ops"]=7
-    ["clang-20|x86-64-v3|-O2|hpmod"]=14
-    ["clang-20|x86-64-v3|-Os|hpmod"]=14
-    ["clang-20|x86-64-v3|-O3|hpmod"]=14
 )
 expected_relocs() { # compiler-id set level symbol -> the constant-pool relocations the table expects
     echo "${EXPECT_RELOCS["$1|$2|$3|$4"]:-0}"
@@ -507,13 +531,25 @@ FEDORA_AARCH64_FLAGS="-O2 -flto=auto -ffat-lto-objects -fexceptions -g -pipe -Wa
 X86_64_V3_FLAGS="-march=x86-64-v3"
 ZNVER3_FLAGS="-mtune=znver3"
 ZNVER4_FLAGS="-mtune=znver4"
+#
+# THE GATE'S OWN x86_64 SETS NAME THEIR ARCHITECTURE LEVEL. base, znver3 and znver4 leave -march to the
+# compiler, and a compiler's default level is the host's, not the set's: on the ubuntu-26.04 runner the
+# native gcc 14 built "base" as x86-64-v3 (its hp_mod object byte-identical to the v3 set's, with shrx,
+# shlx and movbe in it), so one set name measured two targets and the expected-locals table could hold
+# only one of them. These three are pinned to the x86-64 baseline here, so each set is one target on every
+# host. The distributions' sets keep exactly what each distribution passes (apxs and nginx are read from
+# the host, the Ubuntu and Fedora sets are typed in from their sources), and x86-64-v3 names its own.
+#
+X86_64_PIN_FLAGS="-march=x86-64"
 
 # shim_flags SET -> the words of that flag set on top of what every build needs. The shims' own
 # _FORTIFY_SOURCE wins over ours (defining it twice to different values is an error under -Werror).
 shim_flags() {
     local set=$1 words=""
     case "$set" in
-        base)  printf '%s\n' "${BASE_FLAGS[@]}"; return ;;
+        base)  printf '%s\n' "${BASE_FLAGS[@]}"
+               [ "${TC_ARCH:-}" = x86_64 ] && printf '%s\n' $X86_64_PIN_FLAGS
+               return 0 ;;
         apxs)  words=$APXS_FLAGS ;;
         nginx) words=$NGINX_FLAGS ;;
         ubuntu-x86_64)  words=$UBUNTU_X86_64_FLAGS ;;
@@ -521,8 +557,8 @@ shim_flags() {
         fedora-x86_64)  words=$FEDORA_X86_64_FLAGS ;;
         fedora-aarch64) words=$FEDORA_AARCH64_FLAGS ;;
         x86-64-v3)      words=$X86_64_V3_FLAGS ;;
-        znver3)         words=$ZNVER3_FLAGS ;;
-        znver4)         words=$ZNVER4_FLAGS ;;
+        znver3)         words="$X86_64_PIN_FLAGS $ZNVER3_FLAGS" ;;
+        znver4)         words="$X86_64_PIN_FLAGS $ZNVER4_FLAGS" ;;
         *) echo "shim_flags: no flag set named $set" >&2; return 1 ;;
     esac
     local w fort=0
@@ -1089,6 +1125,26 @@ for TC in "${REQUIRED[@]}" "${OPTIONAL[@]}"; do
         fi
     done
     [ "$uok" = 1 ] && echo "ok   the undef step reads a planted external back under every set on $TC"
+    # the architecture level each x86_64 set compiles for, read from the compiler's own macros: the gate's
+    # sets are the baseline (no __BMI2__) and x86-64-v3 is v3 (__BMI2__), whatever level this compiler
+    # defaults to on this host, so one set name is one target everywhere
+    if [ "$TC_ARCH" = x86_64 ]; then
+        lok=1
+        for SET in base znver3 znver4 x86-64-v3; do
+            mapfile -t lflags < <(shim_flags "$SET")
+            if ! macros=$("${TC_CC[@]}" "${lflags[@]}" -dM -E -x c /dev/null 2>"$D/level-$SET.err"); then
+                echo "GATE FAIL: $TC [$SET]: the level probe does not preprocess: $(head -c 140 "$D/level-$SET.err")"
+                fail=1; lok=0; continue
+            fi
+            bmi2=0; grep -q '^#define __BMI2__ ' <<<"$macros" && bmi2=1
+            want=0; [ "$SET" = x86-64-v3 ] && want=1
+            if [ "$bmi2" != "$want" ]; then
+                echo "GATE FAIL: $TC [$SET]: compiles for the wrong architecture level (__BMI2__ $( [ "$bmi2" = 1 ] && echo defined || echo undefined ), the set names $( [ "$want" = 1 ] && echo x86-64-v3 || echo the x86-64 baseline ))"
+                fail=1; lok=0
+            fi
+        done
+        [ "$lok" = 1 ] && echo "ok   each x86_64 set compiles for its own level on $TC: base, znver3 and znver4 the baseline, x86-64-v3 v3"
+    fi
 
     for SRC in "${GATE_SOURCES[@]}"; do
         tag=$(basename "$SRC" .c)

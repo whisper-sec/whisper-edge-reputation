@@ -82,8 +82,9 @@ static inline int we_proc_starttime(uint64_t *st)
 }
 
 #if (defined(WE_TEST_PIDNS_NO_READLINK) || defined(WE_TEST_PIDNS_LOOSE) || defined(WE_TEST_PIDNS_STAT_DENIED) \
-     || defined(WE_TEST_PIDNS_READLINK_DENIED) || defined(WE_TEST_PIDNS_STAT_FIRST)) && !defined(WE_TEST_CORE_CONTROL)
-#error "a pidns control is a test build: define WE_TEST_CORE_CONTROL with it"
+     || defined(WE_TEST_PIDNS_READLINK_DENIED) || defined(WE_TEST_PIDNS_STAT_FIRST) || defined(WE_TEST_BOOT_ENV_FIRST) \
+     || defined(WE_TEST_BOOT_HIDDEN)) && !defined(WE_TEST_CORE_CONTROL)
+#error "a pidns or boot id control is a test build: define WE_TEST_CORE_CONTROL with it"
 #endif
 
 /*
@@ -185,32 +186,211 @@ static inline uint64_t we_proc_pidns(void)
     return 0u;
 }
 
-/* this process's identity; 0, or -1 when /proc does not say (the caller then names nothing) */
+/*
+ * The boot id, from the first source that gives one:
+ *
+ *   1. /proc/sys/kernel/random/boot_id, the kernel's own word;
+ *   2. WHISPER_EDGE_BOOT_ID, which the installer's drop-in on the server's unit sets from systemd's %b, for a
+ *      unit whose sandbox hides /proc/sys: ProcSubset=pid (Ubuntu 26.04's apache2.service sets it, and the
+ *      read above gives ENOENT inside it), or InaccessiblePaths=/proc/sys;
+ *   3. the literal "unknown": the writer says plainly that it could not tell, and the reader places such a
+ *      writer itself (whisper-edge-summary, boot-by=) rather than reading an empty field as another boot.
+ *
+ * The kernel comes first because it cannot be stale: a variable exported by hand into a shell that later
+ * starts a server could be, and under systemd the two are the same value. Either spelling is taken, the
+ * kernel's 8-4-4-4-12 and systemd's 32 hex digits, in any case and with trailing white space; it is written
+ * in the kernel's spelling, lowercase, so every writer and every reader compare one string. Anything else
+ * (another length, a dash out of place, a non-hex digit, the all-zero id systemd uses for none) is no boot
+ * id, and the next source is tried.
+ *
+ * A worker of a server whose master clears the environment (nginx keeps only TZ and its `env` lines in a
+ * worker) reads the value its master read: we_proc_boot_prime(), called where the configuration is parsed,
+ * caches it, and a forked worker inherits the cache.
+ */
+#define WE_PROC_BOOT_ENV     "WHISPER_EDGE_BOOT_ID"
+#define WE_PROC_BOOT_UNKNOWN "unknown"
+#ifndef WE_TEST_BOOT_HIDDEN
+#define WE_PROC_BOOT_PATH    "/proc/sys/kernel/random/boot_id"
+#else
+#define WE_PROC_BOOT_PATH    "/nonexistent/whisper-edge-test/boot_id"  /* the seam: a unit with ProcSubset=pid */
+#endif
+enum { WE_PROC_BOOT_NONE = 0, WE_PROC_BOOT_FROM_PROC = 1, WE_PROC_BOOT_FROM_ENV = 2 };
+
+/* `in` (`len` bytes, no terminator needed) as the kernel spells a boot id into `out`; 0, or -1 */
+static inline int we_proc_boot_canon(const char *in, size_t len, char out[37])
+{
+    static const char hex[16] = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
+    char d[32];
+    size_t i, k = 0u, nz = 0u;
+
+    while (len > 0u && (in[len - 1u] == '\n' || in[len - 1u] == '\r' || in[len - 1u] == ' ' || in[len - 1u] == '\t')) {
+        len--;
+    }
+    if (len != 32u && len != 36u) {
+        return -1;
+    }
+    for (i = 0u; i < len; i++) {
+        unsigned char c = (unsigned char)in[i];
+        unsigned v;
+
+        if (len == 36u && (i == 8u || i == 13u || i == 18u || i == 23u)) {
+            if (c != '-') {
+                return -1;
+            }
+            continue;
+        }
+        if (c >= '0' && c <= '9') {
+            v = c - '0';
+        } else if (c >= 'a' && c <= 'f') {
+            v = c - 'a' + 10u;
+        } else if (c >= 'A' && c <= 'F') {
+            v = c - 'A' + 10u;
+        } else {
+            return -1;
+        }
+        nz |= v;
+        d[k++] = hex[v];
+    }
+    if (nz == 0u) {
+        return -1;                              /* SD_ID128_NULL: systemd's "no id", never a boot */
+    }
+    for (i = 0u, k = 0u; i < 36u; i++) {
+        out[i] = i == 8u || i == 13u || i == 18u || i == 23u ? '-' : d[k++];
+    }
+    out[36] = '\0';
+    return 0;
+}
+
+/*
+ * The boot id from `path` (NULL: not tried) and then `env` (NULL: not set), into `out` as the kernel spells
+ * it; "unknown" when neither gives one. Which source answered: WE_PROC_BOOT_FROM_PROC, _FROM_ENV or _NONE.
+ */
+static inline int we_proc_boot_from(const char *path, const char *env, char out[40])
+{
+#ifdef WE_TEST_BOOT_ENV_FIRST
+    {
+        size_t n = 0u;                          /* the control: the variable before the kernel */
+
+        while (env != NULL && n < 64u && env[n] != '\0') {
+            n++;
+        }
+        if (env != NULL && we_proc_boot_canon(env, n, out) == 0) {
+            return WE_PROC_BOOT_FROM_ENV;
+        }
+    }
+#endif
+    if (path != NULL) {
+        int fd = open(path, O_RDONLY | O_CLOEXEC);
+
+        if (fd >= 0) {
+            /* read into a local: gcc's UBSan in recover mode keeps a null path for a caller's buffer past a
+             * memset and flags read() into it (-Wnonnull), a false report that still fails -Werror */
+            char buf[64];
+            ssize_t n = read(fd, buf, sizeof buf);
+
+            close(fd);
+            if (n > 0 && we_proc_boot_canon(buf, (size_t)n, out) == 0) {
+                return WE_PROC_BOOT_FROM_PROC;
+            }
+        }
+    }
+    if (env != NULL) {
+        size_t n = 0u;
+
+        while (n < 64u && env[n] != '\0') {
+            n++;                                /* bounded: a longer value is no boot id either way */
+        }
+        if (we_proc_boot_canon(env, n, out) == 0) {
+            return WE_PROC_BOOT_FROM_ENV;
+        }
+    }
+    memcpy(out, WE_PROC_BOOT_UNKNOWN, sizeof WE_PROC_BOOT_UNKNOWN);
+    return WE_PROC_BOOT_NONE;
+}
+
+/*
+ * The process's cache: filled by the first read that found a boot id, kept across fork. ONE for the whole
+ * process, defined in we_counters.c (the core unit every writer links). It used to be two statics in this
+ * function, and a static inline function's statics are one copy per translation unit: the server's prime
+ * filled we_module.c's, and the per-range counters writer in we_counters.c read its own empty copy. Under
+ * a unit that hides /proc/sys (ProcSubset=pid, Ubuntu 26.04's nginx and apache2) a worker, its environment
+ * cleared, then named its .cnt by boot "unknown" while its .status, from the same process, named the boot
+ * exactly: two identities for one writer (measured in a real nginx on 26.04). WE_TEST_BOOT_CACHE_PER_UNIT
+ * is that defect, kept as the control of the row that proves the counters file follows the prime.
+ */
+#ifndef WE_TEST_BOOT_CACHE_PER_UNIT
+extern char we_proc_boot_cached[40];
+extern int we_proc_boot_cached_from;
+#endif
+static inline char *we_proc_boot_cache(int **src)
+{
+#ifndef WE_TEST_BOOT_CACHE_PER_UNIT
+    *src = &we_proc_boot_cached_from;
+    return we_proc_boot_cached;
+#else
+    static char boot[40];
+    static int from;
+
+    *src = &from;
+    return boot;
+#endif
+}
+
+/* this process's boot id into `out`, the cache first; which source gave it (see we_proc_boot_from) */
+static inline int we_proc_boot(char out[40])
+{
+    /* The variable's name as an array, not a literal: a literal joins the link's merged string pool, which the
+     * module renderers' words share, and these 21 bytes moved every later word by as much. In the cost gate's
+     * 8-way conflict row that put a hot word into a full set and read 16.621 L1 misses a request on gcc
+     * x86_64 module-var-prerewrite against 12.566, every instruction the same; as an array it reads 12.566 */
+    static const char env_name[] = WE_PROC_BOOT_ENV;
+    int *src, got;
+    char *c = we_proc_boot_cache(&src);
+
+    if (*src != WE_PROC_BOOT_NONE) {
+        memcpy(out, c, 40u);
+        return *src;
+    }
+    got = we_proc_boot_from(WE_PROC_BOOT_PATH, getenv(env_name), out);
+    if (got != WE_PROC_BOOT_NONE) {
+        memcpy(c, out, 40u);
+        *src = got;
+    }
+    return got;
+}
+
+/* read and cache the boot id now, where the environment is still whole (a master, before it forks) */
+static inline int we_proc_boot_prime(void)
+{
+    char b[40];
+
+    return we_proc_boot(b);
+}
+
+/* whether the identity carries a boot id, or says "unknown" */
+static inline int we_proc_boot_known(const we_procid_t *id)
+{
+    return strcmp(id->boot, WE_PROC_BOOT_UNKNOWN) != 0 && id->boot[0] != '\0';
+}
+
+/*
+ * This process's identity; 0, or -1 when /proc does not give its start time (the caller then names
+ * nothing). A boot id no source gives is not a failure: the identity says "unknown" and is otherwise whole,
+ * so the files are named and written, and the reader places the writer by its pid and start time.
+ */
 static inline int we_proc_id(we_procid_t *id)
 {
     static const char hex[16] = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
-    char text[160];
+    char text[160], boot[40];
     uint8_t dg[32];
-    int fd, i;
-    ssize_t n;
+    int i;
 
     memset(id, 0, sizeof *id);
-    fd = open("/proc/sys/kernel/random/boot_id", O_RDONLY | O_CLOEXEC);
-    if (fd >= 0) {
-        /* read into a local, then copied: gcc's UBSan in recover mode keeps a path where `id` is null past
-         * the memset and flags read() into id->boot as a null buffer (-Wnonnull), a false report that
-         * still fails -Werror; the local has no such path */
-        char boot[sizeof id->boot];
-
-        n = read(fd, boot, sizeof boot - 1u);
-        close(fd);
-        boot[n > 0 ? (size_t)n : 0u] = '\0';
-        boot[strcspn(boot, "\n")] = '\0';
-        memcpy(id->boot, boot, sizeof boot);
-    }
+    (void)we_proc_boot(boot);
+    memcpy(id->boot, boot, sizeof boot);
     id->pidns = we_proc_pidns();
     id->pid = (uint64_t)getpid();
-    if (we_proc_starttime(&id->starttime) != 0 || id->boot[0] == '\0') {
+    if (we_proc_starttime(&id->starttime) != 0) {
         return -1;
     }
     snprintf(text, sizeof text, "%s %llu %llu %llu", id->boot, (unsigned long long)id->pidns,

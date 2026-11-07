@@ -50,6 +50,8 @@ typedef struct {
     uint32_t    nfeeds;
     const char *blob;
     uint32_t    blob_len;
+    uint8_t     v4_coverage;      /* format 2: WE_COV_*, 0 (stated) unless a test says otherwise */
+    uint8_t     v6_coverage;
 } ww_plane_t;
 
 /* The key bytes and record stride a plane's family uses. */

@@ -56,4 +56,6 @@ any policy zones of your own (first match wins). On RHEL the directory is `/var/
   no policy from these zones.
 - **A keyed subscription** (transfer by TSIG, NOTIFY) is not offered yet. Today, the signed file.
 
-`rpz-gate.sh` proves each zone against a real BIND; `testdata/README.md` is the file format.
+`rpz-gate.sh` proves each zone against a real BIND; `testdata/README.md` is the file format. Each run
+works in a directory of its own and stops the `named` it started, so two runs may overlap;
+`make rpz-concurrency` proves that.

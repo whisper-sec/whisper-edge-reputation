@@ -3411,18 +3411,24 @@ static void fmt_ranges(const uint32_t *ns, uint32_t n, char *out, size_t cap);
  * `<what>: none`. Disarmed: a dependent rule that can no longer reach TRUE, and every deny and log below
  * a capturing allow. Narrowed: a dependent rule that still can.
  */
-int we_program_dependents_line(const we_program_t *p, uint8_t out_mask, we_tenant_state_t tenant,
-                               const char *what, char *buf, size_t n)
+/*
+ * `family` 0 is the plane-state line; 4 or 6 the per-family one, which names a dependent rule whose value set
+ * is exactly {T} (an `is unknown` the polarity allows) `fires on every IPv<family> request` instead of plain
+ * narrowed, because a client selects that family and with it the rule.
+ */
+static int dependents_format(const we_program_t *p, uint8_t out_mask, we_tenant_state_t tenant, const char *what,
+                             int family, char *buf, size_t n)
 {
     we_rule_class_t rc[WE_LIM_RULES];
-    uint32_t lists[3][WE_LIM_RULES], cnt[3] = { 0u, 0u, 0u }, nr, r, k, o = 0u;
+    uint32_t lists[4][WE_LIM_RULES], cnt[4] = { 0u, 0u, 0u, 0u }, nr, r, k, o = 0u;
     static const char *const tail[3] = { "allow captures", "disarmed", "narrowed" };
-    char rg[WE_LIM_RULES * 8u];
+    char rg[WE_LIM_RULES * 8u], every[40];
     int parts = 0;
 
     if (p == NULL || buf == NULL || n == 0u) {
         return -1;
     }
+    snprintf(every, sizeof every, "fires on every IPv%d request", family);
     nr = p->rule_count < WE_LIM_RULES ? p->rule_count : WE_LIM_RULES;
     we_program_dependents(p, out_mask, tenant, rc, WE_LIM_RULES);
     for (r = 0u; r < nr; r++) {
@@ -3430,22 +3436,43 @@ int we_program_dependents_line(const we_program_t *p, uint8_t out_mask, we_tenan
             continue;
         }
         k = rc[r].cls == WE_CLASS_CAPTURES ? 0u : rc[r].cls == WE_CLASS_NARROWED ? 2u : 1u;
+        if (k == 2u && family != 0 && rc[r].values == VT) {
+            k = 3u;
+        }
         lists[k][cnt[k]++] = r + 1u;
     }
     o += (uint32_t)snprintf(buf, n, "%s:", what != NULL ? what : "");
-    for (k = 0u; k < 3u && o < n; k++) {
+    for (k = 0u; k < 4u && o < n; k++) {
         if (cnt[k] == 0u) {
             continue;
         }
         fmt_ranges(lists[k], cnt[k], rg, sizeof rg);
         o += (uint32_t)snprintf(buf + o, n - o, "%s rule%s %s %s", parts ? ";" : "", cnt[k] > 1u ? "s" : "", rg,
-                                tail[k]);
+                                k < 3u ? tail[k] : every);
         parts = 1;
     }
     if (!parts && o < n) {
         o += (uint32_t)snprintf(buf + o, n - o, " none");
     }
     return o < n ? (int)o : -1;
+}
+
+int we_program_dependents_line(const we_program_t *p, uint8_t out_mask, we_tenant_state_t tenant,
+                               const char *what, char *buf, size_t n)
+{
+    return dependents_format(p, out_mask, tenant, what, 0, buf, n);
+}
+
+int we_program_family_line(const we_program_t *p, uint8_t out_mask, we_tenant_state_t tenant, uint32_t plane,
+                           int family, char *buf, size_t n)
+{
+    char what[80];
+
+    if (plane == 0u || plane > NPLANES || (family != 4 && family != 6)) {
+        return -1;
+    }
+    snprintf(what, sizeof what, "plane %s does not cover IPv%d", plane_name[plane - 1u], family);
+    return dependents_format(p, (uint8_t)(out_mask | (1u << (plane - 1u))), tenant, what, family, buf, n);
 }
 /* ======================================================================================================
  * Reports, printed once at config test (POLICY.md §1.5), never refusals
@@ -4042,11 +4069,12 @@ static void program_reports(cc_t *c, const char *context, uint8_t kind, const ui
         }
         /* an allow that captures while a plane is out, or reaches TRUE only through `is unknown` */
         if (R->action == WE_ACT_ALLOW && (R->flags & WE_RF_INERT) == 0u) {
-            int later_deny = 0;
+            int later_deny = 0, later_deny_or_log = 0;
             uint8_t cap = 0u, unb = 0u;
 
             for (q = r + 1u; q < nr; q++) {
                 later_deny |= rules[q].action == WE_ACT_DENY;
+                later_deny_or_log |= rules[q].action != WE_ACT_ALLOW;
             }
             for (q = 0u; q < NPLANES; q++) {
                 if (((R->dep_mask >> q) & 1u) == 0u) {
@@ -4092,6 +4120,41 @@ static void program_reports(cc_t *c, const char *context, uint8_t kind, const ui
                 }
                 report(c, context, kind, n, NULL, "unbounded", det,
                        "rule %u allows for as long as %s stays stale or unarmed: unbounded in time", n, det);
+            }
+            /*
+             * A family a plane may leave not covered (the reader's static allowance table, so this prints
+             * whether or not the plane is installed yet): for every request of that family the plane is out
+             * for good, and the client chooses the family. A capture there is permanent, not an outage's.
+             */
+            for (q = 0u; q + 1u < NPLANES; q++) {
+                int fam;
+
+                if (((R->dep_mask >> q) & 1u) == 0u) {
+                    continue;
+                }
+                for (fam = 4; fam <= 6; fam += 2) {
+                    int captures, every;
+
+                    if (!we_coverage_allowed(q + 1u, fam)) {
+                        continue;
+                    }
+                    captures = later_deny_or_log && (rule_values(p, R, (uint8_t)(1u << q), WE_TENANT_FRESH, 0) & VU) != 0u;
+                    every = isunk_only(p, R, (uint8_t)(1u << q), WE_TENANT_FRESH, q);
+                    if (!captures && !every) {
+                        continue;
+                    }
+                    snprintf(det, sizeof det, "%s,ipv%d", plane_name[q], fam);
+                    if (captures) {
+                        report(c, context, kind, n, NULL, "uncovered-family", det,
+                               "rule %u allow captures every IPv%d request: %s does not cover IPv%d, so the capture is "
+                               "permanent for that family and disarms every deny and log below it; move the terms that "
+                               "do not read %s into an allow of their own", n, fam, plane_name[q], fam, plane_name[q]);
+                    } else {
+                        report(c, context, kind, n, NULL, "uncovered-family", det,
+                               "rule %u allows every IPv%d request: %s does not cover IPv%d, so `is unknown` is TRUE for "
+                               "that family for good", n, fam, plane_name[q], fam);
+                    }
+                }
             }
             {
                 const node_t *fa[WE_LIM_OPS_RULE + 1];

@@ -11,7 +11,7 @@ builder's test suite, which also holds the committed bytes to what the writer pr
 
 - `keyless/`: what the publisher commits for one slot in which a reputation build, the tor job and the ROV
   job each staged a plane. Reputation is published, in `planes[]` and as `snapshot.bin` in `legacy[]`;
-  tor (`LOW_RECALL`, `IPV6_NOT_STATED`), routing and rpki-unreachable (`BGP_CLOCK_UNKNOWN`, `UNPINNED`,
+  tor (`LOW_RECALL`, `COVERAGE_REJUDGE`), routing and rpki-unreachable (`BGP_CLOCK_UNKNOWN`, `UNPINNED`,
   `VRP_CAP_UNSET`) are withheld on the jobs' own reasons. Beside it, the published `reputation.bin`.
 - `disarm/`: the same publisher's disarm manifest, committed after it.
 - `jobs/`: a manifest composed from the ROV and tor jobs' own stages, both planes published, so their

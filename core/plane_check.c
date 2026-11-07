@@ -115,7 +115,7 @@ static int fields_mode(const char *bin, const char *exp)
     we_load_detail_t d;
     FILE *f;
     char line[512];
-    int rc, lineno = 0, bad = 0, checked = 0, hits = 0;
+    int rc, lineno = 0, bad = 0, checked = 0, hits = 0, uncov = 0;
 
     rc = we_plane_open(bin, &m, &d);
     if (rc != WE_OK) {
@@ -139,6 +139,31 @@ static int fields_mode(const char *bin, const char *exp)
 
         lineno++;
         line[strcspn(line, "\r\n")] = '\0';
+        {
+            /* `family address U`: the plane does not cover this family (FORMAT.md section 2), so no lookup
+             * answers it and every attribute reads UNKNOWN. A checker that predates the token refuses the
+             * line as unparseable, the disagreement it must report. */
+            char tok[8];
+            int at = 0;
+
+            if (sscanf(line, " %c %79s %7s%n", &fam, addr, tok, &at) == 3 && strcmp(tok, "U") == 0) {
+                while (line[at] == ' ' || line[at] == '\t') {
+                    at++;
+                }
+                checked++;
+                if (line[at] != '\0' || (fam != '4' && fam != '6')) {
+                    printf("  DISAGREE line %d: unparseable: %.60s\n", lineno, line);
+                    bad++;
+                } else if (we_family_covered(&m, fam - '0')) {
+                    printf("  DISAGREE line %d %s: the builder says IPv%c is not covered, the plane states it\n",
+                           lineno, addr, fam);
+                    bad++;
+                } else {
+                    uncov++;
+                }
+                continue;
+            }
+        }
         if (sscanf(line, " %c %79s %d%n", &fam, addr, &hit, &used) < 3 || (hit != 0 && hit != 1)
             || !find_line(&m, fam, addr, &got)) {
             printf("  DISAGREE line %d: unparseable: %.60s\n", lineno, line);
@@ -146,6 +171,11 @@ static int fields_mode(const char *bin, const char *exp)
             continue;
         }
         checked++;
+        if (!we_family_covered(&m, fam - '0')) {
+            printf("  DISAGREE line %d %s: the plane does not cover IPv%c, the builder answers it\n", lineno, addr, fam);
+            bad++;
+            continue;
+        }
         p = line + used;
         for (n = 0; n < 8 && sscanf(p, " %lu%n", &want[n], &k) == 1; n++) {
             p += k;
@@ -185,9 +215,9 @@ static int fields_mode(const char *bin, const char *exp)
     }
     fclose(f);
     printf("plane check (builder fields) %s: format %u plane %u, %u IPv4 + %u IPv6 ranges, kinds %u/%u"
-           " (k %u/%u), feeds %u: %d lines, %d hits, %d disagreements\n",
+           " (k %u/%u), feeds %u: %d lines, %d hits, %d not covered, %d disagreements\n",
            bin, m.format, m.plane_id, m.v4_count, m.v6_count, m.f4.file_kind, we_family6(&m)->file_kind,
-           m.f4.file_param, we_family6(&m)->file_param, m.feed_count, lineno, hits, bad);
+           m.f4.file_param, we_family6(&m)->file_param, m.feed_count, lineno, hits, uncov, bad);
     we_map_close(&m);
     return (bad == 0 && checked > 0 && hits > 0) ? 0 : 1;
 }
@@ -369,8 +399,10 @@ static int dump_mode(const char *bin, int full)
         }
         fputc('\n', stdout);
     }
-    fprintf(stderr, "plane dump %s: format %u plane %u generation %" PRIu64 ", %u IPv4 + %u IPv6 ranges\n",
-            bin, m.format, m.plane_id, m.generation, m.f4.n, f6->n);
+    /* the coverage goes here, on stderr, never on stdout: a deployed tool reads stdout as four fields */
+    fprintf(stderr, "plane dump %s: format %u plane %u generation %" PRIu64 ", %u IPv4 + %u IPv6 ranges,"
+            " coverage v4 %s v6 %s\n", bin, m.format, m.plane_id, m.generation, m.f4.n, f6->n,
+            we_family_covered(&m, 4) ? "stated" : "not-covered", we_family_covered(&m, 6) ? "stated" : "not-covered");
     we_map_close(&m);
     return 0;
 }

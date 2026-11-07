@@ -274,6 +274,55 @@ zone_soa() {
 }
 zone_loads() { LC_ALL=C named-checkzone -q "$ZONE" "$1" >/dev/null 2>&1; }
 
+# UTC time in arithmetic, not in date(1). `date -d` is not one program: GNU reads a free-form string, BSD has
+# no -d at all, and the uutils date Ubuntu 26.04 ships refuses the year 9999 and the @seconds forms near it.
+# A validity check that asks whichever date(1) is installed gives a different answer on each, so the
+# conversion is the proleptic Gregorian calendar computed here (the days-from-civil algorithm), the same on
+# every POSIX shell with 64-bit arithmetic. Years 0000 to 9999, the range the four-digit form can carry.
+utc_dec() { # <digits> -> the number without leading zeros, so the shell never reads it as octal
+  _n=$1
+  while :; do case "$_n" in 0?*) _n=${_n#0} ;; *) break ;; esac; done
+  echo "$_n"
+}
+# <YYYY-MM-DDTHH:MM:SSZ> -> epoch seconds; returns 1, printing nothing, for anything that is not a real
+# UTC time in exactly that form (a 31st of a 30-day month, a 29th of February outside a leap year, hour 24).
+utc_epoch() {
+  case "$1" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ;;
+    *) return 1 ;;
+  esac
+  _y=$(utc_dec "$(printf '%s' "$1" | cut -c1-4)"); _mo=$(utc_dec "$(printf '%s' "$1" | cut -c6-7)")
+  _d=$(utc_dec "$(printf '%s' "$1" | cut -c9-10)"); _h=$(utc_dec "$(printf '%s' "$1" | cut -c12-13)")
+  _mi=$(utc_dec "$(printf '%s' "$1" | cut -c15-16)"); _se=$(utc_dec "$(printf '%s' "$1" | cut -c18-19)")
+  [ "$_mo" -ge 1 ] && [ "$_mo" -le 12 ] && [ "$_d" -ge 1 ] || return 1
+  [ "$_h" -le 23 ] && [ "$_mi" -le 59 ] && [ "$_se" -le 59 ] || return 1
+  case "$_mo" in
+    4|6|9|11) _dim=30 ;;
+    2) if [ $((_y % 4)) = 0 ] && { [ $((_y % 100)) != 0 ] || [ $((_y % 400)) = 0 ]; }; then _dim=29; else _dim=28; fi ;;
+    *) _dim=31 ;;
+  esac
+  [ "$_d" -le "$_dim" ] || return 1
+  # days from 1970-01-01, with March as the first month of the computational year
+  _yy=$_y; [ "$_mo" -le 2 ] && _yy=$((_yy - 1))
+  _era=$(( (_yy >= 0 ? _yy : _yy - 399) / 400 )); _yoe=$((_yy - _era * 400))
+  _doy=$(( (153 * (_mo > 2 ? _mo - 3 : _mo + 9) + 2) / 5 + _d - 1 ))
+  _doe=$((_yoe * 365 + _yoe / 4 - _yoe / 100 + _doy))
+  echo $(( (_era * 146097 + _doe - 719468) * 86400 + _h * 3600 + _mi * 60 + _se ))
+}
+# <epoch seconds, 0 to the end of 9999> -> YYYY-MM-DDTHH:MM:SSZ; returns 1, printing nothing, outside it
+utc_iso() {
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  _t=$(utc_dec "$1")
+  [ "${#_t}" -le 12 ] && [ "$_t" -le 253402300799 ] || return 1
+  _z=$((_t / 86400 + 719468)); _r=$((_t % 86400))
+  _era=$((_z / 146097)); _doe=$((_z - _era * 146097))
+  _yoe=$(( (_doe - _doe / 1460 + _doe / 36524 - _doe / 146096) / 365 ))
+  _doy=$((_doe - (365 * _yoe + _yoe / 4 - _yoe / 100))); _mp=$(( (5 * _doy + 2) / 153 ))
+  _d=$((_doy - (153 * _mp + 2) / 5 + 1)); _mo=$(( _mp < 10 ? _mp + 3 : _mp - 9 ))
+  _y=$((_yoe + _era * 400)); [ "$_mo" -le 2 ] && _y=$((_y + 1))
+  printf '%04d-%02d-%02dT%02d:%02d:%02dZ\n' "$_y" "$_mo" "$_d" $((_r / 3600)) $((_r % 3600 / 60)) $((_r % 60))
+}
+
 # The zone file's own header, the `; key=value` lines above $TTL, read in the C locale. Sets H_STATE,
 # H_ORIGIN, H_GEN, H_VALID (epoch seconds) and H_TRIG, or returns 1 with the reason in H_WHY. The
 # first four lines are fixed (v, origin, state, generation); content adds validUntil and triggers,
@@ -303,10 +352,9 @@ hdr_parse() {  # $1 file
   if [ -z "$H_VALID_TXT" ] || [ -z "$H_TRIG" ]; then
     H_WHY="a content header without validUntil (RFC 3339 UTC) and triggers on lines 5 and 6"; return 1
   fi
-  _d=$(printf '%s' "$H_VALID_TXT" | sed 's/T/ /; s/Z$//')
-  H_VALID=$(date -u -d "$_d" +%s 2>/dev/null) || H_VALID=""
-  # A round trip, so a date the parser normalised (a 31st of a 30-day month) is refused, not moved.
-  if [ -z "$H_VALID" ] || [ "$(date -u -d "@$H_VALID" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" != "$H_VALID_TXT" ]; then
+  H_VALID=$(utc_epoch "$H_VALID_TXT") || H_VALID=""
+  # A round trip as well, so the two conversions are held to each other on every header read.
+  if [ -z "$H_VALID" ] || [ "$(utc_iso "$H_VALID")" != "$H_VALID_TXT" ]; then
     H_WHY="validUntil $H_VALID_TXT is not a real UTC time"; return 1
   fi
   return 0
@@ -606,7 +654,7 @@ validity_sweep() {
     if [ "$(zone_soa "$EMPTY" | awk '{ print $1 }')" = "$_e" ]; then
       install_file "$EMPTY"; EMPTY=""
       st_bump sweeps_total
-      rpz_event "EXPIRED zone $ZONE: content serial $CUR_SERIAL was valid until $(date -u -d "@$CUR_VALID" '+%Y-%m-%dT%H:%M:%SZ'). Installed the
+      rpz_event "EXPIRED zone $ZONE: content serial $CUR_SERIAL was valid until $(utc_iso "$CUR_VALID" || echo "epoch $CUR_VALID"). Installed the
     empty zone at serial $_e, the bytes and serial every Whisper nameserver sweeps to, so this resolver
     stops enforcing a list nobody vouches for any more. The next newer zone re-arms it."
       # The content this host swept, kept so a feed that still serves it is told apart from a replay.
@@ -1111,14 +1159,8 @@ u8_at() { le_at "$1" "$2" 1; }
 # to the manifest without opening the file.
 utc_of_ms() { # <epoch ms, below 2^63>
   [ "$1" = 0 ] && { echo "no bound"; return 0; }
-  _s=$(($1 / 1000))
-  # GNU date takes @seconds; BSD date takes -r seconds, where GNU's -r names a reference FILE, so the
-  # BSD form is used only where the GNU one is not understood at all.
-  if date -u -d @0 >/dev/null 2>&1; then
-    date -u -d "@$_s" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "$1 ms"
-  else
-    date -u -r "$_s" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "$1 ms"
-  fi
+  # utc_iso, not date(1): one rendering on GNU, BSD and uutils alike, and the raw figure past the year 9999
+  utc_iso "$(($1 / 1000))" || echo "$1 ms"
 }
 # A u64 at or above 2^63 does not fit the shell's signed arithmetic and would wrap negative; a header
 # field never holds one, so it is said as such rather than rendered as a wrong number.
@@ -1257,6 +1299,20 @@ plane_missing() { # <what the manifest says>
   plane_event "$1; nothing is installed yet: $PLANE.bin lands the day the manifest publishes it, and stays inert until the server is reloaded"
 }
 
+# The verified manifest beside the planes, so whisper-edge-lookup can bind a plane's provenance: placed only
+# when it names the sha256 of the plane now in place (a grep for the 64 hex digits; no JSON parse), by a
+# rename from the run's own temp directory inside $DIR, 0644 and the directory's writer's. Any other
+# manifest is left as it is, so the note the lookup prints about it stays true. Runs under the lock.
+place_manifest() { # <sha256 of the plane in place>
+  grep -qF "$1" "$T/manifest.json" 2>/dev/null || return 0
+  if [ -f "$DIR/manifest.json" ] && [ ! -L "$DIR/manifest.json" ] && cmp -s "$T/manifest.json" "$DIR/manifest.json"; then return 0; fi
+  if [ -d "$DIR/manifest.json" ] && [ ! -L "$DIR/manifest.json" ]; then
+    rpz_event "$DIR/manifest.json is a directory, so the verified manifest is not placed; the plane is installed"; return 0
+  fi
+  [ "$(id -u)" = 0 ] && chown 0:0 "$T/manifest.json"
+  chmod 0644 "$T/manifest.json" && mv -f "$T/manifest.json" "$DIR/manifest.json" \
+    || rpz_event "could not place the verified manifest.json in $DIR; the plane is installed, and the lookup tool cannot bind its provenance"
+}
 plane_mode() {
   ID=$(plane_id_of "$PLANE")
   # Every refusal below is a failed run, counted toward the alarm like any other: a host missing its key,
@@ -1397,6 +1453,7 @@ plane_mode() {
   if [ -f "$TARGET" ]; then
     if [ "$(sha256sum < "$TARGET" | cut -d' ' -f1)" = "$psha" ]; then
       rm -f "$PTMP"; PTMP=""
+      place_manifest "$psha"
       plane_done "$PLANE.bin unchanged, already current ($(file_facts "$TARGET"))"
     fi
     new_gen=$(u64_at "$PTMP" 16); cur_gen=$(u64_at "$TARGET" 16)
@@ -1425,6 +1482,7 @@ plane_mode() {
     chattr +i "$TARGET" 2>/dev/null \
       || rpz_event "could not set the immutable attribute on $TARGET (a missing capability or an unsupported filesystem); installed without it"
   fi
+  place_manifest "$psha"
   sync "$DIR" 2>/dev/null || true
   if [ "$FIRST" = 1 ]; then
     plane_event "installed $PLANE.bin ($(file_facts "$TARGET")) - first install of this plane: it stays inert until the server is reloaded; reload the server to arm it"

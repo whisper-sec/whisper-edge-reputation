@@ -388,12 +388,12 @@ rowW2() {
     mkdata "$W/a" base.json reputation
     L a --dir "$W/a" "$REP4"
     a "W2: absent and withheld, every reason the writer gave" has "$W/a.out" \
-        "plane tor id=2 state=absent manifest=unbound why=absent,withheld:LOW_RECALL,withheld:IPV6_NOT_STATED"
+        "plane tor id=2 state=absent manifest=unbound why=absent,withheld:LOW_RECALL,withheld:COVERAGE_REJUDGE"
     a "W2: absent, withheld and keyed" has "$W/a.out" \
         "why=absent,withheld:BGP_CLOCK_UNKNOWN,withheld:UNPINNED,withheld:VRP_CAP_UNSET,keyed"
     a "W2: the attribute carries the withhold reasons" has "$W/a.out" \
-        "attr tor_exit UNKNOWN plane=tor why=absent,withheld:LOW_RECALL,withheld:IPV6_NOT_STATED"
-    a "W2: two reasons on the withheld line" has "$W/a.out" "withheld tor reasons=LOW_RECALL,IPV6_NOT_STATED reason=LOW_RECALL"
+        "attr tor_exit UNKNOWN plane=tor why=absent,withheld:LOW_RECALL,withheld:COVERAGE_REJUDGE"
+    a "W2: two reasons on the withheld line" has "$W/a.out" "withheld tor reasons=LOW_RECALL,COVERAGE_REJUDGE reason=LOW_RECALL"
     a "W2: the writer's nulls print not-stated" has "$W/a.out" "last-published-valid-until=not-stated from=keyless"
     a "W2: no UNKNOWN carries a range, record, evidence or drop" lacks "$W/a.out" "UNKNOWN plane=tor range="
     mkdata "$W/b" tor-withheld-only.json reputation
@@ -1092,10 +1092,15 @@ for a in doc["addresses"]:
     for c in hh["cites"]:
         cited.add(c["entry"])
         bad += ip not in ipaddress.ip_network(c["entry"])
-# ::ffff:0:0/96 is unreachable from an address: the module unmaps IPv4-mapped to IPv4 before step 1
+# the module unmaps ::ffff:0:0/96 to IPv4 before step 1 (we_addr_canon), so an IPv6 entry wholly inside
+# it is unreachable from any address. The set is computed by that rule and MEASURED: it must be
+# exactly the one entry the list states holds at build only, so a second one cannot hide in the exclusion
 mapped = ipaddress.ip_network("::ffff:0:0/96")
-reachable = {e for e in entries if not (":" in e and ipaddress.ip_network(e).subnet_of(mapped))}
-sys.exit(0 if bad == 0 and cited == reachable else 1)
+unreach = {e for e in entries if ":" in e and ipaddress.ip_network(e).subnet_of(mapped)}
+if unreach != {"::ffff:0:0/96"}:
+    print("H2: entries no address reaches: %s" % sorted(unreach), file=sys.stderr)
+    bad += 1
+sys.exit(0 if bad == 0 and cited == set(entries) - unreach else 1)
 PY
     # the tool's cite header and the evaluator's header merge the one list through two generators
     a "H2: the cite header's merged ranges are the evaluator's" python3 lookup-states.py hhagree we_hold_harmless.h we_hold_harmless_cite.h

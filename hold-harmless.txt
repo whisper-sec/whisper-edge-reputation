@@ -424,11 +424,40 @@ ff00::/8                 rfc4291               multicast
 3fff::/20                rfc9637               documentation
 2001:2::/48              rfc5180               benchmarking (RFC 5180 as corrected by erratum 1752)
 ::/128                   rfc4291               the unspecified address
+# ::ffff:0:0/96 holds at BUILD time only. The module unmaps an IPv4-mapped peer to its IPv4 form before any
+# lookup, so no request ever cites it; what it does is refuse a trigger inside it at build, so a mapped prefix
+# never ships as a range no peer can match. It is the one entry no address reaches, and a test says so.
 ::ffff:0:0/96            rfc4291               IPv4-mapped
-2002::/16                rfc7526               6to4
-2001::/32                rfc4380               Teredo
+2002:c058:6301::/128     rfc7526               6to4 sentinel: the 6to4 form of the relay anycast 192.88.99.1. Not 2002::/16, which any v4 holder occupies: this one address still refuses a listing of the whole /16
+2001::/128               rfc4380               Teredo sentinel: a Teredo server of 0.0.0.0, no valid Teredo address. Not 2001::/32, which any Teredo client occupies: this one address still refuses a listing of the whole /32
 100::/64                 rfc6666               discard-only
 2001:20::/28             rfc7343               ORCHIDv2
+2001:30::/28             rfc9374               DRIP Entity Tags (DETs): HHIT identifiers in the ORCHIDv2 shape, never a locator
+2001:1::1/128            rfc7723               Port Control Protocol anycast, answered only inside each operator's own network
+2001:1::2/128            rfc8155               TURN server discovery anycast, answered only inside each operator's own network
+2001:1::3/128            rfc9665               DNS-SD Service Registration Protocol anycast, answered only inside each operator's own network
+100:0:0:1::/64           rfc9780               the dummy IPv6 prefix, never a destination
+5f00::/16                rfc9602               SRv6 SIDs, confined to their SR domain
+#
+# THE SPECIAL-PURPOSE ENTRIES LEFT OUT, and why, so nobody adds them back for completeness (walked
+# against IANA's iana-ipv6-special-registry and iana-ipv4-special-registry on 2026-11-04). Each fails the
+# standing rule at the top of this file. One line each, `# not held: <prefix> <source> <why>`, which
+# a test reads: every row of a checked-in snapshot of both registries is either held above or named here.
+# not held: 2001:4:112::/48   rfc7535   AS112-v6: any operator may originate it by design, so it is occupiable, and a rogue instance is a fair listing
+# not held: 2620:4f:8000::/48 rfc7534   AS112 direct delegation: as above
+# not held: 192.31.196.0/24   rfc7535   AS112-v4: as above
+# not held: 192.175.48.0/24   rfc7534   AS112 direct delegation: as above
+# not held: 2001:3::/32       rfc7450   AMT: anyone may run a relay inside it by design, so it is occupiable
+# not held: 192.52.193.0/24   rfc7450   AMT: as above
+# not held: 2001:10::/28      rfc4843   the deprecated ORCHID block, terminated 2014-03: nobody legitimate is left to protect, and it has been
+#                                       originated as a bogon (AS141253, 2023-06-07 in RIS), so an exemption would only shelter a squatter
+# not held: 2002::/16         rfc3056   6to4: anyone with a public v4 address has a /48 in it, so it is occupiable. Held instead by its sentinel above, so a
+#                                       listing of the whole aggregate is still refused and a listing inside it (an attacker's own /48) is enforced
+# not held: 2001::/32         rfc4380   Teredo: any Teredo client is given an address in it, so it is occupiable. Held by its sentinel above, as for 6to4
+# not held: 2001::/23         rfc2928   the IETF protocol assignments block: it covers AMT and AS112-v6 above, so only its held children are listed
+#
+# Bogon originations inside the space that IS held here (a squatter announcing 3fff::/20, say) are a
+# routing problem, left to bogon filtering under RFC 6890, not to this feed.
 #
 # NAT64, and it cuts both ways. If 64:ff9b::/96 ever became a candidate, a DNS64 user would lose the
 # entire IPv4 internet in one entry. The converse is a blind spot worth stating: a DNS64 resolver

@@ -826,6 +826,12 @@ static void hh_build(void)
 #define EB 0x16000001u     /* 22.0.0.1 */
 
 static we_map_t ew[WE_PLANE_MAX + 1u] WE_CG_PAGE;
+/* the one-family tor plane (FORMAT.md section 2): the world's tor records, IPv6 not covered, written and
+ * loaded through the real loader; the U6 row's view */
+static we_map_t ew_tor1 WE_CG_PAGE;
+/* the U6 row's two request addresses, IPv6, in no plane and not on the hold-harmless list */
+static const uint8_t EA6[16] WE_CG_PAGE = { 0x2a, 0x0b, 0x00, 0x11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+static const uint8_t EB6[16] WE_CG_PAGE = { 0x2a, 0x0b, 0x00, 0x22, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
 static const char *const ew_names[WE_PLANE_MAX + 1u] WE_CG_PAGE = {
     NULL, "reputation", "tor", "rpki-unreachable", "routing", "anonymizer", "threat", "registry", "tenant"
 };
@@ -894,6 +900,17 @@ static void ew_build(const char *dir)
         rc = we_plane_open(path, &ew[p], NULL);
         if (rc != WE_OK) { fprintf(stderr, "%s does not load: %s\n", path, we_strerror(rc)); exit(2); }
         dp_rebase(&ew[p]);
+        if (p == WE_PLANE_TOR) {
+            w.v6_coverage = WE_COV_NOT_COVERED;
+            snprintf(path, sizeof path, "%s/evaluator-world/tor-v4only.bin", dir);
+            if (cg_write_plane(path, &w) != 0) { fprintf(stderr, "cannot write %s\n", path); exit(2); }
+            rc = we_plane_open(path, &ew_tor1, NULL);
+            if (rc != WE_OK || we_family_covered(&ew_tor1, 6)) {
+                fprintf(stderr, "%s does not load one-family: %s\n", path, we_strerror(rc));
+                exit(2);
+            }
+            dp_rebase(&ew_tor1);
+        }
     }
 }
 
@@ -1067,6 +1084,10 @@ static void dp_verify(uint32_t count)
     /* its negative control, run by cachegrind-gate.sh every time: the documentation pair must be refused */
     ea = getenv("WE_CG_PLANT_DOC_ADDR") != NULL ? 0xc0000201u : EA;      /* 192.0.2.1 */
     eb = getenv("WE_CG_PLANT_DOC_ADDR") != NULL ? 0xc6336401u : EB;      /* 198.51.100.1 */
+    if (cg_find6(&dp_hh, EA6) != WE_NO_RANGE || cg_find6(&dp_hh, EB6) != WE_NO_RANGE) {
+        fprintf(stderr, "the U6 row's IPv6 request addresses are in the hold-harmless table; move EA6 and EB6\n");
+        exit(1);
+    }
     if (dp_ref(&hh4, ea) != -1 || dp_ref(&hh4, eb) != -1) {
         fprintf(stderr, "the evaluator world's request addresses are in the hold-harmless table, so every "
                 "evaluator row would measure the exemption and run no program; move EA and EB\n");
@@ -1147,9 +1168,11 @@ static volatile uint64_t sink WE_CG_PAGE;
 #if !defined(WE_TRACE) || defined(WE_HAVE_EVAL)
 #include "eval_programs.h"
 
-typedef enum { W_BASIS, W_FULL, W_DEFAULT, W_LIVE } ev_world_t;
+/* W_TOR1: the BASIS world with tor's view the one-family plane (IPv6 not covered) */
+typedef enum { W_BASIS, W_FULL, W_DEFAULT, W_LIVE, W_TOR1 } ev_world_t;
 /* A_HH_KEY2: the floor 127.0.0.1, hold-harmless (a same-box proxy), the server EA and EB alternating */
-typedef enum { A_EQUAL, A_DISTINCT, A_STREAM, A_LIVE, A_PRESTAGE, A_HH_KEY2 } ev_addr_t;
+/* A_V6: EA6 and EB6 alternating, floor and server equal */
+typedef enum { A_EQUAL, A_DISTINCT, A_STREAM, A_LIVE, A_PRESTAGE, A_HH_KEY2, A_V6 } ev_addr_t;
 /*
  * What runs the slot's requests: the evaluator through the harness (ev_one), the same with the views set
  * once before the loop (the harness's own view stores measured by their absence), or the MODULE's
@@ -1192,7 +1215,7 @@ static const struct { const char *atom; uint32_t plane; } md_vatoms[8] WE_CG_PAG
 /* the world's armed planes: everything but the anonymizer, everything, the default policy's three, the routing plane */
 static uint8_t ev_world_views(ev_world_t w)
 {
-    return w == W_BASIS ? (uint8_t)~(1u << (WE_PLANE_ANONYMIZER - 1u)) : w == W_FULL ? 0xffu
+    return (w == W_BASIS || w == W_TOR1) ? (uint8_t)~(1u << (WE_PLANE_ANONYMIZER - 1u)) : w == W_FULL ? 0xffu
          : w == W_DEFAULT ? (uint8_t)((1u << (WE_PLANE_REPUTATION - 1u)) | (1u << (WE_PLANE_TOR - 1u)) | (1u << (WE_PLANE_RPKI_UNREACHABLE - 1u)))
          : (uint8_t)(1u << (WE_PLANE_ROUTING - 1u));
 }
@@ -1411,6 +1434,17 @@ static void ev_build_slots(void)
     sb_add(&fl, FL "log if tor_exit is unknown" RS);
     sb_add(&ve, PRE " ISUNK.F@floor=1 end@floor=1");
     ev_add("evaluator-run-floor", 100000u, W_BASIS, A_EQUAL, &fl, NULL, &ve, NULL, NULL);
+    /*
+     * U6 (FORMAT.md section 2): an IPv6 request against the one-family tor plane, `deny if tor_exit`. The fill
+     * returns UNKNOWN before any find, so the row is the not-covered path's cost. It is a regression row,
+     * held to its band, with no vector: the structural catcher of a fill that ignores the coverage is
+     * test_policy's C9 (no lookup, one descriptor line, UNKNOWN), because on an empty IPv6 family the find
+     * it would run is an n = 0 early return, inside this band. It is NOT named evaluator-fill-*: the cost
+     * model solves every row of that prefix as a c_fill@<plane>@<outcome> constant, and c_fill:membership
+     * is their maximum, so a vector-less row there would price every membership fill at a whole request.
+     */
+    sb_add(&cx, PO "deny if tor_exit" RS);
+    ev_add("evaluator-uncovered-tor@U6", 20000u, W_TOR1, A_V6, NULL, &cx, NULL, NULL, NULL);
     {
         /*
          * One atom per plane and outcome, with the terms it runs besides the fill. A fill's cost was
@@ -1990,6 +2024,7 @@ static int ev_cases(const char *slot, uint32_t n)
         case A_LIVE:     f = v = lv_addr(k); break;
         case A_PRESTAGE: f = v = pq4[k]; break;
         case A_HH_KEY2:  f = 0x7f000001u; v = (k & 1u) ? EB : EA; break;
+        case A_V6:       f = v = 0u; break;
         default:         f = v = q4[k]; break;
         }
         printf("case %s.%u\n", name, k);
@@ -1998,9 +2033,24 @@ static int ev_cases(const char *slot, uint32_t n)
         for (p = 1; p < WE_PLANE_MAX; p++) {
             /* a NULL view reads UNKNOWN, which the interpreter's case file spells as a stale plane */
             if (((s->views >> (p - 1u)) & 1u) == 0u) { printf("plane %s stale\n", ev_plane_names[p]); }
+            else if (s->world == W_TOR1 && p == WE_PLANE_TOR) { printf("plane tor fresh uncovered-v6\n"); }
         }
         /* the tenant plane: NULL where the slot leaves it unarmed, else armed with no expiry (fresh at 0) */
         printf("tenant %s 0 0\n", ((s->views >> (WE_PLANE_TENANT - 1u)) & 1u) ? "fresh" : "null");
+        if (s->addrs == A_V6) {
+            /* the IPv6 pair: no plane of the synthetic world holds an IPv6 range, so every record is none */
+            char buf[INET6_ADDRSTRLEN];
+
+            inet_ntop(AF_INET6, (k & 1u) ? EB6 : EA6, buf, sizeof buf);
+            printf("addr floor %s\naddr server %s\nflags 1 0\n", buf, buf);
+            for (p = 1; p <= WE_PLANE_MAX; p++) {
+                if (((s->views >> (p - 1u)) & 1u) != 0u) {
+                    printf("rec floor %s none\nrec server %s none\n", ev_plane_names[p], ev_plane_names[p]);
+                }
+            }
+            printf("end\n");
+            continue;
+        }
         ev_case_addr("floor", f);
         ev_case_addr("server", v);
         printf("flags 1 0\n");
@@ -2207,6 +2257,8 @@ static void ev_prepare(const ev_slot_t *s, uint32_t count, ev_run_t *r)
         } else if (s->world == W_LIVE && p == WE_PLANE_ROUTING) {
             lv_build();
             r->views[p] = &lv_route;
+        } else if (s->world == W_TOR1 && p == WE_PLANE_TOR) {
+            r->views[p] = &ew_tor1;
         } else {
             r->views[p] = &ew[p];
         }
@@ -2222,9 +2274,14 @@ static void ev_prepare(const ev_slot_t *s, uint32_t count, ev_run_t *r)
         case A_LIVE:     f = v = lv_addr(k); break;
         case A_PRESTAGE: f = v = pq4[k]; break;
         case A_HH_KEY2:  f = 0x7f000001u; v = (k & 1u) ? EB : EA; break;
+        case A_V6:       f = v = 0u; break;
         default:         f = v = q4[k]; break;
         }
         ad_request(&r->req[k], f, v);
+        if (s->addrs == A_V6) {
+            we_addr_canon((k & 1u) ? EB6 : EA6, 6, &r->req[k].floor);
+            r->req[k].server = r->req[k].floor;
+        }
     }
 }
 
@@ -2298,6 +2355,21 @@ static int md_plant_scratch WE_CG_PAGE; /* ... a scratch that is not 64-byte ali
 static int md_plant_split WE_CG_PAGE;   /* ... and the context's counters placed past a gap, off the layout rule */
 #endif
 
+/*
+ * A configuration's text, where a server keeps it: in its configuration pool, here the heap. Never a
+ * literal: the link pools the driver's strings with every other object's, so a literal the export pass
+ * renders would sit wherever the pool puts it and move with unrelated messages (measured on x86_64 clang:
+ * the context's program string, rendered every request, took module-export-all from 25.850 to 29.631
+ * misses a request at the production link when a policy-compiler hint grew by 56 bytes).
+ */
+static const char *md_text(const char *s)
+{
+    char *d = strdup(s);
+
+    if (d == NULL) { fprintf(stderr, "out of memory\n"); exit(2); }
+    return d;
+}
+
 static void md_strings(const we_program_t *p, const char *tag, const char *const **rid, const char *const **rtext)
 {
     uint32_t i, n = p != NULL ? p->rule_count : 0u;
@@ -2341,7 +2413,7 @@ static void md_prepare(const ev_slot_t *s, uint32_t count)
         else { md.cfg.static_reason[p] = WE_MOD_NOMAP_ABSENT; }
     }
     md.cfg.null_reason = md.null_reason;
-    md.ccold.program_none = "floor:- ctx:-";
+    md.ccold.program_none = md_text("floor:- ctx:-");
     md_strings(md.cfg.floor, "floor", &md.ccold.rule_id, &md.ccold.rule_text);
     md.ccold.rule_count = md.cfg.floor->rule_count;
     for (p = 0; p < 8u; p++) { md.ccold.plane_name[p] = we_mod_plane_word(p); }
@@ -2355,8 +2427,8 @@ static void md_prepare(const ev_slot_t *s, uint32_t count)
     /* the default export set is the planes the two programs or the tenant reference; export-all every bound plane */
     md.ctx.export_mask = s->kind == K_MOD_EXPORT_ALL ? md.cfg.bound_mask : (uint8_t)mask;
     md.ctx.gen_mask = md.ctx.export_mask;
-    md.xcold.program_ctx = "floor:0000000000000000 ctx:0000000000000000";
-    md.xcold.program_floor = "floor:0000000000000000 ctx:-";
+    md.xcold.program_ctx = md_text("floor:0000000000000000 ctx:0000000000000000");
+    md.xcold.program_floor = md_text("floor:0000000000000000 ctx:-");
     md_strings(md.r.ctx, "ctx", &md.xcold.rule_id, &md.xcold.rule_text);
     md.xcold.rule_count = md.ctx.rule_count;
     md.ctx.cold = &md.xcold;
@@ -3117,7 +3189,7 @@ static int residency_ev(const char *cfg, uint64_t l2, uint32_t l2w, uint64_t llc
  * of every plane on each address the programs read it on, in the order section 2.7 fixes), plus the
  * lines the evaluator's own loads must touch, computed from the block's layout: each visited rule's
  * 16-byte entry, each executed instruction's 8 bytes, each fill's binding template, each filled or
- * peeked plane's valid_until_ms and generation, and each set probe (INSET_COUNTRY's one byte, INSET_ASN's
+ * peeked plane's valid_until_ms, generation and uncovered, and each set probe (INSET_COUNTRY's one byte, INSET_ASN's
  * node per level on the section 4.1 S+ path for the address's value). The two sets must be EQUAL on
  * every request: a load the model does not name, or a modelled line never read, fails by name.
  *
@@ -3191,6 +3263,7 @@ static void bm_fill(bm_t *b, uint32_t slot, uint32_t ix)
     if (m == NULL) { return; }
     ls_range(b->m, &m->valid_until_ms, 8);
     ls_range(b->m, &m->generation, 8);
+    ls_range(b->m, &m->uncovered, 1);        /* the family coverage (FORMAT.md section 2), read with them */
     {
         /* replayed alone: its own hooks name its lines; then the record read the fill makes after it, which
          * the find does not (format 1 keeps the severity in its own array, a line of its own) */
@@ -3223,6 +3296,7 @@ static void bm_program(bm_t *b, const we_program_t *p, uint32_t slot, uint32_t n
                 if (!b->filled[s][pl] && m != NULL) {      /* the peek: the state without a lookup */
                     ls_range(b->m, &m->valid_until_ms, 8);
                     ls_range(b->m, &m->generation, 8);
+                    ls_range(b->m, &m->uncovered, 1);
                 }
                 continue;
             }

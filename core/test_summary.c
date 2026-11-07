@@ -701,6 +701,131 @@ int main(int argc, char **argv)
             waitpid(launcher, NULL, 0);
         }
     }
+    printf("== --status: a writer whose boot this reader cannot compare is placed by its start time ==\n");
+    {
+        static char line[512], status[1024];
+        char name[64], boot[64] = "", raw[64] = "";
+        unsigned long long me = ts_starttime((long)getpid()), pidns = 0ull;
+        struct stat ns;
+        struct timespec old[2];
+        FILE *f;
+        size_t i, k;
+        pid_t dead;
+        static const struct { const char *row, *boot; } unknown[] = {
+            { "unknown", "unknown" },           /* the writer's own word: no source gave it a boot id */
+            { "empty", "" },                    /* `boot  pidns`: a writer from before the fallback */
+            { "garbage", "not-a-boot-id" },     /* a value that is no boot id is not compared as one */
+        };
+
+        f = fopen("/proc/sys/kernel/random/boot_id", "r");
+        if (f != NULL) {
+            if (fgets(raw, sizeof raw, f) == NULL) {
+                raw[0] = '\0';
+            }
+            fclose(f);
+            raw[strcspn(raw, "\n")] = '\0';
+        }
+        if (stat("/proc/self/ns/pid", &ns) == 0) {
+            pidns = (unsigned long long)ns.st_ino;
+        }
+        ts_dir(dir, sizeof dir, "boot-placed");
+        snprintf(name, sizeof name, "%ld-0123456789abcdef.status", (long)getpid());
+        for (i = 0u; i < sizeof unknown / sizeof unknown[0]; i++) {
+            snprintf(status, sizeof status, "whisper-edge-status 2\nprocess \"test/1\" pid %ld boot %s pidns %llu "
+                     "starttime %llu started 1 written 2 interval 60000 jitter 0 handoff 0 tick 3 config "
+                     "0123456789abcdef\nplane reputation armed generation 7 digest 0123456789abcdef\n",
+                     (long)getpid(), unknown[i].boot, pidns, me);
+            ts_put(dir, name, status);
+            rc = ts_run("--status", dir, out, sizeof out);
+            CHECK(rc == 0 && strstr(out, "live 1, gone 0, foreign 0") != NULL && strstr(out, " boot-by=start-time") != NULL
+                  && strstr(out, "plane reputation armed generation 7") != NULL && strstr(out, "boot placed by start time 1") != NULL,
+                  "boot %s: a live writer of this boot that could not name it was not read as live by its start time "
+                  "(exit %d):\n%s", unknown[i].row, rc, out);
+            /* the same bytes, last written before this process started: an earlier boot's file whose pid and
+             * start time this boot's process repeats, so foreign, never live */
+            old[0].tv_sec = old[1].tv_sec = 86400;
+            old[0].tv_nsec = old[1].tv_nsec = 0;
+            {
+                char path[1024];
+
+                snprintf(path, sizeof path, "%s/%s", dir, name);
+                CHECK(utimensat(AT_FDCWD, path, old, 0) == 0, "boot %s: cannot age the status file", unknown[i].row);
+            }
+            rc = ts_run("--status", dir, out, sizeof out);
+            CHECK(rc == 2 && strstr(out, "live 0, gone 0, foreign 1") != NULL && strstr(out, "boot placed by") == NULL,
+                  "boot %s: a file written before the process with its pid started was not foreign (exit %d):\n%s",
+                  unknown[i].row, rc, out);
+            /* a start time that is not the process's: no live writer, so gone, never foreign */
+            snprintf(status, sizeof status, "whisper-edge-status 2\nprocess \"test/1\" pid %ld boot %s pidns %llu "
+                     "starttime %llu started 1 written 2 interval 60000 jitter 0 handoff 0 tick 3 config "
+                     "0123456789abcdef\n", (long)getpid(), unknown[i].boot, pidns, me + 1ull);
+            ts_put(dir, name, status);
+            rc = ts_run("--status", dir, out, sizeof out);
+            CHECK(rc == 2 && strstr(out, "live 0, gone 1, foreign 0") != NULL,
+                  "boot %s: a start time that is not the process's was not read as gone (exit %d):\n%s",
+                  unknown[i].row, rc, out);
+        }
+        /* a pid that has exited: gone */
+        fflush(stdout);
+        dead = fork();
+        if (dead == 0) {
+            _exit(0);
+        }
+        waitpid(dead, NULL, 0);
+        unlink_in(dir, name);
+        snprintf(name, sizeof name, "%ld-0123456789abcdef.status", (long)dead);
+        snprintf(status, sizeof status, "whisper-edge-status 2\nprocess \"test/1\" pid %ld boot unknown pidns %llu "
+                 "starttime %llu started 1 written 2 interval 60000 jitter 0 handoff 0 tick 3 config 0123456789abcdef\n",
+                 (long)dead, pidns, me);
+        ts_put(dir, name, status);
+        rc = ts_run("--status", dir, out, sizeof out);
+        CHECK(rc == 2 && strstr(out, "live 0, gone 1, foreign 0") != NULL,
+              "boot unknown: a pid that has exited was not read as gone (exit %d):\n%s", rc, out);
+        unlink_in(dir, name);
+        /* a known boot in systemd's spelling (32 hex digits, upper case) is this boot, compared exactly */
+        snprintf(name, sizeof name, "%ld-0123456789abcdef.status", (long)getpid());
+        for (i = 0u, k = 0u; raw[i] != '\0' && k + 1u < sizeof boot; i++) {
+            if (raw[i] != '-') {
+                boot[k++] = (char)(raw[i] >= 'a' && raw[i] <= 'f' ? raw[i] - 'a' + 'A' : raw[i]);
+            }
+        }
+        boot[k] = '\0';
+        snprintf(status, sizeof status, "whisper-edge-status 2\nprocess \"test/1\" pid %ld boot %s pidns %llu "
+                 "starttime %llu started 1 written 2 interval 60000 jitter 0 handoff 0 tick 3 config 0123456789abcdef\n",
+                 (long)getpid(), boot, pidns, me);
+        ts_put(dir, name, status);
+        rc = ts_run("--status", dir, out, sizeof out);
+        CHECK(rc == 0 && strstr(out, "live 1, gone 0, foreign 0") != NULL && strstr(out, "boot-by=") == NULL,
+              "boot in systemd's spelling (%s): not compared as this boot (exit %d):\n%s", boot, rc, out);
+        /* another boot's id: foreign, as before, whatever the pid and start time */
+        snprintf(status, sizeof status, "whisper-edge-status 2\nprocess \"test/1\" pid %ld boot "
+                 "00000000-0000-4000-8000-000000000001 pidns %llu starttime %llu started 1 written 2 interval 60000 "
+                 "jitter 0 handoff 0 tick 3 config 0123456789abcdef\n", (long)getpid(), pidns, me);
+        ts_put(dir, name, status);
+        rc = ts_run("--status", dir, out, sizeof out);
+        CHECK(rc == 2 && strstr(out, "live 0, gone 0, foreign 1") != NULL,
+              "another boot's id: not foreign (exit %d):\n%s", rc, out);
+        /* this reader without a boot id of its own (its /proc/sys hidden, no variable): this boot's writer is
+         * placed by its start time, and another boot's id is not taken as proof of anything */
+        sum_boot_path = "/nonexistent/boot_id";
+        unsetenv(WE_PROC_BOOT_ENV);
+        ts_process_line(line, sizeof line, (long)getpid(), pidns, me);
+        snprintf(status, sizeof status, "whisper-edge-status 2\n%s\n", line);
+        ts_put(dir, name, status);
+        rc = ts_run("--status", dir, out, sizeof out);
+        CHECK(rc == 0 && strstr(out, "live 1, gone 0, foreign 0") != NULL && strstr(out, " boot-by=start-time") != NULL
+              && strstr(out, "this reader could not read its own boot id") != NULL,
+              "a reader with no boot id: this boot's writer was not placed by its start time (exit %d):\n%s", rc, out);
+        /* ... and the reader takes WHISPER_EDGE_BOOT_ID when its /proc/sys is hidden */
+        setenv(WE_PROC_BOOT_ENV, boot, 1);
+        rc = ts_run("--status", dir, out, sizeof out);
+        CHECK(rc == 0 && strstr(out, "live 1, gone 0, foreign 0") != NULL && strstr(out, "boot-by=") == NULL,
+              "a reader with WHISPER_EDGE_BOOT_ID=%s: this boot's writer was not compared exactly (exit %d):\n%s",
+              boot, rc, out);
+        unsetenv(WE_PROC_BOOT_ENV);
+        sum_boot_path = WE_PROC_BOOT_PATH;
+        unlink_in(dir, name);
+    }
     printf("== --status: an absent plane (a snapshot path the refresh has not filled) is not unhealthy ==\n");
     {
         static char proc_line[512], status[1024];

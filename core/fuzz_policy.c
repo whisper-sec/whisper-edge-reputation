@@ -79,7 +79,7 @@ static int fz_layer_known(const char *l)
  * the memo fill and reads real records. */
 static fz_planes_t g_pl;
 static int g_nplanes;
-static unsigned long g_evals, g_view_differ;
+static unsigned long g_evals, g_view_differ, g_tor1;
 
 /* Evaluate an accepted program over the planes' deciding addresses (32 of them, spread over the set),
  * under every mode, each request twice: with the real views (the planes the environment lacks NULL) and
@@ -113,6 +113,13 @@ static void fz_evaluate(const we_program_t *floor, const we_program_t *ctx, cons
             fz_views(ec, &g_pl, 0xFFu);
             we_decide(floor, &conf, ctx, &conf, hh, &req, ec, 1800000000000ull, &none);
             FZ_ASSERT(real.action <= 2 && none.action <= 2, "verdict action out of domain");
+            {
+                int t1 = fz_tor_one_family(&g_pl, (uint8_t)~present, floor, &conf, ctx, &conf, hh, &req, ec);
+
+                FZ_ASSERT(t1 >= 0, "the alternate tor view (IPv6 not covered) decided a family-%u request differently "
+                          "from %s", req.floor.family, req.floor.family == 6u ? "a NULL tor view" : "tor.bin");
+                g_tor1 += (unsigned long)(t1 == 1);
+            }
             g_evals++;
             g_view_differ += (unsigned long)fz_verdicts_differ(&real, &none);
         }
@@ -410,9 +417,10 @@ int main(int argc, char **argv)
     FZ_ASSERT(files >= floor, "%lu policy files replayed, under the seed floor of %lu", files, floor);
     FZ_ASSERT(g_view_differ > 0, "no verdict over %lu evaluations differed between the real views and NULL views: "
               "the planes decided nothing", g_evals);
+    FZ_ASSERT(g_pl.tor1_loaded && g_tor1 > 0, "the alternate tor view tor-v4only.bin was not compared on any request");
     printf("fuzz_policy replay: %lu files (floor %lu), %d planes, %zu addresses, %lu of %lu evaluations decided "
-           "differently with the real views than with NULL views\n", files, floor, g_nplanes, g_pl.naddr,
-           g_view_differ, g_evals);
+           "differently with the real views than with NULL views, %lu held to the one-family tor view\n", files, floor,
+           g_nplanes, g_pl.naddr, g_view_differ, g_evals, g_tor1);
     printf("%lu checks, %lu failures\n", g_checks, g_failures);
     return g_failures != 0 ? 1 : 0;
 }

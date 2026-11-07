@@ -145,9 +145,15 @@ plane_cases() {
   PORT1=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
   PORT2=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 
-  # feed <dir> <generation> [manifest-generation] [withheld|withheld2|edgy|absent|bigvu|badsig|badplanesig|badsha|nohash]
+  # feed <dir> <generation> [manifest-generation] [withheld|withheld2|edgy|absent|bigvu|badsig|badplanesig|badsha|nohash|valid]
+  # (valid: a plane written whole by make-test-snapshot.py, which the module and the lookup tool read; the
+  # fixture's rewritten generation breaks its in-file digest, which the refresh does not check and they do)
   feed() {
     rm -rf "$1"; mkdir -p "$1/edge/planes" "$1/edge/manifests"
+    if [ "${4:-}" = valid ]; then
+      python3 "$HERE/../core/make-test-snapshot.py" --plane tor --out "$1/plane.bin" --format 2 --synthetic 4 4 \
+        --generation "$2" --valid-until 4102444800000 >/dev/null
+    else
     python3 - "$FIXTURE" "$1/plane.bin" "$2" "${4:-}" <<'PY'
 import struct, sys
 b = bytearray(open(sys.argv[1], "rb").read())
@@ -156,6 +162,7 @@ if sys.argv[4] == "bigvu":
     struct.pack_into("<Q", b, 32, 2**64 - 1)
 open(sys.argv[2], "wb").write(bytes(b))
 PY
+    fi
     psha=$(sha256sum < "$1/plane.bin" | cut -d' ' -f1)
     cp "$1/plane.bin" "$1/edge/planes/$psha.bin"
     signer="$P/key.pem"; [ "${4:-}" = badplanesig ] && signer="$P/other.pem"
@@ -216,6 +223,12 @@ PY
     && pass "--plane tor installs the signed plane as tor.bin, 0444, every fetch pinned by WHISPER_EDGE_RESOLVE" \
     || fail "--plane installs a verified plane" "rc=$rc $out"
   M1=$(stat -c %Y "$DP/tor.bin")
+  # 1b. the verified manifest beside it, the one that names its bytes, so the lookup tool can bind it
+  { cmp -s "$DP/manifest.json" "$P/f1/edge/manifest.json" && [ "$(stat -c %a "$DP/manifest.json")" = 644 ] \
+    && [ -z "$(find "$DP" -maxdepth 2 -name 'manifest.json' -path '*/.refresh.*')" ]; } \
+    && pass "the install places the manifest it verified as manifest.json, byte for byte, 0644, by a rename (no temp left)" \
+    || fail "the verified manifest is placed" "$(find "$DP" -maxdepth 1 -iname '*manifest*' -ls)"
+  MAN1=$(sha256sum < "$DP/manifest.json")
 
   # 2. unchanged: no rename, mtime kept
   sleep 1
@@ -230,6 +243,28 @@ PY
   { [ "$rc" != 0 ] && [ "$(sha256sum < "$DP/tor.bin")" = "$SUM" ]; } \
     && pass "pinned to an address that does not answer, the run fails and the plane is untouched" \
     || fail "the pin is honoured" "rc=$rc $out"
+
+  # 3b. the lookup tool binds the plane's provenance through the placed manifest, after the install and after
+  #     a refresh that installs a new generation, in a directory of their own
+  LOOKUP="$HERE/../core/whisper-edge-lookup"
+  if [ -x "$LOOKUP" ]; then
+    DL="$W/plane-lookup"; mkdir -p "$DL"; cp "$P/key.pub" "$DL/edge.pub"
+    for g in 1791684002 1791687602; do
+      feed "$P/f1" "$g" "$g" valid
+      out=$(env WHISPER_EDGE_RESOLVE="$R1" "$REFRESH" --plane tor --dir "$DL" --base "$B1" 2>&1) && rc=0 || rc=$?
+      lk=$("$LOOKUP" --dir "$DL" 192.0.2.1 2>&1 || true)
+      { [ "$rc" = 0 ] && cmp -s "$DL/manifest.json" "$P/f1/edge/manifest.json" \
+        && grep -q "^plane tor .* generation=$g .*manifest=bound bound-to=manifest.json" <<LK_END
+$lk
+LK_END
+      } \
+        && pass "whisper-edge-lookup on the directory reads plane tor generation $g manifest=bound, through the manifest the refresh placed" \
+        || fail "the lookup binds the placed manifest (generation $g)" "rc=$rc $(printf '%s\n' "$lk" | grep -E '^plane tor|^manifest' | head -2 | cut -c1-240)"
+    done
+    chattr -R -i "$DL" 2>/dev/null || true; rm -rf "$DL"   # a root run installs the plane immutable
+  else
+    SKIPPED="${SKIPPED:-}the lookup's manifest=bound rows (no whisper-edge-lookup at $LOOKUP; make tools in core builds it); "
+  fi
 
   # 4-6. each verification refuses, and nothing moves
   for mode in badsig badsha badplanesig; do
@@ -272,10 +307,16 @@ PY
     && [ "$(gen_of "$DP/tor.bin")" = 1791684002 ]; } \
     && pass "an older header under a newer manifest generation is not installed: byte 16 decides" \
     || fail "byte 16 decides, not the manifest" "rc=$rc $out"
+  [ "$(sha256sum < "$DP/manifest.json")" = "$MAN1" ] \
+    && pass "and that manifest, which names other bytes than the installed plane's, is not placed: manifest.json still names tor.bin" \
+    || fail "a manifest naming other bytes is never placed" "manifest.json changed to one that does not name the installed tor.bin"
   feed "$P/f1" 1791691202 1791600000
   out=$(refresh "$R1" "$B1") && rc=0 || rc=$?
   { [ "$rc" = 0 ] && [ "$(gen_of "$DP/tor.bin")" = 1791691202 ]; } \
     && pass "and a newer header under an older manifest generation is" || fail "a newer header installs" "rc=$rc $out"
+  { cmp -s "$DP/manifest.json" "$P/f1/edge/manifest.json" && grep -qF "$(sha256sum < "$DP/tor.bin" | cut -d' ' -f1)" "$DP/manifest.json"; } \
+    && pass "a refresh that installs a new generation places that generation's manifest, which names the new bytes" \
+    || fail "the manifest follows a new generation" "$(head -c 200 "$DP/manifest.json")"
 
   # 10. a 404 on the named hash re-runs once, then fails
   feed "$P/f1" 1791694802 1791694802 nohash
@@ -771,7 +812,10 @@ EOF
   # holding the immutable plane, both holding a symlink and a fifo (on which chattr -R exits 1,
   # measured), and, as root, an immutable file in the work-tree stand-in too. The control is the same
   # two steps unguarded, in the same kind of shell: they stop at the chattr and leave the tree.
-  sudo -n ln -s /nonexistent "$U/lib/a-symlink"; sudo -n mkfifo "$U/lib/a-fifo"
+  # the fixture is made again here: when the teardown control above fails, its rm -rf has taken "$U/lib" with
+  # it, and the unguarded ln under set -eu would end the whole gate instead of reading as the one red row
+  sudo -n install -d -m 0755 "$U/lib"
+  sudo -n ln -sf /nonexistent "$U/lib/a-symlink"; sudo -n rm -f "$U/lib/a-fifo"; sudo -n mkfifo "$U/lib/a-fifo"
   CW="$W/cleanup-probe"; mkdir -p "$CW"; : > "$CW/file"; ln -s /nonexistent "$CW/a-symlink"; mkfifo "$CW/a-fifo"
   [ "$(id -u)" = 0 ] && chattr +i "$CW/file" 2>/dev/null
   U2=$(sudo -n mktemp -d /var/lib/whisper-edge-install-gate.XXXXXX)
@@ -925,7 +969,10 @@ fi
 # say that rather than claim a reload. Until the feed serves zones by name the refresh answers exit 5,
 # "not published yet": that, and only that, leaves the live zone rows unrun, said by name, and the gate
 # INCOMPLETE rather than CLEAR, since nothing about the live zone was proven. Any other outcome is a result.
-out=$("$REFRESH" --zone rpz.whisper.online --dir "$D" --zone-file "$D/rpz.zone" --base "$BASE" 2>&1) && rc=0 || rc=$?
+# These rows test the fetch, never the host's BIND, so they name a configuration of the gate's own: the
+# host's /etc/named.conf is root:named 0640 on RHEL, and a non-root run that reads it fails closed (rc 4)
+printf 'options { directory "%s"; };\n' "$W" > "$W/named-none.conf"
+out=$("$REFRESH" --zone rpz.whisper.online --dir "$D" --zone-file "$D/rpz.zone" --named-conf "$W/named-none.conf" --base "$BASE" 2>&1) && rc=0 || rc=$?
 if [ "$rc" = 5 ] && says "$out" "is not published yet (HTTP 404"; then
   printf '  DARK  the live reputation zone by name: %s/rpz/rpz.whisper.online.zone answers 404 (not served yet)\n' "$BASE"
   SKIPPED="${SKIPPED:-}the live zone rows (the feed does not serve /rpz/<origin>.zone yet); "
@@ -953,7 +1000,7 @@ echo $! >> "$W/plane-servers.pid"
 i=0; while [ "$i" -lt 50 ]; do curl -fsS --max-time 1 -o /dev/null "http://127.0.0.4:$PORT4/edge/rpz/rpz.whisper.online.zone" 2>/dev/null && break; i=$((i+1)); sleep 0.1; done
 R4="edge.rpz-gate.invalid:$PORT4:127.0.0.4"; B4="http://edge.rpz-gate.invalid:$PORT4/edge"
 mkdir -p "$W/rpz-pin" "$W/rpz-nopin"; cp "$P/key.pub" "$W/rpz-pin/edge.pub"; cp "$P/key.pub" "$W/rpz-nopin/edge.pub"
-out=$(env WHISPER_EDGE_RESOLVE="$R4" "$REFRESH" --zone rpz.whisper.online --dir "$W/rpz-pin" --zone-file "$W/rpz-pin/rpz.zone" --base "$B4" 2>&1) && rc=0 || rc=$?
+out=$(env WHISPER_EDGE_RESOLVE="$R4" "$REFRESH" --zone rpz.whisper.online --dir "$W/rpz-pin" --zone-file "$W/rpz-pin/rpz.zone" --named-conf "$W/named-none.conf" --base "$B4" 2>&1) && rc=0 || rc=$?
 { [ "$rc" = 0 ] && cmp -s "$W/rpz-pin/rpz.zone" "$RZ/edge/rpz/rpz.whisper.online.zone"; } \
   && pass "the policy-zone fetch is pinned by WHISPER_EDGE_RESOLVE: only the pin reaches the stub, and its signed zone installs" \
   || fail "the policy-zone pin" "rc=$rc $out"
@@ -961,7 +1008,7 @@ sed '/WHISPER_EDGE_RESOLVE:-}" \] && set -- "\$@" --resolve/d' "$REFRESH" > "$W/
 if cmp -s "$REFRESH" "$W/refresh-rpz-no-pin"; then
   fail "the policy-zone pin control" "the control's edit did not apply to $REFRESH, so it proves nothing"
 else
-  out=$(env WHISPER_EDGE_RESOLVE="$R4" "$W/refresh-rpz-no-pin" --zone rpz.whisper.online --dir "$W/rpz-nopin" --zone-file "$W/rpz-nopin/rpz.zone" --base "$B4" 2>&1) && rc=0 || rc=$?
+  out=$(env WHISPER_EDGE_RESOLVE="$R4" "$W/refresh-rpz-no-pin" --zone rpz.whisper.online --dir "$W/rpz-nopin" --zone-file "$W/rpz-nopin/rpz.zone" --named-conf "$W/named-none.conf" --base "$B4" 2>&1) && rc=0 || rc=$?
   { [ "$rc" != 0 ] && [ ! -e "$W/rpz-nopin/rpz.zone" ]; } \
     && pass "the control: a policy-zone fetch without the pin cannot reach the stub and installs nothing" \
     || fail "the policy-zone pin control" "rc=$rc $out"
@@ -1111,6 +1158,8 @@ EOF
         unknown="$unknown $k"
       fi
     done
+    # an unquoted $(echo $keys) collapses the newline-separated list onto one line, on purpose
+    # shellcheck disable=SC2086,SC2116
     { [ -n "$keys" ] && [ -n "$known" ] && [ -z "$unknown" ]; } \
       && pass "every key the installer prints for OpenLiteSpeed is one the module registers ($(echo $keys))" \
       || fail "the printed OpenLiteSpeed keys are registered by the module" "printed: $(echo $keys); not registered:${unknown:- (none)}; registered: $(echo $known)"
@@ -1134,8 +1183,10 @@ if [ "$bad" -eq 0 ] && [ -z "${SKIPPED:-}" ] && [ -f "$README" ] && grep -Eq '==
   if grep -qF -- "$want" "$README"; then
     printf '  ok    REFERENCE.md prints this run'"'"'s own count, so the page cannot go stale unnoticed\n'
   else
-    printf '  FAIL  REFERENCE.md says "%s" and this run is "%s"\n' \
-      "$(grep -oE '=== install gate: [0-9]+ ok, [0-9]+ failed ===' "$README" | head -1)" "$want"
+    # The page prints one line per reference host, so quote all of them: naming only the first (the
+    # Ubuntu host's) sent a Rocky failure looking at a line that was never the one compared.
+    printf '  FAIL  REFERENCE.md does not print this run'"'"'s line "%s"; its lines are %s\n' \
+      "$want" "$(grep -oE '=== install gate: [0-9]+ ok, [0-9]+ failed ===' "$README" | sed 's/.*/"&"/' | paste -sd ' ' - | sed 's/" "/", "/g')"
     bad=$((bad + 1))
   fi
 fi

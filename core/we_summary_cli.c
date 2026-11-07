@@ -29,6 +29,7 @@
 
 #include "we_summary_read.h"
 #include "we_sha256.h"
+#include "we_procid.h"
 
 #include <dirent.h>
 #include <inttypes.h>
@@ -374,6 +375,11 @@ static void sum_ref_drop(char **r, size_t n)
 }
 static uint64_t sum_my_pidns, sum_my_boot_hash;
 static char sum_my_boot[64];
+static int sum_my_boot_known;
+static uint64_t sum_my_btime;
+/* where this reader reads its own boot id; a variable so the harness can stand for a sandboxed reader */
+static const char *sum_boot_path = WE_PROC_BOOT_PATH;
+static size_t sum_boot_placed;          /* writers whose boot this reader could not compare, placed by start time */
 
 static uint64_t sum_hash(const char *d, uint32_t r)
 {
@@ -517,21 +523,40 @@ static int sum_open(int dirfd, const char *name, we_sum_file_t *f, struct stat *
     return -1;
 }
 
-/* this reader's own namespace key: the boot id and the pid namespace's inode */
+static uint64_t sum_btime(void);
+
+/*
+ * This reader's own namespace key: the boot id and the pid namespace's inode. The boot id from the sources
+ * and in the spelling every writer uses (we_procid.h: /proc, then WHISPER_EDGE_BOOT_ID, else unknown).
+ */
 static void sum_my_key(void)
 {
     struct stat st;
-    int fd = open("/proc/sys/kernel/random/boot_id", O_RDONLY | O_CLOEXEC);
 
-    if (fd >= 0) {
-        ssize_t n = read(fd, sum_my_boot, sizeof sum_my_boot - 1u);
-
-        sum_my_boot[n > 0 ? (size_t)n : 0u] = '\0';
-        sum_my_boot[strcspn(sum_my_boot, "\n")] = '\0';
-        close(fd);
-    }
+    sum_my_boot_known = we_proc_boot_from(sum_boot_path, getenv(WE_PROC_BOOT_ENV), sum_my_boot) != WE_PROC_BOOT_NONE;
     sum_my_pidns = stat("/proc/self/ns/pid", &st) == 0 ? (uint64_t)st.st_ino : 0u;
     sum_my_boot_hash = sum_hash(sum_my_boot, 0u);
+    sum_my_btime = sum_btime();
+}
+
+/* the boot's wall-clock start, from /proc/stat's btime, in seconds; 0 when it cannot be read */
+static uint64_t sum_btime(void)
+{
+    char buf[8192], *p;
+    int fd = open("/proc/stat", O_RDONLY | O_CLOEXEC);
+    ssize_t n;
+
+    if (fd < 0) {
+        return 0u;
+    }
+    n = read(fd, buf, sizeof buf - 1u);
+    close(fd);
+    if (n <= 0) {
+        return 0u;
+    }
+    buf[n] = '\0';
+    p = strstr(buf, "\nbtime ");
+    return p != NULL ? strtoull(p + 7, NULL, 10) : 0u;
 }
 
 /* field 22 of /proc/<pid>/stat, after the parenthesised command, which may hold spaces */
@@ -575,6 +600,36 @@ static int sum_live(uint64_t pid, uint64_t starttime)
         return 0;
     }
     return sum_proc_starttime(pid, &now) == 0 && now == starttime;
+}
+
+/*
+ * A writer whose boot this reader cannot compare is placed by what this reader sees. That is a writer that
+ * wrote `boot unknown` (its unit hid /proc/sys and gave it no WHISPER_EDGE_BOOT_ID), one that wrote an empty
+ * field (a build from before the boot id had a fallback), or any writer when this reader has no boot id of
+ * its own. Such a writer is live only when a process with the file's pid and start time is alive in this pid
+ * namespace (the checks every writer gets) AND the file was last written no earlier than that process
+ * started. A file left by an earlier boot whose pid and start time a process of this boot happens to repeat
+ * was written before this boot began, so it fails the last test and is foreign, as a file naming another
+ * boot is. The test is in wall-clock seconds: the file's mtime against btime plus the start time, with two
+ * seconds for the truncation of each. A clock stepped forward after the writer's last write reads that writer
+ * foreign until it writes again, one interval later; no step makes an earlier boot's file read live unless
+ * that boot's clock ran ahead of this one's by more than the time between them.
+ */
+static int sum_written_since_start(const struct stat *st, uint64_t starttime)
+{
+    long hz = sysconf(_SC_CLK_TCK);
+
+#ifdef WE_SUM_TEST_BOOT_PLACED_BY_PID
+    (void)st;                                   /* the control: pid and start time alone, any file taken */
+    (void)starttime;
+    (void)hz;
+    return 1;
+#else
+    if (sum_my_btime == 0u || hz <= 0 || st->st_mtime < 0) {
+        return 0;                               /* no boot start to compare with: not placed, so foreign */
+    }
+    return (uint64_t)st->st_mtime + 2u >= sum_my_btime + starttime / (uint64_t)hz;
+#endif
 }
 
 /*
@@ -1038,6 +1093,7 @@ typedef struct {
     char        flags[128];
     int         live, foreign;
     const char *pidns_by;          /* for a writer that named no pid namespace: how this reader placed it */
+    const char *boot_by;           /* for a writer whose boot this reader could not compare: how it was placed */
     uint32_t    nplanes;
     sum_plane_t planes[SUM_MAX_PLANES];
 } sum_proc_t;
@@ -1068,7 +1124,7 @@ static void sum_read_status(int dirfd, const char *name)
 {
     static we_sum_file_t f;
     struct stat st;
-    int rc, first = 1, has_process = 0;
+    int rc, first = 1, has_process = 0, placed;
     sum_proc_t *pr;
     static const char *const flagwords[] = { "no-thread", "late-build", "client-ip-from-header", "single-process-stale", NULL };
 
@@ -1113,6 +1169,15 @@ static void sum_read_status(int dirfd, const char *name)
                 }
                 if (we_sum_field(&p, &v) != 0) {
                     break;
+                }
+                if (strcmp(k, "boot") == 0 && strcmp(v, "pidns") == 0) {
+                    /* `boot  pidns`: the empty field a writer before the boot id's fallback wrote when its
+                     * unit hid /proc/sys; the word read is the next key, not the boot's value */
+                    pr->boot[0] = '\0';
+                    k = v;
+                    if (we_sum_field(&p, &v) != 0) {
+                        break;
+                    }
                 }
                 if (strcmp(k, "pid") == 0) { we_sum_u64(v, &pr->pid); }
                 else if (strcmp(k, "pidns") == 0) { we_sum_u64(v, &pr->pidns); }
@@ -1163,7 +1228,17 @@ static void sum_read_status(int dirfd, const char *name)
         return;
     }
     pr->pidns_by = NULL;
-    if (strcmp(pr->boot, sum_my_boot) != 0) {
+    pr->boot_by = NULL;
+    {
+        char wb[40];
+
+        /* the writer's boot id in the one spelling, or none: "unknown", empty, or not a boot id at all */
+        placed = we_proc_boot_canon(pr->boot, strlen(pr->boot), wb) != 0 || !sum_my_boot_known;
+        if (!placed) {
+            memcpy(pr->boot, wb, sizeof wb);
+        }
+    }
+    if (!placed && strcmp(pr->boot, sum_my_boot) != 0) {
         pr->foreign = 1;
     } else if (pr->pidns != 0u) {
         pr->foreign = pr->pidns != sum_my_pidns;
@@ -1177,6 +1252,15 @@ static void sum_read_status(int dirfd, const char *name)
         }
     }
     pr->live = !pr->foreign && sum_live(pr->pid, pr->starttime);
+    if (placed && pr->live) {
+        if (sum_written_since_start(&st, pr->starttime)) {
+            pr->boot_by = "start-time";
+            sum_boot_placed++;
+        } else {
+            pr->live = 0;                       /* a file older than the process that has its pid: another boot's */
+            pr->foreign = 1;
+        }
+    }
     {
         sum_writer_t *wr = sum_writer(pr->pidns, pr->starttime, pr->pid);
 
@@ -1327,11 +1411,13 @@ static int mode_status(const char *dir)
             continue;
         }
         live++;
-        printf("process pid %llu tick %llu%s%s%s%s\n", (unsigned long long)pr->pid, (unsigned long long)pr->tick,
+        printf("process pid %llu tick %llu%s%s%s%s%s%s\n", (unsigned long long)pr->pid, (unsigned long long)pr->tick,
                pr->flags[0] != '\0' ? " " : "", pr->flags,
                /* the flags end in a space of their own */
                pr->pidns_by == NULL ? "" : pr->flags[0] != '\0' ? "pidns-by=" : " pidns-by=",
-               pr->pidns_by != NULL ? pr->pidns_by : "");
+               pr->pidns_by != NULL ? pr->pidns_by : "",
+               pr->boot_by == NULL ? "" : pr->flags[0] != '\0' && pr->pidns_by == NULL ? "boot-by=" : " boot-by=",
+               pr->boot_by != NULL ? pr->boot_by : "");
         if (pr->flags[0] != '\0') {
             unhealthy = 1;
         }
@@ -1361,6 +1447,13 @@ static int mode_status(const char *dir)
     printf("live %zu, gone %zu, foreign %zu (another boot or pid namespace: listed by count, never checked)\n",
            live, gone, foreign);
     printf("gone writers' files %zu, %llu bytes\n", gone_files, (unsigned long long)gone_bytes);
+    if (sum_boot_placed != 0u) {
+        printf("boot placed by start time %zu: %s, so each was matched to a live process by pid, start time and pid "
+               "namespace, and its file was written after that process started (boot-by=start-time)%s\n",
+               sum_boot_placed, sum_my_boot_known ? "the writer could not read its boot id" : "this reader could not "
+               "read its own boot id", sum_my_boot_known ? "; to name it exactly, set Environment=WHISPER_EDGE_BOOT_ID=%b "
+               "in the server's unit and restart the server" : "");
+    }
     printf("liveness checks made: kill(pid, 0) and /proc/<pid>/stat's start time; for a writer that named no pid "
            "namespace, /proc/<pid>/ns/pid or its NSpid (pidns-by=); /proc/<pid>/exe not compared\n");
     if (sum_uid_set) {
@@ -1415,7 +1508,7 @@ __attribute__((unused)) static void sum_reset(void)
     sum_keys = NULL;
     sum_w = NULL;
     sum_procs = NULL;
-    sum_cap = sum_n = sum_nw = sum_nprocs = 0u;
+    sum_cap = sum_n = sum_nw = sum_nprocs = sum_boot_placed = 0u;
     sum_key_full = sum_conf_mismatch = 0;
     sum_uid_set = 0;
     sum_uid = 0;

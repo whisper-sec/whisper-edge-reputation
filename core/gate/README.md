@@ -2,7 +2,7 @@
 
 `straight-64.policy` and `straight-128.policy` are the straight-line family: N rules of one atom each
 (`log if c2`, a BOOL on the threat plane, TRUE in the gate's world, so every rule runs and none
-decides), one address, one plane, in the corpus record format of `testdata/policy/README.md`. Measured
+decides), one address, one plane, in the corpus record format of `../testdata/policy/README.md`. Measured
 through both evaluators: 2 operations per rule (the atom and the rule's end; `ops` 128 at 64 rules and
 256 at 128), no jump, and one lookup of the threat plane besides the tenant pre-stage. They exist so the
 cachegrind gate can hold the evaluator's data references per rule to a fixed count: the cost of rule N+1
@@ -17,6 +17,17 @@ release is not the one named, so a count is never compared across toolchains. `r
 keyed by cache geometry instead, since the LRU model does not depend on the host. A slot with no row for
 the architecture the gate runs on FAILS by name and prints what it measured; nothing is inferred from the
 other architecture.
+
+**Per toolchain profile.** A distribution release moves the compiler, valgrind and the C start-up at
+once (Ubuntu 26.04: gcc 15.2, clang 21, valgrind 3.26, against 24.04's gcc 13.3, clang 18, valgrind 3.22),
+and with them every count, the 8-way conflict figures by half. No band should stretch over that, because a
+band that took gcc 13 to gcc 15 would take a real regression with it. So the key of a row is the
+architecture on the reference profile, `ubuntu-24.04`, the one the published figures in `REFERENCE.md` are
+measured on, and `<arch>@<profile>` on any other (`x86_64@ubuntu-26.04`), in the same files. The profile is
+the host's `/etc/os-release` `ID-VERSION_ID` (`WE_CG_PROFILE` names one by hand). Each profile's rows are
+written on that profile and judged only there, the toolchain header still names each key's compiler and
+valgrind exactly, and a host on a profile with no rows fails by name, as a missing row does. A new
+distribution release is adopted by writing its rows, never by widening a band.
 
 How a new architecture, compiler release or evaluator row gets its rows: run the gate with
 `--write-baseline` on a host of that architecture with the pinned toolchain, read the diff (only that
@@ -63,27 +74,42 @@ first and page-aligning two of its strings that no measured loop reads moved eve
 after the core and the evaluator, and nothing of the driver's can move them. The gate
 holds that by the placement itself, on every architecture: 1,000 read-only bytes in an object of their
 own (`gate/cg_plant.c`) leave the page offset of every data object the core and the evaluator define
-unchanged when linked after the driver, and move some of them when linked before the core (13 of 30 on
-gcc aarch64 and on x86_64 gcc 13, 14 of 27 on clang aarch64); then a row is measured equal with and
-without the plant. An earlier plant inside the driver was blind on x86_64, because the driver's
-page-aligned statics re-align whatever follows them.
+unchanged when linked after the driver, and move some of them when linked inside the core, after its
+first object (14 of 36 on x86_64 gcc 13); then a row is measured equal with and without the plant. The
+plant cannot go before the core or inside the driver: each starts with a table aligned to a page (the
+core's hot tables, the driver's statics), which re-aligns whatever follows it, so a plant there moves
+nothing. An earlier plant inside the driver was blind on x86_64 for that reason, and a plant before the
+core went blind the same way once the core's hot tables took a page of their own.
 
-Linked last, the driver's own strings and tables follow the core's sizes, the module renderers' words
-among them (they are compiled into the driver from `we_module.h`). On an 8-way D1 any size change in the
-core moved their conflict sets: one 1,000-byte plant linked before the core moved gcc aarch64
-`module-export` from 26.135 to 23.422 misses a request with every instruction the same, and the six x86_64
-module rows of write run 38669743015 moved in D1 alone. That is why the rows are fully associative
-(`WE_CG_LAYOUT 4`): under the same plants `module-export` reads 5.987 to 5.998. The gate holds it: **the D1
-layout row** measures each module row and the link-order row on the production build and with the
-plant of 1,000, 2,000 and 3,500 bytes linked before the core, must find every placement within 1% at equal
-instructions, and must find some placement moving some row by more than 1% on the 8-way geometry, or it
-is blind and the gate NOT PROVEN (one plant alone moved nothing that far on x86_64 clang, run 38697985954). `WE_CG_D1_HW=1` measures the rows on the
-8-way geometry, as before, and fails it by name; `--write-baseline` refuses that control.
+Linked last, the driver's own strings followed the core's sizes, and so did the words the module
+renderers return, which were string literals: the link pools every object's strings into one mergeable
+section, so a size change anywhere in the core moved their conflict sets. One 1,000-byte plant linked
+before the core moved gcc aarch64 `module-export` from 26.135 to 23.422 misses a request with every
+instruction the same, the six x86_64 module rows of write run 38669743015 moved in D1 alone, and a refusal
+hint in the policy compiler made 56 bytes longer took x86_64 gcc `module-var-prerewrite` from 12.566 to
+16.632 at the production link. That is why the rows are fully associative (`WE_CG_LAYOUT 4`): under the
+same plants `module-export` reads 5.987 to 5.998. It is also why the words are no longer literals:
+`we_module.h` keeps every word a request renders, and the attribute descriptors, in one block aligned to
+the 4,096-byte set stride with what a request reads in the page's last lines, `whisper_edge.c` keeps the
+two tables a request reads that no mapping holds (the whole-window index and the country bitmap) in the
+last lines of a page of their own, and the driver keeps its stand-in configuration text on the heap, where
+a server keeps it. Grown by 1 to 4,096 bytes, an unrelated string now leaves every module row's 8-way
+figure where it was, at every placement, on both architectures and both compilers.
+
+The gate holds it: **the D1 layout row** measures each module row and the link-order row on the
+production build and with the plant of 1,000, 2,000 and 3,500 bytes linked inside the core, must find
+every placement within 1% at equal instructions, and must find that each plant moved the page offset of
+at least one core or evaluator data object, read from the build itself, or it is blind and the gate NOT
+PROVEN (one plant alone moved nothing on x86_64 clang, run 38697985954). How many rows a plant moves by more
+than 1% on the 8-way geometry is printed, not required: with the words and the hot tables placed by their
+own alignment it is none, and a row that moves again is a hot table back in the link's hands, which the
+conflict row below judges at the production link. `WE_CG_D1_HW=1` measures the rows on the 8-way
+geometry, as before, and fails it by name; `--write-baseline` refuses that control.
 
 **The 8-way conflict row.** A fully associative D1 cannot see two hot objects landing in one set, and
 planes are mapped page-aligned, so a page stride between hot lines is real. Every module request path is
-measured on the 8-way geometry at four placements (the plant at 0, 1,000, 2,000 and 3,500 bytes before
-the core): `module-default`, `-tenant`, `module-export`, `-prestage`, `module-export-all`, both
+measured on the 8-way geometry at four placements (the plant at 0, 1,000, 2,000 and 3,500 bytes inside
+the core, after its first object): `module-default`, `-tenant`, `module-export`, `-prestage`, `module-export-all`, both
 `module-var-prerewrite` rows and `module-worst`, the last two of which read 45 and 5.4 misses a request on
 the old 8-way rows and about 1 fully associative, so nearly all of their old cost was conflict. Two figures
 per row are held to `gate/conflict-baseline.tsv`:
@@ -222,7 +248,8 @@ passes to that unit alone, judged against the production run's own figures: `WE_
 prediction refuses by name, and at least 8 - k data reads more a request, `Dr` counted on its own;
 `control blind` when `c_view` is not above 0), `WE_MOD_TEST_LOCKED_COUNT` (a read-modify-write per
 increment must move `c_count` outside its band), `WE_MOD_TEST_EAGER_EXPORT` (all 25 attributes on the
-default export path must move `c_export` outside its band), `WE_MOD_TEST_LAZY_PER_PLANE` (the local
+default export path must move `c_export` outside its own band of 5%, `BANDS` in `gate/cost-model.py`: the defect
+moves it 11.3% on x86_64 gcc 13.3 and 9.5% on gcc 15.2, so the shared 10% could not see it on the newer toolchain), `WE_MOD_TEST_LAZY_PER_PLANE` (the local
 context rebuilt per lazily filled plane must add at least 600 bytes / 64 = 75/8 data writes a request on
 `module-export-prestage`: 3/2 rebuilds of 400 bytes, the 80-byte verdict clear and the 320-byte slot copy,
 over the widest store any current ISA issues; cachegrind counts store instructions, and a store's width is

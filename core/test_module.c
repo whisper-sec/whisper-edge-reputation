@@ -1013,6 +1013,47 @@ static void t_word_lengths(void)
     CHECK(bad == 0u, "word lengths: %u length(s) are not their word's", bad);
 }
 
+/*
+ * The words block (we_mod_words_t): it starts a set stride, so where its words land in the D1 is its own
+ * layout's doing; every row of every table is terminated inside its width, because C lets a row exactly
+ * as wide as its word drop the terminator without a word; and each single word's row is exactly its
+ * word, because the renderers take a single word's length from sizeof.
+ */
+static int row_ok(const char *row, size_t width) { return memchr(row, '\0', width) != NULL && row[0] != '\0'; }
+
+static void t_words_block(void)
+{
+    const we_mod_words_t *w = we_mod_words();
+    uint32_t i, j, k, bad = 0u, rows = 0u;
+
+#define ROWS(f) do { for (i = 0u; i < sizeof(w->f) / sizeof(w->f[0]); i++, rows++) { \
+        if (!row_ok(w->f[i], sizeof(w->f[0]))) { printf("FAIL words block: %s[%u] is not a terminated word\n", #f, i); bad++; } } } while (0)
+#define ONE(f, s) do { rows++; if (sizeof(w->f) != sizeof(s) || memcmp(w->f, s, sizeof(s)) != 0) { \
+        printf("FAIL words block: %s is not \"%s\" exactly\n", #f, s); bad++; } } while (0)
+    ROWS(hot.level); ROWS(hot.rpki); ROWS(hot.rpki_reason); ROWS(hot.rep); ROWS(hot.rir); ROWS(hot.plane); ROWS(reason);
+    for (i = 0u; i < 2u; i++) {
+        for (j = 0u; j < 5u; j++) {
+            for (k = 0u; k < 3u; k++, rows++) {
+                if (!row_ok(w->fresh[i][j][k], sizeof(w->fresh[i][j][k]))) {
+                    printf("FAIL words block: fresh[%u][%u][%u] is not a terminated word\n", i, j, k);
+                    bad++;
+                }
+            }
+        }
+    }
+    ONE(unread, "unread"); ONE(revoked, "revoked"); ONE(lapsed_true, "lapsed:true"); ONE(lapsed_false, "lapsed:false");
+    ONE(stale_true, "stale:true"); ONE(stale_false, "stale:false"); ONE(unknown_stale, "unknown,stale");
+    ONE(unknown_disarmed, "unknown,disarmed"); ONE(what, "?"); ONE(hot.dash, "-"); ONE(hot.none, "none");
+    ONE(hot.unknown, "unknown"); ONE(hot.yes, "true"); ONE(hot.no, "false"); ONE(hot.undetermined, "undetermined");
+    ONE(hot.allow, "allow"); ONE(hot.deny, "deny"); ONE(hot.would_deny, "would-deny"); ONE(hot.floor_tag, "floor:");
+    ONE(hot.ctx_tag, "ctx:");
+#undef ROWS
+#undef ONE
+    CHECK(((uintptr_t)(const void *)w & (WE_MOD_SET_STRIDE - 1u)) == 0u, "words block: it does not start a set stride (%p)",
+          (const void *)w);
+    CHECK(bad == 0u, "words block: %u of %u rows are not what they claim", bad, rows);
+}
+
 static void t_render(void)
 {
     uint32_t i, st, k, mism = 0u, cases = 0u;
@@ -1980,7 +2021,7 @@ static void t_publication(void)
     a->generation = 10u;
     b->generation = 11u;
     CHECK(standin != NULL && standin->generation == 1u && standin->valid_until_ms == 1u && standin->f4.n == 0u
-          && we_eval_peek(standin, 1700000000000ull, 1u) == WE_ST_UNKNOWN,
+          && we_eval_peek(standin, 1700000000000ull, 1u, 4u) == WE_ST_UNKNOWN,
           "publication: the stand-in does not read stale");
     CHECK(we_handle_publish_mapped(&h, NULL, a, &displaced) == WE_OK && we_current(&h) == a && displaced == NULL
           && h.high_water == 10u, "publication: the first publish");
@@ -2002,6 +2043,10 @@ static void t_publication(void)
           && we_mod_retire_push(&r, a, count_release, NULL, 2000u) == -1, "publication: the retire list holds other than four");
     CHECK(we_mod_retire_sweep(&r, 30999u, 30000u) == 0u && we_mod_retire_sweep(&r, 31000u, 30000u) == 2u && released == 2u
           && we_mod_retire_sweep(&r, 32000u, 30000u) == 2u && released == 4u, "publication: the grace was not honoured");
+    /* a sweep handed a clock read before a slot's stamp: the slot is new, not 2^64 ms old */
+    CHECK(we_mod_retire_push(&r, a, count_release, NULL, 5000u) == 0 && we_mod_retire_sweep(&r, 4999u, 30000u) == 0u
+          && released == 4u && we_mod_retire_sweep(&r, 34999u, 30000u) == 0u && we_mod_retire_sweep(&r, 35000u, 30000u) == 1u
+          && released == 5u, "publication: a slot stamped after the sweep's clock was released at once (the age wrapped)");
     free(a);
     free(b);
     free(standin);
@@ -2701,7 +2746,7 @@ static void t_planes(void)
           && cfg.standin[0] != NULL && cfg.handle[1] == NULL && cfg.static_reason[1] == WE_MOD_NOMAP_ABSENT,
           "planes: the binding did not arm reputation alone on a module-owned handle (mask %02x, generation %llu)",
           cfg.bound_mask, cur != NULL ? (unsigned long long)cur->generation : 0ull);
-    CHECK(cur != NULL && we_eval_peek(cur, now, 0xC0000201u) != WE_ST_UNKNOWN,
+    CHECK(cur != NULL && we_eval_peek(cur, now, 0xC0000201u, 4u) != WE_ST_UNKNOWN,
           "planes: the armed mapping does not answer its own range");
     snprintf(path, sizeof path, "%s/reputation.bin", dir);
     CHECK(we_handle_publish_plane(cfg.handle[0], path, now, NULL) == WE_ERR_OWNERSHIP,
@@ -5449,6 +5494,8 @@ static int run_isolated(const char *name, fixture_t *f, int mode)
     return 0;
 }
 
+/* the retire bound's helpers and row: the debug and control builds, which carry the grace seam */
+#if defined(WE_MOD_DEBUG) || defined(WE_MOD_CONTROL_BUILD)
 /* the mappings of one plane file this process holds: /proc/self/map_files, one link per mapped range */
 static unsigned map_files_of(const char *file)
 {
@@ -5504,8 +5551,14 @@ static uint64_t vm_locked(void)
  * four retired, one candidate) and locks at most twice the armed mapping (a retired map is unlocked at
  * retirement). The control lets a publish go ahead without a free slot: the displaced map is lost, and
  * the mappings grow past six.
+ *
+ * "Inside one grace" is HELD, not hoped for: the row pins the retire list's clock (we_mod_test_grace_clock)
+ * for its whole length, so the four retired maps' readers are in flight as far as the list can tell. On
+ * CLOCK_MONOTONIC a runner that stalled 30 s inside the loop freed a slot and armed a sixth generation.
+ * The row then moves the pinned clock itself: one millisecond short of the grace nothing frees, and
+ * at the grace every slot frees and the newest generation arms, so the pin is proved wired, not assumed.
  */
-static void t_retire_bound(void)
+static void t_retire_bound_held(void)
 {
     char base[256], dir[300], why[512], file[400];
     we_mod_cfg_t cfg;
@@ -5514,6 +5567,7 @@ static void t_retire_bound(void)
     we_mod_planes_t *pl = NULL;
     static we_mod_status_t st;
     uint64_t far = 4102444800000ull, now = 1700000000000ull, g, page = (uint64_t)sysconf(_SC_PAGESIZE), lck, armed, carry;
+    uint64_t held;
     unsigned maps, maxmaps = 0u;
     const we_map_t *cur;
 
@@ -5547,6 +5601,8 @@ static void t_retire_bound(void)
     CHECK(we_mod_worker_start(pl, &w, why, sizeof why) == 0, "retire bound: the worker start is refused: %s", why);
     we_mod_planes_status(pl, &st, now);
     carry = st.verify_peak;               /* the peak this process carried in, before this row's own cycles */
+    held = we_mod_monotonic_ms();
+    we_mod_test_grace_clock(held);        /* the grace held: no slot frees until the row moves the clock */
     for (g = 2u; g <= 11u; g++) {
         CHECK(pl_write_rep(dir, "reputation.bin", g, far, 0xC0000200u + (uint32_t)g * 256u) == 0,
               "retire bound: generation %llu is not written", (unsigned long long)g);
@@ -5571,6 +5627,25 @@ static void t_retire_bound(void)
           "retire bound: generation %llu serves, %llu deferred, %llu lost (the fifth serves, the rest deferred, none lost)",
           cur != NULL ? (unsigned long long)cur->generation : 0ull, (unsigned long long)st.plane[0].deferred,
           (unsigned long long)st.retire_lost);
+    /* the grace's edge, on the held clock: a millisecond short frees nothing, the grace itself frees all four */
+    we_mod_test_grace_clock(held + WE_DEFAULT_GRACE_MS - 1u);
+    pl_cycle(pl, 12u);
+    we_mod_planes_status(pl, &st, now);
+    cur = we_current(cfg.handle[0]);
+    CHECK(cur != NULL && cur->generation == 5u && st.retire_lost == 0u,
+          "retire bound: a millisecond short of the grace, generation %llu serves (the fifth: no slot frees early)",
+          cur != NULL ? (unsigned long long)cur->generation : 0ull);
+    we_mod_test_grace_clock(held + WE_DEFAULT_GRACE_MS);
+    pl_cycle(pl, 13u);
+    we_mod_planes_status(pl, &st, now);
+    cur = we_current(cfg.handle[0]);
+    maps = map_files_of(file);
+    CHECK(cur != NULL && cur->generation == 11u,
+          "retire bound: at the grace, generation %llu serves, not the eleventh: the held clock freed no slot, so the "
+          "hold is not the clock the list reads", cur != NULL ? (unsigned long long)cur->generation : 0ull);
+    CHECK(st.retire_lost == 0u && maps <= 6u,
+          "retire bound: at the grace, %llu lost and %u mappings of the file (none lost, at most 6)",
+          (unsigned long long)st.retire_lost, maps);
     /* slot-age: the host's clock minus the armed header's built_at_ms (the test writer stamps 1,000,000),
      * signed, so a step of this host's clock across the publisher's reads negative, then positive */
     we_mod_planes_status(pl, &st, 999500u);
@@ -5601,14 +5676,113 @@ static void t_retire_bound(void)
             close(fd);
         }
         CHECK(chmod(big, 0444) == 0 && rename(big, file) == 0, "verification buffer: the sparse plane is not installed");
-        pl_cycle(pl, 12u);
+        pl_cycle(pl, 14u);
         we_mod_planes_status(pl, &st, now);
         CHECK(st.verify_peak == peak && st.verify_held == 0u && we_current(cfg.handle[0]) == cur,
               "verification buffer: a plane one byte past the bound moved the peak to %llu (was %llu) or displaced the armed map",
               (unsigned long long)st.verify_peak, (unsigned long long)peak);
     }
+    we_mod_test_grace_clock(0u);          /* the list back on CLOCK_MONOTONIC for every later row */
     we_mod_planes_release(pl);
     rm_tree(base);
+}
+#endif
+
+static void t_retire_bound(void)
+{
+#if defined(WE_MOD_DEBUG) || defined(WE_MOD_CONTROL_BUILD)
+    t_retire_bound_held();
+#else
+    /* a release build of the harness (the trace and memcheck runs): the row holds the grace through a seam
+     * only the debug and control builds carry, and on the bare clock it is a timing guess, so it does not run */
+    printf("  retire bound: covered by the debug build (test_module's own) and the control builds, which hold the grace\n");
+#endif
+}
+
+/*
+ * The retire stamp after the sweep's clock. The thread's tick reads the retire list's clock once,
+ * at its top, then acknowledges the loop's answers, and an acknowledged publish stamps the displaced map's
+ * slot with a clock read of its own, later. When a millisecond turned between the two reads the sweep at
+ * the end of the same tick computed the slot's age as the unsigned difference, wrapped to ~2^64, and
+ * released the map in the tick that retired it: nginx's legacy writer then read the freed map (SIGSEGV in
+ * we_counters_write, measured on ubuntu-26.04 under ASan and in a release core). The row makes that
+ * interleaving certain instead of rare: the pinned clock advances a millisecond on every read, so every
+ * stamp is later than the tick's own read. Generation 2 displaces generation 1, and the displaced map must
+ * still be mapped after the tick, inside its grace; at the grace it goes, so the clock is the one the list
+ * reads. The control (WE_MOD_TEST_SWEEP_WRAP) restores the wrapping age.
+ */
+#if defined(WE_MOD_DEBUG) || defined(WE_MOD_CONTROL_BUILD)
+static void t_retire_stamp_after_clock_stepped(void)
+{
+    char base[256], dir[300], why[512], file[400];
+    we_mod_cfg_t cfg;
+    we_mod_bind_args_t args = WE_MOD_BIND_ARGS_INIT;
+    we_mod_worker_args_t w;
+    we_mod_planes_t *pl = NULL;
+    static we_mod_status_t st;
+    uint64_t far = 4102444800000ull, now = 1700000000000ull, held;
+    const we_map_t *cur;
+    unsigned maps;
+
+    trusted_base(base, sizeof base);
+    if (base[0] == '\0') {
+        CHECK(0, "retire stamp: no trusted base directory; the row did not run");
+        return;
+    }
+    mkdir(base, 0755);
+    chmod(base, 0755);
+    snprintf(dir, sizeof dir, "%s/stamp", base);
+    mkdir(dir, 0755);
+    chmod(dir, 0755);
+    snprintf(file, sizeof file, "%s/reputation.bin", dir);
+    CHECK(pl_write_rep(dir, "reputation.bin", 1u, far, 0xC0000200u) == 0, "retire stamp: the first generation is not written");
+    memset(&cfg, 0, sizeof cfg);
+    args.data_dir = dir;
+    args.read_mask = 0x01u;
+    args.uid = (unsigned)geteuid();
+    args.now_ms = now;
+    args.high_water_file = "/nonexistent/high-water";
+    CHECK(we_mod_bind(&cfg, &args, &pl, why, sizeof why) == 0 && pl != NULL, "retire stamp: the binding is refused: %s", why);
+    if (pl == NULL) {
+        rm_tree(base);
+        return;
+    }
+    memset(&w, 0, sizeof w);
+    w.now_ms = now;
+    w.interval_ms = 1000u;
+    w.log = pl_logger;
+    CHECK(we_mod_worker_start(pl, &w, why, sizeof why) == 0, "retire stamp: the worker start is refused: %s", why);
+    held = we_mod_monotonic_ms();
+    we_mod_test_grace_clock_step(held, 1u);   /* every read a millisecond after the last */
+    CHECK(pl_write_rep(dir, "reputation.bin", 2u, far, 0xC0000300u) == 0, "retire stamp: generation 2 is not written");
+    pl_cycle(pl, 2u);
+    we_mod_planes_status(pl, &st, now);
+    cur = we_current(cfg.handle[0]);
+    maps = map_files_of(file);
+    CHECK(cur != NULL && cur->generation == 2u && st.retired == 1u && maps == 2u,
+          "retire stamp: a map retired in the tick was released in it: generation %llu armed, %llu retired, %u mappings of "
+          "the file (generation 2 armed and generation 1 held for its grace: 2)",
+          cur != NULL ? (unsigned long long)cur->generation : 0ull, (unsigned long long)st.retired, maps);
+    we_mod_test_grace_clock(held + 1000u + WE_DEFAULT_GRACE_MS);
+    pl_cycle(pl, 3u);
+    maps = map_files_of(file);
+    CHECK(maps == 1u, "retire stamp: past the grace %u mappings of the file remain (1: the stepped clock is not the list's)",
+          maps);
+    we_mod_test_grace_clock(0u);
+    we_mod_planes_release(pl);
+    rm_tree(base);
+}
+#endif
+
+static void t_retire_stamp_after_clock(void)
+{
+#if defined(WE_MOD_DEBUG) || defined(WE_MOD_CONTROL_BUILD)
+    t_retire_stamp_after_clock_stepped();
+#else
+    /* the trace and memcheck builds: the row steps the retire clock through a seam only the debug and control
+     * builds carry, and on the bare clock the interleaving is a millisecond's chance, so it does not run */
+    printf("  retire stamp: covered by the debug build (test_module's own) and the control builds, which step the clock\n");
+#endif
 }
 
 /* the bind arguments' lifetime: legacy_file is copied, so the caller's string may be overwritten after the call */
@@ -5628,13 +5802,39 @@ static void tr_logger(void *ud, const char *line)
     }
 }
 
+/*
+ * The transitions rows' wall clock. A row that writes a plane fresh for 400 ms and asserts the next cycle
+ * sees it fresh, then sleeps past the deadline, read stale on a loaded runner whose write and cycle took
+ * longer than 400 ms. While g_tr_pin is set the module's wall clock is pinned to it (we_mod_test_epoch_clock),
+ * so "fresh" holds until the row moves the clock past the deadline with tr_advance(), whatever the scheduler.
+ */
+static uint64_t g_tr_pin;
+
 static uint64_t tr_now_ms(void)
 {
     struct timespec ts;
 
+    if (g_tr_pin != 0u) {
+        return g_tr_pin;
+    }
     clock_gettime(CLOCK_REALTIME, &ts);
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
 }
+
+#if defined(WE_MOD_DEBUG) || defined(WE_MOD_CONTROL_BUILD)
+static void tr_pin(int on)
+{
+    g_tr_pin = 0u;                           /* so tr_now_ms() reads the real clock to pin from */
+    g_tr_pin = on ? tr_now_ms() : 0u;
+    we_mod_test_epoch_clock(g_tr_pin);
+}
+
+static void tr_advance(uint64_t ms)          /* the pinned clock moved on; no real time passes */
+{
+    g_tr_pin += ms;
+    we_mod_test_epoch_clock(g_tr_pin);
+}
+#endif
 
 static void tr_cycle(we_mod_planes_t *pl, uint64_t tick)
 {
@@ -5707,7 +5907,8 @@ static void tr_release(we_mod_planes_t *pl, we_mod_arena_t *a, we_policy_build_t
  * and to the logger, byte for byte the same, an entry identical to one already written for the same
  * change written once; one summary entry when more than 16 programs are affected.
  */
-static void t_transitions(void)
+#if defined(WE_MOD_DEBUG) || defined(WE_MOD_CONTROL_BUILD)
+static void t_transitions_body(void)
 {
     static const char *const want_stale = "plane reputation stale out=reputation tenant=null: rule 1 disarmed";
     static const char *const want_back = "plane reputation armed out=- tenant=null: none";
@@ -5759,7 +5960,7 @@ static void t_transitions(void)
     CHECK(g_ntr == 0u, "transitions: a fresh re-arm wrote %u transition line(s): \"%s\"", g_ntr, g_ntr > 0u ? g_tr[0] : "");
     /* its valid-until passes: stale, out=reputation; the two programs reading it say their rule is disarmed,
      * the one reading tor says none is affected; the ring holds the same three entries */
-    usleep(600000u);
+    tr_advance(600u);
     t0 = tr_now_ms();
     tr_cycle(pl, 3u);
     t1 = tr_now_ms();
@@ -5808,7 +6009,7 @@ static void t_transitions(void)
             return;
         }
         g_ntr = 0u;
-        usleep(600000u);                         /* stale before the worker's first apply */
+        tr_advance(600u);                        /* stale before the worker's first apply */
         tr_cycle(pl, 1u);
         memset(&st, 0, sizeof st);
         we_mod_planes_status(pl, &st, tr_now_ms());
@@ -5853,7 +6054,7 @@ static void t_transitions(void)
               "transitions cut: the uncut line is %d bytes: \"%.80s\"", rc, big);
         g_ntr = 0u;
         tr_cycle(pl, 1u);
-        usleep(600000u);
+        tr_advance(600u);
         tr_cycle(pl, 2u);
         memset(&st, 0, sizeof st);
         we_mod_planes_status(pl, &st, tr_now_ms());
@@ -5905,7 +6106,7 @@ static void t_transitions(void)
         CHECK(we_mod_arena_blocks(a) == 18u, "transitions many: %u distinct programs, not 18", we_mod_arena_blocks(a));
         g_ntr = 0u;
         tr_cycle(pl, 1u);
-        usleep(600000u);
+        tr_advance(600u);
         tr_cycle(pl, 2u);
         memset(&st, 0, sizeof st);
         we_mod_planes_status(pl, &st, tr_now_ms());
@@ -5916,6 +6117,170 @@ static void t_transitions(void)
         tr_release(pl, a, b);
     }
     rm_tree(base);
+}
+#endif
+
+/* the transitions rows on the pinned wall clock, and the clock handed back on every way out */
+static void t_transitions(void)
+{
+#if defined(WE_MOD_DEBUG) || defined(WE_MOD_CONTROL_BUILD)
+    tr_pin(1);
+    t_transitions_body();
+    tr_pin(0);
+#else
+    /* a release build of the harness: the rows pin the wall clock through a seam only the debug and control
+     * builds carry, and on the bare clock fresh-then-stale is a timing guess, so they do not run */
+    printf("  transitions: covered by the debug build (test_module's own) and the control builds, which pin the clock\n");
+#endif
+}
+
+/* a tor plane: one IPv4 range at `first`, IPv6 empty and stated, or not covered when v6_uncovered is set */
+static int pl_write_tor(const char *dir, uint64_t generation, uint32_t first, int v6_uncovered)
+{
+    static __uint128_t s4[1], e4[1];
+    static uint8_t rec[16];
+    ww_plane_t p;
+    char tmp[1100], fin[1100];
+
+    memset(&p, 0, sizeof p);
+    memset(rec, 0, sizeof rec);
+    rec[4] = 1u;                                 /* the membership record's flags: tor_exit */
+    s4[0] = first;
+    e4[0] = first;
+    p.format = WE_FORMAT_2;
+    p.schema = 1;
+    p.plane = WE_PLANE_TOR;
+    p.generation = generation;
+    p.v4.n = 1u;
+    p.v4.start = s4;
+    p.v4.end = e4;
+    p.v4.rec = rec;
+    p.v6_coverage = (uint8_t)(v6_uncovered ? WE_COV_NOT_COVERED : WE_COV_STATED);
+    snprintf(tmp, sizeof tmp, "%s/.tor.bin.new", dir);
+    snprintf(fin, sizeof fin, "%s/tor.bin", dir);
+    if (ww_write(tmp, &p) != 0 || chmod(tmp, 0444) != 0 || rename(tmp, fin) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * The per-family line (POLICY.md §2.5): a plane armed with a family it does not cover writes, for each
+ * program a request of that family touches, `plane <P> does not cover IPv<f>: <classes>` into the ring and
+ * to the logger, on the apply that arms it, even when the plane's state word (armed) does not change. Here
+ * tor is re-armed from a two-family generation to a one-family one under the default's `log if tor_exit`.
+ */
+static void t_family_lines(void)
+{
+    static const char *const want = "plane tor does not cover IPv6: rule 1 disarmed";
+    char base[256], dir[300];
+    we_mod_cfg_t cfg;
+    we_mod_planes_t *pl = NULL;
+    we_mod_arena_t *a = NULL;
+    we_policy_build_t *b = NULL;
+    we_mod_status_t st;
+    uint64_t far = 4102444800000ull;
+    uint32_t k;
+    int found = 0, before = 0, rc;
+
+    trusted_base(base, sizeof base);
+    if (base[0] == '\0') {
+        return;
+    }
+    mkdir(base, 0755);
+    chmod(base, 0755);
+    snprintf(dir, sizeof dir, "%s/family-lines", base);
+    mkdir(dir, 0755);
+    chmod(dir, 0755);
+    CHECK(pl_write_rep(dir, "reputation.bin", 100u, far, 0xC0000200u) == 0, "family lines: reputation is not written");
+    CHECK(pl_write_tor(dir, 100u, 0xC6336401u, 0) == 0, "family lines: the two-family tor plane is not written");
+    {
+        we_policy_directive_t d[] = {
+            D(WE_DIR_FLOOR, "http", "deny if listed >= high"),
+            D(WE_DIR_POLICY, "http/s1", "log if tor_exit"),
+        };
+        we_mod_ctx_spec_t spec[] = { { "http", "http", 0, 0, 0 }, { "http/s1", "server a", 0, 0, 0 } };
+
+        if (tr_bind(dir, d, 2u, spec, 2u, &a, &b, &cfg, &pl, "family lines") != 0) {
+            tr_release(pl, a, b);
+            return;
+        }
+    }
+    tr_cycle(pl, 1u);
+    memset(&st, 0, sizeof st);
+    we_mod_planes_status(pl, &st, tr_now_ms());
+    for (rc = 0; rc < (int)st.ntransitions; rc++) {
+        before |= strstr(st.transition[rc], "does not cover") != NULL;
+    }
+    CHECK(!before && cfg.handle[1] != NULL && we_current(cfg.handle[1]) != NULL
+          && we_family_covered(we_current(cfg.handle[1]), 6), "family lines: the two-family tor arms and says nothing");
+    CHECK(pl_write_tor(dir, 200u, 0xC6336401u, 1) == 0, "family lines: the one-family tor plane is not written");
+    for (k = 2u; k < 8u && !found; k++) {
+        tr_cycle(pl, k);
+        memset(&st, 0, sizeof st);
+        we_mod_planes_status(pl, &st, tr_now_ms());
+        for (rc = 0; rc < (int)st.ntransitions; rc++) {
+            found |= strcmp(st.transition[rc], want) == 0;
+        }
+    }
+    CHECK(found, "family lines: re-arming tor with IPv6 not covered wrote `%s` (ring %u: \"%s\")", want, st.ntransitions,
+          st.ntransitions > 0u ? st.transition[st.ntransitions - 1u] : "");
+    CHECK(cfg.handle[1] != NULL && we_current(cfg.handle[1]) != NULL && !we_family_covered(we_current(cfg.handle[1]), 6)
+          && we_family_covered(we_current(cfg.handle[1]), 4), "family lines: tor is armed with IPv6 not covered");
+    tr_release(pl, a, b);
+    rm_tree(dir);
+}
+
+/* the same line when the worker INHERITS the one-family plane armed: no transition arms it, so the baseline
+ * the worker start takes must say it, once */
+static void t_family_lines_inherited(void)
+{
+    static const char *const want = "plane tor does not cover IPv6: rule 1 disarmed";
+    char base[256], dir[300];
+    we_mod_cfg_t cfg;
+    we_mod_planes_t *pl = NULL;
+    we_mod_arena_t *a = NULL;
+    we_policy_build_t *b = NULL;
+    we_mod_status_t st;
+    uint64_t far = 4102444800000ull;
+    int found = 0, rc;
+
+    trusted_base(base, sizeof base);
+    if (base[0] == '\0') {
+        return;
+    }
+    mkdir(base, 0755);
+    chmod(base, 0755);
+    snprintf(dir, sizeof dir, "%s/family-lines-inherited", base);
+    mkdir(dir, 0755);
+    chmod(dir, 0755);
+    CHECK(pl_write_rep(dir, "reputation.bin", 100u, far, 0xC0000200u) == 0, "family lines (inherited): reputation");
+    CHECK(pl_write_tor(dir, 100u, 0xC6336401u, 1) == 0, "family lines (inherited): the one-family tor plane");
+    {
+        we_policy_directive_t d[] = {
+            D(WE_DIR_FLOOR, "http", "deny if listed >= high"),
+            D(WE_DIR_POLICY, "http/s1", "log if tor_exit"),
+        };
+        we_mod_ctx_spec_t spec[] = { { "http", "http", 0, 0, 0 }, { "http/s1", "server a", 0, 0, 0 } };
+
+        if (tr_bind(dir, d, 2u, spec, 2u, &a, &b, &cfg, &pl, "family lines inherited") != 0) {
+            tr_release(pl, a, b);
+            return;
+        }
+    }
+    tr_cycle(pl, 1u);
+    tr_cycle(pl, 2u);
+    memset(&st, 0, sizeof st);
+    we_mod_planes_status(pl, &st, tr_now_ms());
+    for (rc = 0; rc < (int)st.ntransitions; rc++) {
+        found += strcmp(st.transition[rc], want) == 0;
+    }
+    CHECK(cfg.handle[1] != NULL && we_current(cfg.handle[1]) != NULL && !we_family_covered(we_current(cfg.handle[1]), 6),
+          "family lines (inherited): tor is armed at the bind with IPv6 not covered");
+    CHECK(found == 1, "family lines (inherited): the worker start wrote `%s` %d time(s), not once (ring %u)", want, found,
+          st.ntransitions);
+    tr_release(pl, a, b);
+    rm_tree(dir);
 }
 
 static void t_legacy_lifetime(void)
@@ -6494,6 +6859,7 @@ int main(int argc, char **argv)
     t_format();
     t_acme();
     t_word_lengths();
+    t_words_block();
     t_render();
     t_record();
     t_record_write(planes);
@@ -6536,7 +6902,10 @@ int main(int argc, char **argv)
     t_planes_repointed();
     t_planes_monitor();
     t_transitions();
+    t_family_lines();
+    t_family_lines_inherited();
     t_retire_bound();
+    t_retire_stamp_after_clock();
     t_legacy_lifetime();
     t_legacy_truncate();
     t_isolation(planes);

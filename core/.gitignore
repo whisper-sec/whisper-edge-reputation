@@ -1,6 +1,7 @@
 *.o
 *.a
 test_core
+test_core_v4unc
 bench_core
 whisper-edge-lookup
 whisper-edge-summary

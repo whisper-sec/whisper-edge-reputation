@@ -191,9 +191,40 @@ else
 fi
 [ "$KEEP" = 1 ] || [ -z "$WORK" ] || trap 'rm -rf "$WORK"' EXIT INT TERM
 
+# 2a. THE DISTRIBUTION'S uname OVERRIDES. Debian and Ubuntu patch configure with --override-system,
+# --override-release and --override-machine (a reproducible build must not record the build host's kernel),
+# so their nginx -V carries them, and the nginx.org tarball's configure stops on the first with `invalid
+# option`. The flags do exactly one thing, they stand in for `uname -s`, `uname -r` and `uname -m`, so on
+# a tree whose configure does not know them they become just that: a uname on PATH, for configure alone,
+# that answers with the distribution's values, and every other flag goes through untouched. The module is
+# then configured as the distribution configured its nginx, not as this host's kernel would have it.
+UNAME_SHIM=""
+case " $ARGS " in
+  *" --override-system="*|*" --override-release="*|*" --override-machine="*)
+    if ! grep -q -e '--override-system=' "$SRC/auto/options" 2>/dev/null; then
+      REAL_UNAME="$(command -v uname)" || die "this nginx's flags override uname, and there is no uname here to stand in for"
+      _cases=""
+      for _k in system:-s release:-r machine:-m; do
+        _v="$(printf '%s' " $ARGS " | sed -n "s/.* --override-${_k%%:*}=\([^ ']*\) .*/\1/p")"
+        [ -n "$_v" ] || continue
+        case "$_v" in *[!A-Za-z0-9._+-]*) die "--override-${_k%%:*}=$_v is not a uname value this script will stand in for" ;; esac
+        _cases="$_cases  ${_k#*:}) echo $_v ;;
+"
+        echo "   note: --override-${_k%%:*}=$_v is the distribution's; this tree's configure reads \`uname ${_k#*:}\` instead, and is answered $_v"
+      done
+      UNAME_SHIM="$(mktemp -d -t whisper-edge-uname.XXXXXX)"
+      if [ "$KEEP" = 1 ] || [ -z "$WORK" ]; then trap 'rm -rf "$UNAME_SHIM"' EXIT INT TERM
+      else trap 'rm -rf "$WORK" "$UNAME_SHIM"' EXIT INT TERM; fi
+      printf '#!/bin/sh\ncase "$1" in\n%s  *) exec %s "$@" ;;\nesac\n' "$_cases" "$REAL_UNAME" > "$UNAME_SHIM/uname"
+      chmod 0755 "$UNAME_SHIM/uname"
+      ARGS="$(printf '%s' " $ARGS " | sed -e "s/ --override-system=[^ ']*/ /g" -e "s/ --override-release=[^ ']*/ /g" \
+                                       -e "s/ --override-machine=[^ ']*/ /g")"
+    fi ;;
+esac
+
 # 2. configure with THIS host's flags. eval is load-bearing; see the header.
 echo "== configure (this host's own flags, plus --with-compat and the module)"
-( cd "$SRC" && eval "./configure $ARGS --with-compat --add-dynamic-module=$HERE" ) >"$SRC/configure.log" 2>&1 \
+( cd "$SRC" && { [ -z "$UNAME_SHIM" ] || PATH="$UNAME_SHIM:$PATH"; } && eval "./configure $ARGS --with-compat --add-dynamic-module=$HERE" ) >"$SRC/configure.log" 2>&1 \
   || { tail -25 "$SRC/configure.log" >&2; die "configure failed; the tail is above, the full log is $SRC/configure.log"; }
 
 # 3. the .so by its explicit target, out of the GENERATED objs/Makefile.
