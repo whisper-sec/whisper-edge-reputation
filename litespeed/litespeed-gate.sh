@@ -286,7 +286,11 @@ $SUDO install -o root -g root -m 0444 "$W/tor.bin" "$D/planes/tor.bin"
 $SUDO install -o root -g root -m 0444 "$W/snapshot.bin" "$D/snapshot.bin"
 # Z2's data directory is $D itself, as install.sh --dir "$D" names it: the plane the installer fetches there
 $SUDO install -o root -g root -m 0444 "$W/rep.bin" "$D/reputation.bin"
-$SUDO chown nobody:nogroup "$D/counters"
+# THE WORKERS' GROUP IS nobody's OWN. Debian names it nogroup and RHEL nobody, and a configuration naming a
+# group the host lacks stops the server before any row (measured on Rocky 9), so it is read from the account.
+LS_GROUP=$(id -gn nobody 2>/dev/null || true)
+[ -n "$LS_GROUP" ] || { echo "LITESPEED GATE: FAILED - this host has no user nobody, which OpenLiteSpeed's workers run as here"; exit 1; }
+$SUDO chown "nobody:$LS_GROUP" "$D/counters"
 $SUDO chmod 0755 "$D/counters"
 
 echo "=== litespeed gate: $($LSWS/bin/lshttpd -v 2>/dev/null | head -1) ==="
@@ -372,6 +376,17 @@ legacy_hold_run() { # legacy_hold_run <out> <extra defines> -> LH_RC, LH_OUT
         LH_RC=99; LH_OUT="did not compile"
     fi
 }
+# THE SANITIZER IS PROVEN PRESENT before a row is built on it: gcc accepts -fsanitize=address on RHEL 9 with no
+# runtime installed (the separate libasan package), and the link then stops with "cannot find libasan.so.6",
+# which read as the row failing. Without a runtime both arms stand dark by name, as Apache's N6 does.
+asan_ok=0
+asan_p=$(mktemp -d)
+printf 'int main(void) { return 0; }\n' > "$asan_p/p.c"
+$CC_BIN -fsanitize=address -o "$asan_p/p" "$asan_p/p.c" >/dev/null 2>&1 && ASAN_OPTIONS=detect_leaks=0 "$asan_p/p" >/dev/null 2>&1 && asan_ok=1
+rm -rf "$asan_p"
+if [ "$asan_ok" = 0 ]; then
+    dark "legacy hold and its control: this host has no AddressSanitizer runtime $CC_BIN can link and run (RHEL: dnf install libasan; Debian and Ubuntu ship it with gcc), so both stand unwalked this run"
+else
 legacy_hold_run "$W/test_mod_lh" ""
 if [ "$LH_RC" = 0 ] && ! grep -q 'AddressSanitizer' <<<"$LH_OUT"; then
     ok "legacy hold: two publishes inside one write, under AddressSanitizer: the written set stays alive and the next tick frees both ($(grep -o '[0-9]* checks, 0 failed' <<<"$LH_OUT"))"
@@ -383,6 +398,7 @@ if grep -q 'ERROR: AddressSanitizer: heap-use-after-free' <<<"$LH_OUT"; then
     ctl 0 "WE_MOD_TEST_LEGACY_LOOP_FREES frees the handed-over set on the second publish and ASan reports the heap-use-after-free: $(grep -o 'SUMMARY: AddressSanitizer: heap-use-after-free [^ ]*' <<<"$LH_OUT" | head -1)"
 else
     ctl 1 "WE_MOD_TEST_LEGACY_LOOP_FREES (exit $LH_RC, no heap-use-after-free reported)"
+fi
 fi
 
 # ---- H2: the built object, read by symbol ------------------------------------------------------------
@@ -477,7 +493,13 @@ while [ ${#queue[@]} -gt 0 ]; do
         base=${base%.cold}
         base=$(printf '%s' "$base" | sed -E 's/\.(constprop|isra|part|lto_priv)\.[0-9]+$//')
         [ "$base" = "$fn" ] && continue
-        if is_local "$t" || is_local "$base"; then
+        # A module function reached through its own PLT stub (gcc 11 and binutils 2.35 on RHEL 9 call a global
+        # function of the same object as <name@plt>, semantic interposition) is followed into the function, not
+        # into the stub: the stub's only jump is to the resolver, .plt, which is no call the handler makes.
+        if is_local "$base"; then
+            queue+=("$base")
+            continue
+        elif is_local "$t"; then
             queue+=("$t")
             continue
         fi
@@ -691,7 +713,7 @@ listener L$i {
     $SUDO tee "$CONF" >/dev/null <<CONF
 serverName               whisper-edge-gate
 user                     nobody
-group                    nogroup
+group                    $LS_GROUP
 priority                 0
 autoRestart              0
 httpdWorkers             $WORKERS

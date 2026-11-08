@@ -1759,12 +1759,20 @@ The feed is a claim, so here is how to audit it rather than trust it:
   a count line, how many assertions held and how many failed, and every gate ends with one verdict
   line that names it: `CLEAR` when everything it asserts held, `FAILED` when anything did not, and
   otherwise a verdict that says what could not be proven on that host (`RPZ GATE: NOT PROVEN IN FULL`,
-  `INSTALL GATE: INCOMPLETE`), never a pass.
+  `INSTALL GATE: INCOMPLETE`), never a pass. Every gate runs whatever an earlier one said, and `make
+  proof` ends by printing each gate's verdict line together; its exit status reports success only
+  when every gate passed.
+  Nothing needs building first: the nginx and Apache gates build this tree's module when none is
+  current, and the OpenLiteSpeed gate's pinned SDK is fetched when the server is installed and the
+  header is not. Run it as yourself with passwordless sudo, or as root; under root the nginx gate
+  runs its workers as root, so the rows see one uid either way.
 
   **Every number on this page is taken from a run, and the runs are how they get corrected.** A count
   typed into prose goes stale on the edit that adds the assertions it counts, and nothing notices, so
-  whenever this manual quotes a gate's count line, that gate compares it with its own run and fails
-  when they differ.
+  whenever this manual quotes a gate's count line, that gate compares it with its own run, and in the
+  tree this manual is maintained in it fails when they differ. A count is also a property of the host
+  (which servers it has, whether SELinux enforces), so in a published copy run on a host shaped unlike
+  the release's own, the gate prints both counts as a note and its verdict stays the rows' own.
 
 - **The concurrency is tested, not reasoned about.** `make race` (part of the default `make`) runs the
   snapshot swap and retirement under eight threads at once and asserts that no mapping is ever lost

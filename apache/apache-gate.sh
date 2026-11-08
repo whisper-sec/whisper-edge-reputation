@@ -50,6 +50,10 @@
 set -u
 
 cd "$(dirname "$0")" || exit 1
+# Root runs what needs root itself. sudo is not needed then, and it can be refused or absent for root (a
+# minimal RHEL, or a container whose root account PAM treats as locked), which used to fail or skip the very
+# rows a root run exists to walk. Anyone else goes through passwordless sudo, as before.
+as_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo -n "$@"; fi; }
 # ROOT is the EDGE TREE's own root, one level up from this script, NOT two: two levels up is the parent of
 # the clone in the published repository, and `$ROOT/...` then resolves outside the checkout.
 ROOT=$(cd .. && pwd)
@@ -85,24 +89,38 @@ export TMPDIR="${TMPDIR:-${XDG_RUNTIME_DIR:-/tmp}}"
 
 HTTPD=$(command -v apache2 || command -v httpd || true)
 [ -n "$HTTPD" ] || { echo "APACHE GATE: FAILED - no apache2/httpd on this host"; exit 1; }
-if [ ! -f "$MODULE" ]; then
-    echo "APACHE GATE: FAILED - no built module at $MODULE. Build it with:"
+if [ ! -f "$MODULE" ] && [ -n "$_module_given" ]; then
+    echo "APACHE GATE: FAILED - no built module at $MODULE (named by MODULE=). Build it with:"
     echo "    cd $PWD && ./build.sh"
     exit 1
 fi
-# this tree's own build, when it is older than any source build.sh compiles into it, is refused by name: the gate
-# would otherwise walk every row that loads $MODULE against an object built before the change under test (measured:
+# this tree's own build, when it is older than any source build.sh compiles into it, is never walked: the gate
+# would otherwise run every row that loads $MODULE against an object built before the change under test (measured:
 # two full walks of this tree ran their release rows on an object built before the module's stop fix and three
-# rebases of the core, while the debug builds the gate compiles itself carried both)
-_stale=""
-for _s in mod_whisper_edge.c ../core/whisper_edge.c ../core/we_sha256.c ../core/we_counters.c ../core/we_policy.c \
-          ../core/we_module.c ../core/*.h; do
-    [ "$_s" -nt "$MODULE" ] && _stale="$_stale ${_s#../}"
-done
+# rebases of the core, while the debug builds the gate compiles itself carried both). With no MODULE given, an
+# absent or stale build is rebuilt here through build.sh, as the nginx gate builds its own: `make proof` on a
+# fresh clone needs no build step of its own, and a build that fails stops the gate with the compiler's words.
+module_stale() { # -> the sources newer than $MODULE (nothing when it is current; everything when it is absent)
+    local s out=""
+    for s in mod_whisper_edge.c ../core/whisper_edge.c ../core/we_sha256.c ../core/we_counters.c ../core/we_policy.c \
+             ../core/we_module.c ../core/*.h; do
+        { [ ! -f "$MODULE" ] || [ "$s" -nt "$MODULE" ]; } && out="$out ${s#../}"
+    done
+    printf '%s' "$out"
+}
+_stale=$(module_stale)
 if [ -n "$_stale" ] && [ -z "$_module_given" ]; then
-    echo "APACHE GATE: REFUSED - $MODULE is older than the source it is built from:$_stale"
-    echo "    rebuild it: cd $PWD && ./build.sh"
-    exit 1
+    if [ -f "$MODULE" ]; then echo "module: $MODULE is older than its source ($_stale ), rebuilding it with build.sh"
+    else echo "module: none built at $MODULE, building this tree's with build.sh"; fi
+    if ! _out=$(./build.sh 2>&1); then
+        echo "APACHE GATE: FAILED - this tree's module does not build: $(printf '%s\n' "$_out" | tail -3 | tr '\n' ' ')"
+        exit 1
+    fi
+    _stale=$(module_stale)
+    if [ -n "$_stale" ]; then
+        echo "APACHE GATE: FAILED - build.sh succeeded and $MODULE is still absent or older than:$_stale"
+        exit 1
+    fi
 fi
 MODDIR=$(cd "$(dirname "$MODULE")" && pwd)
 MODULE="$MODDIR/$(basename "$MODULE")"
@@ -1386,10 +1404,17 @@ for line in dis.splitlines():
         # only bl and call stack a frame: a bare b or jmp is a tail call, which REPLACES the
         # caller's frame, so its callee never stacks on it (and an unsymbolised cold blob's
         # stray b must not read as an edge either)
+        # callq is binutils 2.35's spelling of call (RHEL 9), and a module function called through its own PLT
+        # stub (gcc 11's semantic interposition: <we_decide_frame@plt>) is still a frame stacked on this one;
+        # a PLT stub of anything outside the module is the library's, and stacks nothing of ours
         m = re.search(r"<([A-Za-z_][A-Za-z0-9_.@]*)>", line)
-        if m and re.match(r"\s*[0-9a-f]+:\s+(bl|call)\s", line):
+        if m and re.match(r"\s*[0-9a-f]+:\s+(bl|callq?)\s", line):
             t = m.group(1)
-            if not t.endswith("@plt") and t != cur:
+            if t.endswith("@plt"):
+                t = t[:-4]
+                if t not in syms:
+                    continue
+            if t != cur:
                 edges.setdefault(syms.get(cur, cur), set()).add(syms.get(t, t))
 def worst(name, seen):
     if name not in usage:
@@ -1488,6 +1513,7 @@ PY
         # each handler is printed above it; the walk runs in a frame that has returned before the
         # decision frame owns the scratch, so its path never stacks on it, and that is gated too.
         frame_rule "$seg" release
+        local rel_seg=${seg:-0}
         case $FRAME_VERDICT in
         ok)  ok "frame: the scratch's frame and the deepest chain beneath it hold $FRAME_WHY" ;;
         *)   bad "frame: the scratch's frame and the deepest chain beneath it (the bound $FRAME_RULE, the ratchet $FRAME_RATCHET) hold $FRAME_WHY" ;;
@@ -1527,13 +1553,30 @@ PY
         # unchanged), so the ratchet's plant is 240 bytes: about 1632 on aarch64, under its 2,048 bound, and about
         # 1680 on x86_64, which crosses its 1,638 bound as well, since x86_64 has only 46 bytes of room; each must
         # fail the part it plants
-        local pv pbytes
-        for pv in rule:700 ratchet:240; do
+        #
+        # THE RATCHET'S PLANT IS SIZED ON THIS HOST. 240 bytes crosses the ratchet only where the release chain sits
+        # at the checked-in figure (gcc 13); gcc 12 (Debian 12) and gcc 11 (RHEL 9) build a smaller chain, and a plant
+        # first replaces the export fill before it deepens the chain at all, so 240 read 1528 there and 304 read 1560
+        # against a ratchet at 1656 (measured): the control "passed", proving nothing about the ratchet on those hosts.
+        # So the plant starts at 240 plus the room this host leaves under the figure and grows by 128 bytes, at most
+        # four builds, until the chain crosses the ratchet; the row then holds that the ratchet named it. A plant
+        # that never moves the chain past the ratchet fails the row, as before.
+        local pv pbytes fig_x ratchet_plant=240 tries
+        fig_x=$(frame_ratchet "$(uname -m)")
+        [ -n "$fig_x" ] && [ "$rel_seg" -gt 0 ] && [ "$rel_seg" -lt "$fig_x" ] && ratchet_plant=$((240 + fig_x - rel_seg))
+        for pv in rule:700 ratchet:$ratchet_plant; do
             pbytes=${pv#*:}
-            if out=$(frame_analysis "plant${pv%%:*}" -Wc,-DWE_MOD_CONTROL_BUILD -Wc,-DWE_MOD_TEST_PLANT_FRAME \
-                    -Wc,-DWE_MOD_TEST_PLANT_FRAME_BYTES="$pbytes") && [ "$out" != module-su-failed ]; then
+            tries=0
+            while :; do
+                tries=$((tries + 1))
+                if ! out=$(frame_analysis "plant${pv%%:*}$tries" -Wc,-DWE_MOD_CONTROL_BUILD -Wc,-DWE_MOD_TEST_PLANT_FRAME \
+                        -Wc,-DWE_MOD_TEST_PLANT_FRAME_BYTES="$pbytes") || [ "$out" = module-su-failed ]; then
+                    bad "frame: the $pbytes-byte plant build failed: $(tail -2 "$CTL/plant${pv%%:*}$tries.log" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
+                    break
+                fi
                 seg=$(printf '%s\n' "$out" | awk '$1 == "segment" { print $2 }')
                 frame_rule "${seg:-0}" "plant-${pv%%:*}"
+                [ "${pv%%:*}" = ratchet ] && [ "$FRAME_RATCHET" = ok ] && [ "$tries" -lt 4 ] && { pbytes=$((pbytes + 128)); continue; }
                 case "${pv%%:*}" in
                 rule)
                     [ "$FRAME_RULE" = fail ] \
@@ -1542,11 +1585,10 @@ PY
                 *)
                     [ "$FRAME_RATCHET" = fail ] \
                         && ok "frame's ratchet control: a planted $pbytes-byte frame fails the ratchet, the bound reading $FRAME_RULE ($FRAME_WHY)" \
-                        || bad "frame's ratchet control: a planted $pbytes-byte frame passed the ratchet ($FRAME_WHY), so the ratchet proves nothing" ;;
+                        || bad "frame's ratchet control: a planted frame of up to $pbytes bytes passed the ratchet ($FRAME_WHY), so the ratchet proves nothing" ;;
                 esac
-            else
-                bad "frame: the $pbytes-byte plant build failed: $(tail -2 "$CTL/plant${pv%%:*}.log" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
-            fi
+                break
+            done
         done
     else
         bad "frame: the -fstack-usage build failed: $(tail -2 "$CTL/stackusage.log" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
@@ -2556,19 +2598,19 @@ run_h2_rows() {
     # of their own, which on this host means temporary loopback aliases (root): two the hold-harmless
     # table does not cover (the listed raw peer, the unlisted balancer) and one it does (10.20.30.40,
     # inside the table's 10/8 entry)
-    if sudo -n true 2>/dev/null; then
-        sudo -n ip addr add 12.34.56.78/32 dev lo 2>/dev/null
-        sudo -n ip addr add 12.34.55.78/32 dev lo 2>/dev/null
-        sudo -n ip addr add 10.20.30.40/32 dev lo 2>/dev/null
+    if as_root true 2>/dev/null; then
+        as_root ip addr add 12.34.56.78/32 dev lo 2>/dev/null
+        as_root ip addr add 12.34.55.78/32 dev lo 2>/dev/null
+        as_root ip addr add 10.20.30.40/32 dev lo 2>/dev/null
         lo_addrs=$(ip -4 addr show dev lo 2>/dev/null)
         if grep -q '12.34.56.78/32' <<<"$lo_addrs" \
             && grep -q '12.34.55.78/32' <<<"$lo_addrs" \
             && grep -q '10.20.30.40/32' <<<"$lo_addrs"; then
             ALIASED=yes
         else
-            sudo -n ip addr del 12.34.56.78/32 dev lo 2>/dev/null
-            sudo -n ip addr del 12.34.55.78/32 dev lo 2>/dev/null
-            sudo -n ip addr del 10.20.30.40/32 dev lo 2>/dev/null
+            as_root ip addr del 12.34.56.78/32 dev lo 2>/dev/null
+            as_root ip addr del 12.34.55.78/32 dev lo 2>/dev/null
+            as_root ip addr del 10.20.30.40/32 dev lo 2>/dev/null
         fi
     fi
     if [ "$ALIASED" = yes ]; then
@@ -2686,9 +2728,9 @@ PY
         bad "h2: the unset-address debug build failed: $(tail -2 "$CTL/unset.log" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
     fi
     if [ "$ALIASED" = yes ]; then
-        sudo -n ip addr del 12.34.56.78/32 dev lo 2>/dev/null
-        sudo -n ip addr del 12.34.55.78/32 dev lo 2>/dev/null
-        sudo -n ip addr del 10.20.30.40/32 dev lo 2>/dev/null
+        as_root ip addr del 12.34.56.78/32 dev lo 2>/dev/null
+        as_root ip addr del 12.34.55.78/32 dev lo 2>/dev/null
+        as_root ip addr del 10.20.30.40/32 dev lo 2>/dev/null
     fi
     fresh_snapshot
 }
@@ -2982,9 +3024,21 @@ PY
 run_asan_rows() { # N6: a legacy generation with twice the ranges, published under load, the module under AddressSanitizer
     local conf="$W/httpd-n6.conf" MPM=event ASANRT G0 kids0 kids1
     echo "  [a generation with twice the ranges, published under load, under AddressSanitizer]"
-    ASANRT=$(gcc -print-file-name=libasan.so 2>/dev/null)
+    # THE RUNTIME, PROVEN BY A PROGRAM THAT USES IT. gcc -print-file-name=libasan.so names a file on every host
+    # whose gcc knows the option, and on RHEL 9 that file is a linker script pointing at libasan.so.6, which
+    # only the separate libasan package installs: preloading the script read "file too short" and both arms
+    # failed as if the module had. A sanitized hello world is compiled and run, and the runtime it actually
+    # loaded is the one preloaded.
+    ASANRT=""
+    local ap
+    ap=$(mktemp -d)
+    printf 'int main(void) { return 0; }\n' > "$ap/p.c"
+    if gcc -fsanitize=address -o "$ap/p" "$ap/p.c" >/dev/null 2>&1 && ASAN_OPTIONS=detect_leaks=0 "$ap/p" >/dev/null 2>&1; then
+        ASANRT=$(ldd "$ap/p" 2>/dev/null | awk '$1 ~ /^libasan/ && $3 ~ /^\// { print $3; exit }')
+    fi
+    rm -rf "$ap"
     if [ -z "$ASANRT" ] || [ ! -e "$ASANRT" ]; then
-        dark "N6: this host's compiler ships no libasan, so the sanitizer arms stand unwalked this run"
+        dark "N6: this host has no AddressSanitizer runtime gcc can link and run (RHEL: dnf install libasan; Debian and Ubuntu ship it with gcc), so the sanitizer arms stand unwalked this run"
         return
     fi
     rm -rf "$W/html" "$W/counters" "$W/asan"; mkdir -p "$W/html" "$W/asan"
@@ -3584,7 +3638,7 @@ PY
 run_pidreuse_rows() { # S3: pid reuse forced inside the gate's own pid namespace; the files' identity carries the counts across it
     local S3D NSH out r sent forced reused total live gone n
     echo "  [pid reuse, forced in a pid namespace]"
-    if ! sudo -n true 2>/dev/null || ! sudo -n unshare --pid --fork --mount-proc true 2>/dev/null; then
+    if ! as_root true 2>/dev/null || ! as_root unshare --pid --fork --mount-proc true 2>/dev/null; then
         na "S3: the pid-reuse arms need root for a pid namespace and /proc/sys/kernel/ns_last_pid, and this run has none, so they stand unwalked"
         return
     fi
@@ -3597,19 +3651,22 @@ run_pidreuse_rows() { # S3: pid reuse forced inside the gate's own pid namespace
     # others nor the sticky /tmp (the module refused that chain, measured): a root-owned directory under /run,
     # the counters inside it owned by the children's uid (the writer's root rule binds only a process that
     # itself runs as root)
-    S3D=$(sudo -n mktemp -d /run/we-gate-s3.XXXXXX) || { bad "S3: cannot make the root-owned directory"; return; }
-    sudo -n chmod 0755 "$S3D"; sudo -n mkdir -p "$S3D/logs" "$S3D/counters"; sudo -n chown "$(id -u):$(id -g)" "$S3D/counters"
+    S3D=$(as_root mktemp -d /run/we-gate-s3.XXXXXX) || { bad "S3: cannot make the root-owned directory"; return; }
+    as_root chmod 0755 "$S3D"; as_root mkdir -p "$S3D/logs" "$S3D/counters"; as_root chown "$(id -u):$(id -g)" "$S3D/counters"
     GEN=$((GEN + 1))
     python3 "$ROOT/core/make-test-snapshot.py" "$W/s3snap.tmp" "$GEN" 0 3 "$RANGE_START" "$RANGE_END"
-    sudo -n cp "$W/s3snap.tmp" "$S3D/snapshot.bin"; sudo -n chmod 0644 "$S3D/snapshot.bin"; rm -f "$W/s3snap.tmp"
+    as_root cp "$W/s3snap.tmp" "$S3D/snapshot.bin"; as_root chmod 0644 "$S3D/snapshot.bin"; rm -f "$W/s3snap.tmp"
     s3_conf() { # s3_conf <module> -> the root-owned configuration: prefork, two children cycled by MaxConnectionsPerChild 1
         { conf_head prefork | sed "s#^LoadModule whisper_edge_module .*#LoadModule whisper_edge_module $1#; s#^PidFile .*#PidFile $S3D/httpd.pid#; s#^ErrorLog .*#ErrorLog $S3D/logs/error.log#; s#^CustomLog .*#CustomLog $S3D/logs/access.log whisperfmt#; s#^MaxConnectionsPerChild 0\$#MaxConnectionsPerChild 1#"
-          echo "User $(id -un)"; echo "Group $(id -gn)"
+          # the children as this gate's user; run as root, httpd refuses "User root" outright (AH00526, "Apache has
+          # not been designed to serve pages while running as root"), so the line is left out, as in every other
+          # configuration this gate writes, and the children are what a root start gives them in all of those
+          [ "$(id -u)" = 0 ] || { echo "User $(id -un)"; echo "Group $(id -gn)"; }
           conf_data | sed "s#^WhisperEdgeSnapshot .*#WhisperEdgeSnapshot $S3D/snapshot.bin#"
           echo "WhisperEdgeSummary $S3D/counters"
           echo 'WhisperEdgeMode deny'; echo 'WhisperEdgePolicy "deny if listed >= low"'
         } > "$W/s3.conf"
-        sudo -n cp "$W/s3.conf" "$S3D/httpd.conf"; sudo -n chmod 0644 "$S3D/httpd.conf"
+        as_root cp "$W/s3.conf" "$S3D/httpd.conf"; as_root chmod 0644 "$S3D/httpd.conf"
     }
     # the namespace script: forks only to make a request; the wait for a child's exit, the ns_last_pid write and
     # the wait for the respawn are builtins over /proc, so the parent's fork is the next one in the namespace
@@ -3660,7 +3717,7 @@ exit 0
 NS
     s3_run() { # s3_run <module> <cycles> -> the S3-RESULT line
         s3_conf "$1"
-        sudo -n unshare --pid --fork --mount-proc bash "$NSH" "$S3D" "$PORT" "$2" "$LISTED" "$HOP" "$HTTPD" "$SUMMARY_BIN" 2>&1 | grep -E '^S3-' | tail -1
+        as_root unshare --pid --fork --mount-proc bash "$NSH" "$S3D" "$PORT" "$2" "$LISTED" "$HOP" "$HTTPD" "$SUMMARY_BIN" 2>&1 | grep -E '^S3-' | tail -1
     }
     s3_field() { printf '%s\n' "$1" | sed -n "s/.*[ ]$2=\([0-9]*\).*/\1/p" | head -1; }
     out=$(s3_run "$MODULE" 500)
@@ -3685,7 +3742,7 @@ NS
     else
         bad "S3: the pid-only-names control: result '$r'"
     fi
-    sudo -n rm -rf "$S3D"; rm -f "$W/s3.conf" "$NSH"
+    as_root rm -rf "$S3D"; rm -f "$W/s3.conf" "$NSH"
     fresh_snapshot
 }
 
@@ -4451,8 +4508,16 @@ run_mlock_rows() { # M7: mlock under a 1 MiB LimitMEMLOCK fails loudly and keeps
         return
     fi
     { conf_head "$MPM"; conf_data; } > "$conf"
-    # the low limit: the parent binds under a 1 MiB RLIMIT_MEMLOCK, so the mlock fails per child
-    prlimit --memlock=1048576 -- "$HTTPD" -f "$conf" -k start 2>"$W/start-m7.err"
+    # the low limit: the parent binds under a 1 MiB RLIMIT_MEMLOCK, so the mlock fails per child. Run as root,
+    # CAP_IPC_LOCK lifts any memlock limit, so the server starts without it (dropped from the bounding set, so no
+    # child holds it either) and the limit binds root as it binds an unprivileged user
+    local nolock=()
+    if [ "$(id -u)" = 0 ]; then
+        command -v setpriv >/dev/null 2>&1 \
+            || { dark "mlock: run as root with no setpriv to start httpd without CAP_IPC_LOCK, no memlock limit binds, so the arm stands unwalked"; return; }
+        nolock=(setpriv --bounding-set=-ipc_lock)
+    fi
+    prlimit --memlock=1048576 -- "${nolock[@]}" "$HTTPD" -f "$conf" -k start 2>"$W/start-m7.err"
     await "[ \"\$(code_nohdr /)\" != 000 ]" 15 "httpd up under the 1 MiB limit" \
         || { bad "mlock: httpd did not start under the 1 MiB limit: $(tail -2 "$W/start-m7.err" | tr '\n' ' ' | cut -c1-300)"; return; }
     HTTPD_PID=$(cat "$W/httpd-$MPM.pid" 2>/dev/null)
@@ -5162,12 +5227,12 @@ m3_arm() { # m3_arm <object> <data|legacy> <label> [stop-on-post-truncate-death]
     local so=$1 kind=$2 label=$3 early=${4:-} conf="$W/httpd-m3.conf" file k i r t0 t1 d
  M3_ORIG=""; M3_NORIG=0; M3_DEATHS=0; M3_POSTDEAD=0; M3_ORIGDEAD=0; M3_SENT=0; M3_ANSWERED=0; M3_COUNTED=""
     M3_START=()
-    sudo -n chattr -i "$W/m3data/reputation.bin" "$W/m3snap.bin" 2>/dev/null
+    as_root chattr -i "$W/m3data/reputation.bin" "$W/m3snap.bin" 2>/dev/null
     rm -rf "$W/m3data" "$W/m3pause" "$W/m3snap.bin" "$W/counters" "$W/html"
     mkdir -p "$W/m3data" "$W/m3pause" "$W/html" "$W/logs"; chmod 0755 "$W/m3data"; echo page > "$W/html/index.html"
     if [ "$kind" = data ]; then file="$W/m3data/reputation.bin"; else file="$W/m3snap.bin"; fi
     cp "$W/m3.bin" "$file.new"; chmod 0444 "$file.new"; mv "$file.new" "$file"
-    sudo -n chattr +i "$file" || { bad "M3($label): chattr +i failed on $file"; return 1; }
+    as_root chattr +i "$file" || { bad "M3($label): chattr +i failed on $file"; return 1; }
     { conf_head prefork | sed "s#^LoadModule whisper_edge_module .*#LoadModule whisper_edge_module $so#; s/^StartServers 2\$/StartServers 4/; s/^MinSpareServers 2\$/MinSpareServers 4/; s/^MaxSpareServers 2\$/MaxSpareServers 4/; s/^MaxRequestWorkers 2\$/MaxRequestWorkers 4/"
       if [ "$kind" = data ]; then echo "WhisperEdgeData $W/m3data"; else echo "WhisperEdgeSnapshot $file"; fi
       echo "WhisperEdgeRefresh 10"
@@ -5180,7 +5245,7 @@ m3_arm() { # m3_arm <object> <data|legacy> <label> [stop-on-post-truncate-death]
     } > "$conf"
     if ! WE_MOD_DEBUG_TAIL=198.18.125.0-198.18.255.255 WE_MOD_PAUSE_DIR="$W/m3pause" start_httpd "$conf" prefork; then
         bad "M3($label): httpd did not start: $(grep -v 'whisper edge: policy:' "$W/start-prefork.err" | tail -2 | tr '\n' ' ' | cut -c1-300)"
-        sudo -n chattr -i "$file" 2>/dev/null; return 1
+        as_root chattr -i "$file" 2>/dev/null; return 1
     fi
     await '[ "$(pgrep -P "$HTTPD_PID" | wc -l)" -ge 4 ]' 15 "four children"
     await_first_tick
@@ -5206,7 +5271,7 @@ m3_arm() { # m3_arm <object> <data|legacy> <label> [stop-on-post-truncate-death]
     sleep 0.2
     M3_TRUNC=$(awk -v hz="$(getconf CLK_TCK)" '{ printf "%d", $1 * hz }' /proc/uptime)
     M3_LOGLINE=$(wc -l < "$W/logs/error.log")
-    sudo -n chattr -i "$file" && chmod u+w "$file" && truncate -s 139264 "$file" \
+    as_root chattr -i "$file" && chmod u+w "$file" && truncate -s 139264 "$file" \
         || { bad "M3($label): the in-place truncate failed"; rm -f "$W/m3pause/tick"; return 1; }
     t0=$(date +%s%N)
     # every original reached at once, so the parent forks the replacements under test at once; as soon as one exists
@@ -5267,13 +5332,13 @@ m3_finish() { # stop the arm's httpd and leave no immutable file behind
     rm -f "$W/m3pause/tick" "$W/m3pause/monitor"
     stop_httpd "$W/httpd-m3.conf" prefork || bad "M3: httpd did not stop"
     await '[ "$(code_nohdr /)" = 000 ]' 15 "the stopped listener's port release"
-    sudo -n chattr -i "$W/m3data/reputation.bin" "$W/m3snap.bin" 2>/dev/null
+    as_root chattr -i "$W/m3data/reputation.bin" "$W/m3snap.bin" 2>/dev/null
 }
 run_truncate_rows() { # M3: an in-place truncate of the inherited generation kills only workers forked before it
     local i k alive n1000 t0 t1
     declare -gA M3_START=()
     echo "  [M3: the inherited generation truncated in place under held ticks]"
-    sudo -n true 2>/dev/null || { bad "M3: needs root for chattr, and sudo -n is refused on this host"; return; }
+    as_root true 2>/dev/null || { bad "M3: needs root for chattr: not root, and sudo -n is refused on this host"; return; }
     [ -n "$APXS" ] || { bad "M3: no apxs to build the debug module"; return; }
     # the debug object (WE_MOD_DEBUG: the core's tail count) with the tick pause; the two start-check controls on it
     build_variant m3 -Wc,-DWE_MOD_DEBUG -Wc,-DWE_MOD_CONTROL_BUILD -Wc,-DWE_MOD_TEST_PAUSE_TICK \
@@ -5465,6 +5530,9 @@ run_built_object_rows() {
     nloc=$(printf '%s\n' "$insns" | locals_of "$arch")
     case "$cc_id|$arch" in
         "clang-18|x86_64") exp_loc=16 ;;
+        # RHEL 9's gcc 11.5 under its httpd's apxs flags (-O2 -g -Wall) keeps one value in the red zone below the
+        # wrapper's pushes (mov %rax,-0x10(%rsp)), measured on Rocky Linux 9.8; gcc 12 and later read 0
+        "gcc-11|x86_64") exp_loc=16 ;;
     esac
     [ "${nloc:-0}" = "$exp_loc" ] && ok "H2: $nloc bytes of locals in the wrapper, exactly the expected-locals table's figure for this leg" \
         || bad "H2: $nloc bytes of locals in the wrapper, where the table holds $exp_loc for $cc_id on $arch"
@@ -5637,7 +5705,8 @@ reaches() {
         [ "$(base_of "$f")" = "$to" ] && { echo yes; return; }
         for t in $(calls_of "$f"); do
             [ "$t" = "$f" ] && continue
-            case "$t" in *@plt) continue ;; esac
+            # through a PLT stub: followed when it is the module's own function (gcc 11 calls one so), else a library's
+            case "$t" in *@plt) t=${t%@plt}; [ -n "$(sym_of "$t")" ] || continue ;; esac
             q+=("$t")
         done
     done

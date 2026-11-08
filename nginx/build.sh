@@ -12,6 +12,7 @@
 #
 # Usage: ./build.sh [--src DIR] [--keep] [--install] [--debug]
 #   --src      an nginx source tree you already have (default: find or fetch the matching one)
+#   --keep     keep the configured tree (its path is printed as "== kept the configured tree: <dir>")
 #   --install  copy the built .so next to nginx's other modules and print the load_module line
 #   --debug    the debug build (WE_MOD_DEBUG: the core's debug counters and assertions on), written as
 #              ngx_http_whisper_edge_module.debug.so, for the gates; never installed
@@ -28,7 +29,7 @@ while [ $# -gt 0 ]; do
     --keep)    KEEP=1 ;;
     --install) INSTALL=1 ;;
     --debug)   DEBUG=1 ;;
-    -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "build.sh: unknown option $1" >&2; exit 2 ;;
   esac
   shift
@@ -250,6 +251,10 @@ OUT="$HERE/ngx_http_whisper_edge_module.so"
 [ "$DEBUG" = 1 ] && OUT="$HERE/ngx_http_whisper_edge_module.debug.so"
 cp "$SO" "$OUT"
 echo "== built $OUT ($(wc -c <"$SO") bytes)"
+# THE CONFIGURED TREE, for whoever builds control modules from it (nginx-gate.sh). One line in one form
+# whichever route found the sources: the gate once read the tree out of the nginx-dev route's "-> <dir>",
+# which the source-RPM and nginx.org routes never print, and so found no tree on RHEL or a tarball build.
+[ "$KEEP" = 1 ] && echo "== kept the configured tree: $SRC"
 
 if [ "$INSTALL" = 1 ]; then
   # nginx's module path is a compile-time constant, so it is read back out of the flags, never guessed.

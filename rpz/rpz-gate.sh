@@ -47,6 +47,10 @@
 # directive, written literally.
 # shellcheck disable=SC2015,SC2016
 set -Eeuo pipefail
+# Root runs what needs root itself. sudo is not needed then, and it can be refused or absent for root (a
+# minimal RHEL, or a container whose root account PAM treats as locked), which used to fail or skip the very
+# rows a root run exists to walk. Anyone else goes through passwordless sudo, as before.
+as_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo -n "$@"; fi; }
 # A command that ends the run under set -e names itself. A collision used to read as a bare
 # "make: *** [Makefile:22: rpz] Error 9", which says nothing about which of a few hundred lines it was.
 # ERR fires exactly where errexit does, and -E carries it into functions; a command substitution's subshell
@@ -124,8 +128,12 @@ fi
 #
 # Ubuntu ships an AppArmor profile for named in enforce mode. It grants "/var/cache/bind/** lrw" and
 # "/etc/bind/** r" and nothing else, so named started from a checkout under $HOME dies reading its own
-# config, with an EMPTY log, because it never gets far enough to open one. So: probe for a directory this
-# machine's named can actually read from, preferring the checkout and falling back to /var/cache/bind.
+# config, with an EMPTY log, because it never gets far enough to open one. RHEL and its rebuilds confine
+# named under SELinux instead: started by root, named runs in named_t, which may not read a checkout under
+# /root (admin_home_t) and is denied without an audit line, and /var/cache/bind does not exist there; the
+# directory named_t reads and writes is /var/named/data (named_cache_t). So: probe for a directory this
+# machine's named can actually read from, preferring the checkout and falling back to the distribution's
+# own named cache directory, /var/cache/bind or /var/named/data.
 # PROBE rather than detect, because "is AppArmor enforcing for named" has a different answer on every
 # distro and the question we care about is only ever "can named read a config from here".
 #
@@ -135,11 +143,11 @@ fi
 require_safe_workdir() {
     case "$1" in
         "$PWD"/*|"$PWD") return 0 ;;
-        /var/cache/bind/whisper-rpz-gate*) return 0 ;;
+        /var/cache/bind/whisper-rpz-gate*|/var/named/data/whisper-rpz-gate*) return 0 ;;
     esac
     echo "RPZ GATE: FAILED - refusing to use '$1' as a work directory."
     echo "  This script creates and deletes files there, so it must be inside the checkout or under"
-    echo "  /var/cache/bind/whisper-rpz-gate. Pass one of those, or no argument at all."
+    echo "  /var/cache/bind/whisper-rpz-gate or /var/named/data/whisper-rpz-gate. Pass one of those, or no argument at all."
     return 1
 }
 if [ -n "$POS" ]; then
@@ -182,24 +190,28 @@ for t in named named-checkzone named-checkconf dig python3; do
 done
 
 WORK=""
-for candidate in "${POS:-$PWD/core/.testtmp/rpz}" /var/cache/bind/whisper-rpz-gate; do
-    if [ "$candidate" = /var/cache/bind/whisper-rpz-gate ]; then
-        [ -d /var/cache/bind ] || continue
-        if [ ! -w /var/cache/bind ] && [ ! -w "$candidate" ]; then
-            sudo -n mkdir -p "$candidate" 2>/dev/null && sudo -n chown "$(id -u):$(id -g)" "$candidate" 2>/dev/null || continue
-        fi
-    fi
+for candidate in "${POS:-$PWD/core/.testtmp/rpz}" /var/cache/bind/whisper-rpz-gate /var/named/data/whisper-rpz-gate; do
+    case "$candidate" in
+        /var/cache/bind/whisper-rpz-gate|/var/named/data/whisper-rpz-gate)
+            [ -d "${candidate%/*}" ] || continue
+            if [ ! -w "${candidate%/*}" ] && [ ! -w "$candidate" ]; then
+                as_root mkdir -p "$candidate" 2>/dev/null && as_root chown "$(id -u):$(id -g)" "$candidate" 2>/dev/null || continue
+            fi ;;
+    esac
     if probe_workdir "$candidate"; then
         WORK="$candidate"
-        [ "$candidate" = /var/cache/bind/whisper-rpz-gate ] \
-            && echo "note: named cannot read a config from the checkout on this machine (AppArmor);" \
-            && echo "      using $candidate, which its profile permits"
+        case "$candidate" in
+            /var/cache/bind/*) echo "note: named cannot read a config from the checkout on this machine (AppArmor);"
+                               echo "      using $candidate, which its profile permits" ;;
+            /var/named/data/*) echo "note: named cannot read a config from the checkout on this machine (SELinux);"
+                               echo "      using $candidate, which its policy permits" ;;
+        esac
         break
     fi
 done
 if [ -z "$WORK" ]; then
     echo "RPZ GATE: FAILED - no directory on this machine that named will read a config from."
-    sudo -n dmesg 2>/dev/null | grep -i 'apparmor.*named' | tail -3 || echo "  (dmesg not readable)"
+    as_root dmesg 2>/dev/null | grep -i 'apparmor.*named' | tail -3 || echo "  (dmesg not readable)"
     exit 1
 fi
 require_safe_workdir "$WORK" || exit 1
@@ -380,7 +392,10 @@ bind_accepted() { # <log> <zone file> <origin> -> prints the count or the fault
     [ -s "$log" ] || { echo "BIND's log at $log is empty, so this check proves nothing"; return 1; }
     bad=$(grep -iE 'invalid rpz|is not the canonical|rpz .*failed|not loaded due to errors|multiple RRs of singleton' "$log" || true)
     [ -z "$bad" ] || { echo "BIND rejected or dropped records: $(head -1 <<<"$bad")"; return 1; }
-    grep -q "rpz: $origin: reload done: success" "$log" || { echo "BIND never reported the policy zone loaded"; return 1; }
+    # BIND 9.18 ends the policy build with "reload done: success"; 9.16 (RHEL 9) with "reload done" alone, and
+    # reports a failed build on a line of its own, which the refusal pattern above holds. Either form, at the end
+    # of its line, so a longer word or another result after it never reads as a load.
+    grep -qE "rpz: $origin: reload done(: success)?\$" "$log" || { echo "BIND never reported the policy zone loaded"; return 1; }
     want=$(triggers_in "$body")
     got=$(sed -n "s/.*rpz: $origin: adding node //p" "$log" | LC_ALL=C tr '[:upper:]' '[:lower:]' | grep -vxF "$origin" | sort -u | grep -c . || true)
     [ "$got" = "$want" ] || { echo "BIND's policy build reached $got of the file's $want triggers"; return 1; }
@@ -508,9 +523,9 @@ nsip_check() { # <origin> <zone file>
         return 0
     fi
     badns=$(awk -F. '{ print $5 "." $4 "." $3 "." ($2 + 53) }' <<<"$owner")
-    if ! sudo -n true 2>/dev/null || ! command -v unshare >/dev/null; then
+    if ! as_root true 2>/dev/null || ! command -v unshare >/dev/null; then
         skipped="$skipped rpz-nsip($origin)"
-        printf '  SKIP  rpz-nsip needs passwordless sudo and unshare for a network namespace; not proved here\n'
+        printf '  SKIP  rpz-nsip needs root (or passwordless sudo) and unshare for a network namespace; not proved here\n'
         return 0
     fi
     d="$RUN/nsip"; u=$(id -un)
@@ -529,7 +544,7 @@ nsip_check() { # <origin> <zone file>
     printf 'options { directory "%s"; pid-file "%s/pol.pid"; listen-on { 127.0.0.1; }; recursion yes; allow-recursion { 127.0.0.0/8; }; session-keyfile "%s/p.key"; %s response-policy { zone "%s"; }; };\ncontrols { };\nzone "." { type hint; file "%s/hints"; };\nzone "%s" { type primary; file "%s"; };\n' "$d" "$d" "$d" "$common" "$origin" "$d" "$origin" "$zf" > "$d/pol.conf"
     printf 'options { directory "%s"; pid-file "%s/nopol.pid"; listen-on { 127.0.0.3; }; recursion yes; allow-recursion { 127.0.0.0/8; }; session-keyfile "%s/n.key"; %s };\ncontrols { };\nzone "." { type hint; file "%s/hints"; };\n' "$d" "$d" "$d" "$common" "$d" > "$d/nopol.conf"
     for z in root kids pol nopol; do named-checkconf "$d/$z.conf"; done
-    out=$(sudo -n unshare -n bash -c '
+    out=$(as_root unshare -n bash -c '
         d=$1; u=$2; badns=$3
         trap '"'"'for c in root kids pol nopol; do [ -f "$d/$c.pid" ] && kill "$(cat "$d/$c.pid")" 2>/dev/null; done; sleep 0.5'"'"' EXIT
         ip link set lo up && ip addr add 127.0.0.2/8 dev lo && ip addr add 127.0.0.3/8 dev lo \

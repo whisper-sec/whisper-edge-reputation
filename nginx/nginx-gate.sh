@@ -21,6 +21,12 @@
 # threshold sugar. Every row is `nginx -t` over a rendered configuration, read back from what the
 # module printed; nothing is asserted from this script's own idea of the grammar.
 set -euo pipefail
+# THE C LOCALE, for every pattern here. A bracket range collates in the locale's order, and the status
+# grammar's byte classes ([ -!#-[] and []-~], the raw bytes 0x20 to 0x7e less quote and backslash) match
+# nothing under en_US.UTF-8, a common default, while they work under C and C.UTF-8 (measured): every grammar
+# row then failed on a host whose only difference was its locale. Nothing this gate asserts depends on the
+# operator's locale; the module and nginx read none.
+export LC_ALL=C
 # the configurations this gate writes define the http level, and the module refuses one that is open to
 # group or world; the planes it writes are read the same way
 umask 022
@@ -92,11 +98,53 @@ if [ -z "$MODULE" ]; then
         echo "NGINX GATE: FAILED - this tree's module does not build: $(printf '%s\n' "$out" | tail -3 | tr '\n' ' ')"
         exit 1
     fi
-    NGX_BUILD=$(sed -n 's/.* -> \(\/.*\)$/\1/p' <<<"$out" | sed -n 1p)
+    # build.sh names the tree it kept in one line whichever route found the sources (the nginx-dev package,
+    # the distribution's source RPM, a verified nginx.org tarball). A build that names none is said here,
+    # never read as the path "/objs/...".
+    NGX_BUILD=$(sed -n 's/^== kept the configured tree: \(\/.*\)$/\1/p' <<<"$out" | sed -n 1p)
+    if [ -z "$NGX_BUILD" ] || [ ! -f "$NGX_BUILD/objs/Makefile" ]; then
+        echo "NGINX GATE: FAILED - build.sh --keep built the module but named no configured tree (\"== kept the configured tree: <dir>\"): $(printf '%s\n' "$out" | tail -3 | tr '\n' ' ')"
+        exit 1
+    fi
     MODULE="$NGX_BUILD/objs/ngx_http_whisper_edge_module.so"
     GATE_BUILT_TREE=$NGX_BUILD
 fi
 why=$(module_is_this_trees "$MODULE")
+# RUN AS ROOT, THE WORKERS RUN AS ROOT. nginx started by root with no `user` line hands its workers to its
+# compiled-in default (nobody, or the package's --user, nginx on nginx.org's builds), which can neither enter
+# a work directory under a 0700 home (working_directory, the planes) nor write the counters this gate reads
+# back. Every row here is written for one uid that both reads the configuration and runs the workers, the
+# shape an unprivileged run has; under root that uid is root, so every configuration the gate starts or
+# tests carries `user root` through -g, unless it writes a user line of its own (the final-user rows, which
+# go through sudo and the real binary anyway). Without root the line would only draw a warning, so it is
+# added under root alone.
+#
+# AND THE CONFIGURATION-TIME LINES STAY ON STDERR. Until the configuration's own error_log is open, nginx
+# writes to its compiled-in log (--error-log-path, /var/log/nginx/error.log on every distribution package),
+# and falls back to stderr only when it cannot open that file. Unprivileged, it cannot; as root it can, so
+# every line the module prints while the configuration is read (the policy lines, the configuration file's
+# name) went into the host's own nginx log instead of the start's stderr the rows read, and those rows
+# failed on Rocky as root with the lines nowhere in the run. -e stderr (nginx 1.19.5 and later; the module
+# needs 1.23) puts them where an unprivileged run has them, and writes nothing into the host's log.
+if [ "$(id -u)" = 0 ]; then
+    echo "running as root: the workers run as root too (nginx -g 'user root;'), one uid as in an unprivileged run, and the configuration-time lines go to stderr (-e stderr)"
+    # NGX_DROP_DAC=1 starts nginx without CAP_DAC_OVERRIDE and CAP_DAC_READ_SEARCH (dropped from the bounding
+    # set, so neither the master nor its workers hold them): the rows that prove what an unreadable plane or an
+    # unwritable counters directory does need a reader the file modes bind, and root with those capabilities
+    # reads and writes past every mode. Unprivileged, the modes bind already and nothing is dropped.
+    HAVE_SETPRIV=0; command -v setpriv >/dev/null 2>&1 && HAVE_SETPRIV=1
+    nginx() {
+        local a prev="" conf="" pre=()
+        for a in "$@"; do [ "$prev" = -c ] && conf=$a; prev=$a; done
+        [ "${NGX_DROP_DAC:-}" = 1 ] && pre=(setpriv --bounding-set=-dac_override,-dac_read_search)
+        if [ -z "$conf" ]; then command nginx "$@"
+        elif grep -qE '^[[:space:]]*user[[:space:]]' "$conf" 2>/dev/null; then "${pre[@]}" "$(type -P nginx)" -e stderr "$@"
+        else "${pre[@]}" "$(type -P nginx)" -e stderr -g 'user root;' "$@"; fi
+    }
+fi
+# the file-mode rows: under root they start nginx without the DAC capabilities (above); without setpriv there
+# is no reader the modes bind, and the row is NOT PROVEN by that cause rather than failed or passed
+modes_bind() { [ "$(id -u)" != 0 ] || [ "${HAVE_SETPRIV:-0}" = 1 ]; }
 if [ -n "$why" ]; then
     echo "NGINX GATE: FAILED - the module $MODULE is not this tree's current build: $why. Leave MODULE unset and the gate builds it, or rebuild with nginx/build.sh --keep and pass <tree>/objs/ngx_http_whisper_edge_module.so"
     exit 1
@@ -938,7 +986,8 @@ if policy_lit; then
         && ok "G3: and the parent denies (403) while the child only logs (200)" \
         || bad "G3: parent and child answered $(code /g3p/) and $(code /g3p/c/), not 403 and 200"
     # G4: the programs and the view are shared by both workers after the fork
-    SUMMARY_LINE=$(printf '%s\n' "$LOAD" | grep 'read-only regions:' | tail -1)
+    # a load with no such line is G4's to fail by name, never a silent stop of the whole gate under set -e
+    SUMMARY_LINE=$(printf '%s\n' "$LOAD" | grep 'read-only regions:' | tail -1 || true)
     read -ra ws <<<"$(workers)"
     set -- "${ws[@]}"
     if [ $# -ge 2 ]; then
@@ -1804,9 +1853,16 @@ fi
 rm -rf "$D"
 # the reader-is-the-worker warning: this gate runs nginx as its own user, so the trusted owner is that uid
 conft sm-reader '' ''
-grep -q "the configuration is read by uid $(id -u), which is also the uid the workers run as" <<<"$TOUT" \
-    && ok "StrictModes: a configuration read by the workers' own uid says that the trusted owner is that uid" \
-    || bad "StrictModes: the reader-is-worker warning is missing: $(grep -m1 'read by uid' <<<"$TOUT" | cut -c1-200)"
+if [ "$(id -u)" != 0 ]; then
+    grep -q "the configuration is read by uid $(id -u), which is also the uid the workers run as" <<<"$TOUT" \
+        && ok "StrictModes: a configuration read by the workers' own uid says that the trusted owner is that uid" \
+        || bad "StrictModes: the reader-is-worker warning is missing: $(grep -m1 'read by uid' <<<"$TOUT" | cut -c1-200)"
+else
+    # run as root, the reader is root, which the trust rule already trusts alone: the module says nothing
+    ! grep -q 'read by uid' <<<"$TOUT" \
+        && ok "StrictModes: a configuration read by root draws no reader-is-worker warning (root is trusted alone)" \
+        || bad "StrictModes: a root-read configuration drew the unprivileged reader's warning: $(grep -m1 'read by uid' <<<"$TOUT" | cut -c1-200)"
+fi
 
 echo "-- the floor runs under the http level's mode, and says when a server block expects more --"
 conft floor-log 'whisper_edge_policy_floor "deny if tor_exit";' 'whisper_edge_mode deny;'
@@ -2969,10 +3025,13 @@ else
 fi
 stop; sleep 1
 chmod 0444 "$F1/reputation.bin"
-# the counters directory read-only: the writers say so once, serving goes on
+# the counters directory read-only: the writers say so once, serving goes on (under root, started without the
+# DAC capabilities, so the mode binds root as it binds an unprivileged worker)
 chmod 0555 "$F1/ro"
 DATA_DIR="$F1" mkconf 1s "whisper_edge_summary $F1/ro/counters;"
-if f1_start 200 "a read-only counters directory"; then
+if ! modes_bind; then
+    notproven "fail open: read-only counters: run as root with no setpriv to start nginx without CAP_DAC_OVERRIDE, nothing makes a mode bind the workers"
+elif NGX_DROP_DAC=1 f1_start 200 "a read-only counters directory"; then
     [ "$(code /enforced/index.html)" = 403 ] && [ "$(grep -c 'cannot create the counters directory' "$W/logs/error.log")" -ge 1 ] && [ ! -e "$F1/ro/counters" ] \
         && ok "fail open: with the counters directory unwritable the workers say so ($(grep -c 'cannot create the counters directory' "$W/logs/error.log") line(s)), write nothing, and the listed client is still denied by the armed plane" \
         || bad "fail open: read-only counters: listed $(code /enforced/index.html), lines $(grep -c 'counters directory' "$W/logs/error.log"), created $([ -e "$F1/ro/counters" ] && echo yes || echo no)"
@@ -3967,10 +4026,12 @@ if start && await '[ -f "$W/logs/nginx.pid" ] && [ "$(cat "$LT"/counters/[0-9]*.
     fi
 fi
 stop; sleep 1; chmod 0444 "$LT/tor.bin"
-if sudo -n true 2>/dev/null; then
+if ! modes_bind; then
+    notproven "letters: the unreadable arm, run as root with no setpriv to start nginx without CAP_DAC_READ_SEARCH: root reads a 0400 file of any owner"
+elif sudo -n true 2>/dev/null; then
     sudo -n chown 65534:65534 "$LT/tor.bin"; sudo -n chmod 0400 "$LT/tor.bin"
     rm -rf "$LT/counters"; : > "$W/logs/error.log"; : > "$W/logs/lt.log"
-    if start && await '[ -f "$W/logs/nginx.pid" ] && [ "$(code /lt/index.html)" = 200 ]' 15 "the unreadable-plane server"; then
+    if NGX_DROP_DAC=1 start && await '[ -f "$W/logs/nginx.pid" ] && [ "$(code /lt/index.html)" = 200 ]' 15 "the unreadable-plane server"; then
         l=$(lt_line unreadable)
         grep -qE "tor present, unreadable by uid $(id -u) \(Permission denied\): rules on it are inert;" "$W/logs/start.err" \
             && [[ $l =~ ^tor_exit=unknown\ generations=\"reputation:5\.[0-9a-f]{8}\ tor:-u\*\ tenant:-a\"$ ]] \
@@ -4181,16 +4242,28 @@ echo "$(date -u +%H:%M:%S) == the workers' user set after the http block: the pl
 # trust must not admit a plane for workers that run as another user: at init_module the planes are bound
 # again for the final uid, and such a plane is refused alone, reads unknown and is named in the core's
 # sentence while the rest serve. Run as root (the user line means nothing otherwise), the fixtures in a
-# root-owned directory: reputation in a root-owned data directory, tor in a directory owned by nobody. The
-# control keeps the first binding's uid and arms tor.
-if sudo -n true 2>/dev/null; then
+# root-owned directory: reputation in a root-owned data directory, tor in a directory owned by the default
+# worker user. The control keeps the first binding's uid and arms tor.
+#
+# THE DEFAULT IS THE BINARY'S, NOT nobody's. A package names its own with --user (nginx.org's RHEL and
+# Debian builds say --user=nginx), and a directory owned by nobody is then trusted by NEITHER binding, so
+# the control refused tor too and "passed without the code it proves". The default is read from nginx -V,
+# nobody when the build names none, as nginx itself does.
+UR_DEFAULT_USER=$(nginx -V 2>&1 | sed -n "s/.*--user=\([^ ']*\).*/\1/p" | sed -n 1p)
+UR_DEFAULT_USER=${UR_DEFAULT_USER:-nobody}
+UR_DEFAULT_UID=$(id -u "$UR_DEFAULT_USER" 2>/dev/null || true)
+if [ -z "$UR_DEFAULT_UID" ]; then
+    notproven "final user: nginx's default worker user $UR_DEFAULT_USER does not exist on this host"
+elif [ "$UR_DEFAULT_UID" = "$(id -u)" ]; then
+    notproven "final user: this gate runs as nginx's default worker user ($UR_DEFAULT_USER), so a user line names no other uid"
+elif sudo -n true 2>/dev/null; then
     UR="/run/whisper-edge-nginx-gate-uid.$$"; GATE_ROOT_DIR=$UR
     sudo -n rm -rf "$UR"; sudo -n mkdir -p "$UR/d" "$UR/nb" "$UR/html" "$UR/logs"; sudo -n chmod 0755 "$UR" "$UR/d" "$UR/nb" "$UR/html"
     python3 ../core/make-test-snapshot.py --plane reputation --out "$W/uid-rep.bin" --format 1 --schema --v6-index none --generation 100 >/dev/null
     python3 ../core/make-test-snapshot.py --plane tor --out "$W/uid-tor.bin" --format 2 --schema --generation 7 >/dev/null
     sudo -n install -m 0444 -o root -g root "$W/uid-rep.bin" "$UR/d/reputation.bin"
     sudo -n install -m 0444 -o root -g root "$W/uid-tor.bin" "$UR/nb/tor.bin"
-    sudo -n chown 65534:65534 "$UR/nb"; echo page | sudo -n tee "$UR/html/index.html" >/dev/null
+    sudo -n chown "$UR_DEFAULT_UID" "$UR/nb"; echo page | sudo -n tee "$UR/html/index.html" >/dev/null
     ur_run() { # <module>: leaves UR_TOK (a request's token), UR_USER (the worker's user), UR_SENT (the sentence)
         sudo -n tee "$UR/nginx.conf" >/dev/null <<UEOF
 load_module $1;
@@ -4226,8 +4299,8 @@ UEOF
     }
     ur_run "$MODULE"
     [[ $UR_TOK =~ ^reputation:100\.[0-9a-f]{8}\*?\ tor:-r ]] && [ "$UR_USER" = "$(id -un) " ] \
-        && [[ $UR_SENT == *"whisper_edge_data $UR/nb/tor.bin: directory \"nb\" is owned by uid 65534"* ]] \
-        && ok "final user: with user after the http block the workers run as $(id -un), tor in a directory trusted only for nobody is refused at start with the core's sentence naming the owner, and reputation serves" \
+        && [[ $UR_SENT == *"whisper_edge_data $UR/nb/tor.bin: directory \"nb\" is owned by uid $UR_DEFAULT_UID"* ]] \
+        && ok "final user: with user after the http block the workers run as $(id -un), tor in a directory trusted only for $UR_DEFAULT_USER (nginx's default) is refused at start with the core's sentence naming the owner, and reputation serves" \
         || bad "final user: token \"$UR_TOK\", worker user \"$UR_USER\", sentence \"$(cut -c1-200 <<<"$UR_SENT")\""
     if build_control -DWE_MOD_TEST_NO_FINAL_UID; then
         ur_run "$CTL_OUT"

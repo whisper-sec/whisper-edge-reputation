@@ -1178,10 +1178,20 @@ printed_block_cases "$out"
 README="$HERE/../REFERENCE.md"
 # The trigger is a real count, digits only: prose that describes the line, or a placeholder such as
 # <ok>, must never arm a comparison that only a transcript can pass.
+#
+# IT HOLDS THE PAGE WHERE THE PAGE IS WRITTEN. The count is a property of the host as much as of the tree:
+# which servers are installed, whether SELinux enforces, which rows a host can run. The page quotes the
+# release's own capture hosts, so an operator's CLEAR run on a host shaped any other way prints another
+# count, and failing it would fail a host for not being ours. The development tree (the one with
+# development.mk, which the published tree leaves out) is where the page is kept, so a mismatch fails there;
+# a published copy prints the two counts as a note and its verdict is the rows'.
 if [ "$bad" -eq 0 ] && [ -z "${SKIPPED:-}" ] && [ -f "$README" ] && grep -Eq '=== install gate: [0-9]+ ok' "$README"; then
   want="=== install gate: $ok ok, 0 failed ==="
   if grep -qF -- "$want" "$README"; then
     printf '  ok    REFERENCE.md prints this run'"'"'s own count, so the page cannot go stale unnoticed\n'
+  elif [ ! -f "$HERE/../development.mk" ]; then
+    printf '  note  REFERENCE.md quotes "%s" from the release'"'"'s own hosts and this host'"'"'s run is "%s"; a published copy does not hold the page to another host'"'"'s count\n' \
+      "$(grep -oE '=== install gate: [0-9]+ ok, [0-9]+ failed ===' "$README" | head -1)" "$want"
   else
     # The page prints one line per reference host, so quote all of them: naming only the first (the
     # Ubuntu host's) sent a Rocky failure looking at a line that was never the one compared.

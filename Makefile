@@ -9,6 +9,11 @@
 
 .PHONY: all proof core interop rpz rpz-concurrency rpz-live nginx apache litespeed litespeed-sdk install-gate clean
 
+# The servers live in sbin (named, nginx, apache2 and httpd in /usr/sbin), which Debian leaves off an
+# unprivileged user's PATH, so a gate run there by anyone but root found no nginx and no named. The sbin
+# directories go on the END of the PATH, so whatever the caller's own PATH finds first still wins.
+export PATH := $(PATH):/usr/local/sbin:/usr/sbin:/sbin
+
 all: core
 
 core:
@@ -52,9 +57,18 @@ nginx:
 apache:
 	./apache/apache-gate.sh
 
-# The module inside a real OpenLiteSpeed. Needs the LSIAPI header, which the gate tells you how to
-# fetch; it is NOT vendored here, because OpenLiteSpeed is GPLv3 and this subtree is MIT.
+# The module inside a real OpenLiteSpeed. Needs the LSIAPI header; it is NOT vendored here, because
+# OpenLiteSpeed is GPLv3 and this subtree is MIT. With OpenLiteSpeed installed and no header anywhere
+# the gate looks (LS_SDK, litespeed/sdk/include, the server's own include/), the pinned SDK is fetched
+# first, digest verified, exactly as `make litespeed-sdk` does; if that cannot run, the gate says what
+# it needs. Without OpenLiteSpeed nothing is fetched and the gate says that instead.
+LSWS ?= /usr/local/lsws
 litespeed:
+	@if [ -z "$${LS_SDK:-}" ] && [ -x "$(LSWS)/bin/lswsctrl" ] && [ ! -f litespeed/sdk/include/ls.h ] \
+	    && [ ! -f "$(LSWS)/include/ls.h" ]; then \
+	  echo "litespeed: no LSIAPI header here; fetching the pinned SDK ($(LS_TAG))"; \
+	  $(MAKE) --no-print-directory litespeed-sdk || echo "litespeed: the pinned SDK could not be fetched; the gate says what it needs"; \
+	fi
 	./litespeed/litespeed-gate.sh
 
 # The LSIAPI header, from a PINNED OpenLiteSpeed release, digest VERIFIED before anything is unpacked.
@@ -84,7 +98,22 @@ litespeed-sdk:
 install-gate:
 	./install/install-gate.sh
 
-proof: interop rpz nginx apache litespeed install-gate
+# Every gate runs, whatever an earlier one said, and the run ends with each gate's own verdict line: a
+# host that cannot run one row of one gate still gets the other gates' verdicts, and a gate that did
+# not pass is named with the reason it gave (FAILED, or what this host could not prove), never hidden
+# behind the first stop. The exit status is 0 only when every gate passed.
+PROOF_GATES = interop rpz nginx apache litespeed install-gate
+proof:
+	@t=$$(mktemp -d); trap 'rm -rf "$$t"' EXIT; failed=""; \
+	for g in $(PROOF_GATES); do \
+	  { $(MAKE) --no-print-directory $$g; echo $$? > "$$t/rc"; } 2>&1 | tee "$$t/log"; \
+	  rc=$$(cat "$$t/rc"); v=$$(grep -E '^[A-Z]+ GATE: ' "$$t/log" | tail -1 | cut -c1-160); \
+	  printf '  %-13s %s\n' "$$g" "$${v:-exit $$rc, and no verdict line}" >> "$$t/verdicts"; \
+	  [ "$$rc" = 0 ] || failed="$$failed $$g"; \
+	done; \
+	echo; echo "== make proof: each gate's verdict"; cat "$$t/verdicts"; \
+	if [ -n "$$failed" ]; then echo "make proof: did not pass:$$failed"; exit 1; fi; \
+	echo "make proof: every gate CLEAR"
 
 clean:
 	$(MAKE) -C core clean
